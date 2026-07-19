@@ -1,0 +1,138 @@
+package barrieww.core.commandstream;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.junit.jupiter.api.Test;
+
+/**
+ * @note ThreadSafety: JUnit creates a fresh instance per test method; no shared state.
+ * Tests of CommandStreamModuleWriter: byte-exact agreement with the committed
+ * cross-language module golden (which the C++ module validator verifies from its
+ * side), deterministic layout bookkeeping, and the fail-fast authoring checks.
+ */
+class CommandStreamModuleWriterTests {
+
+    private static final long s_goldenGraphHash = 0x0102030405060708L;
+
+    /** Records one lane stream into a fresh native segment and returns the segment. */
+    private static MemorySegment recordLaneStream(Arena testArena, int laneIndex,
+                                                  long graphHash, boolean includeDispatch) {
+        long streamByteSize = includeDispatch ? 80 : 56;
+        MemorySegment streamSegment = testArena.allocate(streamByteSize, 8);
+        CommandStreamWriter streamWriter =
+                new CommandStreamWriter(streamSegment, laneIndex, graphHash);
+        if (includeDispatch) {
+            streamWriter.appendDraw(3, 1, 0, 0);
+            streamWriter.appendDispatch(1, 2, 3);
+        } else {
+            streamWriter.appendDraw(6, 1, 0, 0);
+        }
+        assertEquals(streamByteSize, streamWriter.finish());
+        return streamSegment;
+    }
+
+    /** The golden scenario: one buffer table (0xA0..0xAF) plus lanes 0 and 1. */
+    private static byte[] writeGoldenModule(Arena testArena) {
+        byte[] bufferTableBytes = new byte[16];
+        for (int byteIndex = 0; byteIndex < bufferTableBytes.length; ++byteIndex) {
+            bufferTableBytes[byteIndex] = (byte) (0xA0 + byteIndex);
+        }
+
+        CommandStreamModuleWriter moduleWriter = new CommandStreamModuleWriter(s_goldenGraphHash);
+        moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE, 0,
+                MemorySegment.ofArray(bufferTableBytes));
+        moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 0,
+                recordLaneStream(testArena, 0, s_goldenGraphHash, true));
+        moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
+                recordLaneStream(testArena, 1, s_goldenGraphHash, false));
+
+        assertEquals(256, moduleWriter.requiredByteSize());
+        MemorySegment moduleSegment = testArena.allocate(256, 8);
+        assertEquals(256, moduleWriter.writeTo(moduleSegment));
+        return moduleSegment.toArray(ValueLayout.JAVA_BYTE);
+    }
+
+    @Test
+    void moduleWriterOutputMatchesTheCommittedCrossLanguageGolden() throws Exception {
+        Path goldenFilePath = Path.of(System.getProperty("barrieww.testDataDirectory"),
+                "CommandStream", "BufferTableAndTwoLaneModule.becs");
+        byte[] goldenBytes = Files.readAllBytes(goldenFilePath);
+
+        try (Arena testArena = Arena.ofConfined()) {
+            assertArrayEquals(goldenBytes, writeGoldenModule(testArena));
+        }
+    }
+
+    @Test
+    void moduleWriterRejectsDuplicateSectionIdentities() {
+        CommandStreamModuleWriter moduleWriter = new CommandStreamModuleWriter(s_goldenGraphHash);
+        moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE, 0,
+                MemorySegment.ofArray(new byte[8]));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE,
+                        0, MemorySegment.ofArray(new byte[8])));
+    }
+
+    @Test
+    void moduleWriterRejectsNonContiguousLaneIndices() {
+        try (Arena testArena = Arena.ofConfined()) {
+            CommandStreamModuleWriter moduleWriter =
+                    new CommandStreamModuleWriter(s_goldenGraphHash);
+            moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
+                    recordLaneStream(testArena, 1, s_goldenGraphHash, false));
+            MemorySegment moduleSegment = testArena.allocate(moduleWriter.requiredByteSize(), 8);
+
+            assertThrows(IllegalStateException.class, () -> moduleWriter.writeTo(moduleSegment));
+        }
+    }
+
+    @Test
+    void moduleWriterRejectsLaneContentWithForeignGraphHash() {
+        try (Arena testArena = Arena.ofConfined()) {
+            CommandStreamModuleWriter moduleWriter =
+                    new CommandStreamModuleWriter(s_goldenGraphHash);
+            MemorySegment foreignLaneStream =
+                    recordLaneStream(testArena, 0, 0x1111L, true);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 0,
+                            foreignLaneStream));
+        }
+    }
+
+    @Test
+    void moduleWriterRejectsLaneContentRecordedForAnotherLane() {
+        try (Arena testArena = Arena.ofConfined()) {
+            CommandStreamModuleWriter moduleWriter =
+                    new CommandStreamModuleWriter(s_goldenGraphHash);
+            MemorySegment laneZeroStream =
+                    recordLaneStream(testArena, 0, s_goldenGraphHash, true);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
+                            laneZeroStream));
+        }
+    }
+
+    @Test
+    void moduleWriterRejectsUndersizedTargetSegments() {
+        try (Arena testArena = Arena.ofConfined()) {
+            CommandStreamModuleWriter moduleWriter =
+                    new CommandStreamModuleWriter(s_goldenGraphHash);
+            moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE, 0,
+                    MemorySegment.ofArray(new byte[16]));
+            MemorySegment undersizedSegment = testArena.allocate(32, 8);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> moduleWriter.writeTo(undersizedSegment));
+        }
+    }
+}

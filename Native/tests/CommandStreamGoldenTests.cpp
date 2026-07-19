@@ -6,9 +6,13 @@
 #include <fstream>
 #include <vector>
 
+#include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
+#include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
+using barrieww::CommandStreamModuleSectionType;
+using barrieww::CommandStreamModuleValidator;
 using barrieww::CommandStreamOpcode;
 using barrieww::CommandStreamValidator;
 
@@ -70,4 +74,43 @@ TEST_CASE("Committed golden lane stream validates and decodes as authored",
 
     ++commandIterator;
     REQUIRE(commandIterator == validationResult->end());
+}
+
+// Module-level arbiter: the same committed golden module must be produced byte-exactly
+// by the Java CommandStreamModuleWriter (Core test) and accepted + decoded correctly
+// here. Layout: BufferHandleTable (16 pattern bytes) + lane 0 (Draw+Dispatch) +
+// lane 1 (single Draw), shared graphHash.
+TEST_CASE("Committed golden module validates and decodes as authored",
+          "[commandStream][golden]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/BufferTableAndTwoLaneModule.becs");
+    REQUIRE(goldenBytes.size() == 256u);
+
+    const auto validationResult = CommandStreamModuleValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->graphHash() == 0x0102030405060708ull);
+    REQUIRE(validationResult->laneStreamCount() == 2u);
+    REQUIRE(validationResult->sectionEntries().size() == 3u);
+
+    const auto bufferTableSection =
+        validationResult->findSection(CommandStreamModuleSectionType::BufferHandleTable);
+    REQUIRE(bufferTableSection.has_value());
+    REQUIRE(bufferTableSection->size() == 16u);
+    REQUIRE((*bufferTableSection)[0] == std::byte{0xA0});
+    REQUIRE((*bufferTableSection)[15] == std::byte{0xAF});
+
+    const auto& laneZeroView = validationResult->laneStream(0u);
+    REQUIRE(laneZeroView.commandCount() == 2u);
+    auto laneZeroIterator = laneZeroView.begin();
+    REQUIRE((*laneZeroIterator).opcode == CommandStreamOpcode::Draw);
+    REQUIRE(readUnsignedInteger((*laneZeroIterator).payloadBytes, 0u) == 3u);
+    ++laneZeroIterator;
+    REQUIRE((*laneZeroIterator).opcode == CommandStreamOpcode::Dispatch);
+    REQUIRE(readUnsignedInteger((*laneZeroIterator).payloadBytes, 8u) == 3u); // groupCountZ
+
+    const auto& laneOneView = validationResult->laneStream(1u);
+    REQUIRE(laneOneView.commandCount() == 1u);
+    const auto laneOneDrawRecord = *laneOneView.begin();
+    REQUIRE(laneOneDrawRecord.opcode == CommandStreamOpcode::Draw);
+    REQUIRE(readUnsignedInteger(laneOneDrawRecord.payloadBytes, 0u) == 6u); // vertexCount
 }
