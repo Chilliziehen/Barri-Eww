@@ -1,0 +1,40 @@
+# ── Native (C++ / CMake) ──────────────────────────────────────────────
+/Native/build/
+/Native/out/
+/Native/cmake-build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.pdb
+
+# ── Mod (Java / Gradle) ───────────────────────────────────────────────
+/Mod/.gradle/
+/Mod/build/
+/Mod/**/build/
+/Mod/gradle-app.setting
+!/Mod/gradle/wrapper/gradle-wrapper.jar
+
+# ── Editor (TypeScript / Node / Electron) ─────────────────────────────
+/Editor/node_modules/
+/Editor/dist/
+/Editor/out/
+/Editor/release/
+/Editor/.vite/
+/Editor/coverage/
+*.tsbuildinfo
+
+# ── Coverage / test reports ───────────────────────────────────────────
+/**/coverage/
+/**/*.gcda
+/**/*.gcno
+
+# ── IDE / OS ──────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
