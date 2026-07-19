@@ -1,0 +1,143 @@
+package barrieww.core.commandstream;
+
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.nio.ByteOrder;
+
+/**
+ * @note ThreadSafety: Not thread-safe. One writer owns one lane's segment during
+ *       recording (the THREADED_RECORDING model gives every lane its own thread and its
+ *       own segment, ADR-0001); never share an instance across threads.
+ * Writes one BECS lane stream (ADR-0002 D3) into a preallocated MemorySegment using
+ * explicit little-endian layouts (ADR-0002 D1). This is the slow-path reference writer
+ * used by the bake pipeline and by tests; the JIT-generated recordLaneN() bodies will
+ * later emit equivalent constant-offset writes directly.
+ * Boundary: appends fail with IndexOutOfBoundsException when the segment is too small,
+ * and IllegalStateException after finish(); finish() may only be called once.
+ *
+ * @warning MemoryOwnership: The writer BORROWS targetSegment; the caller's Arena owns
+ *          it and must keep it alive until the written bytes were handed to the native
+ *          side (§6.3). The writer never allocates or frees native memory.
+ */
+public final class CommandStreamWriter {
+
+    private static final ValueLayout.OfShort s_littleEndianShortLayout =
+            ValueLayout.JAVA_SHORT.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfInt s_littleEndianIntegerLayout =
+            ValueLayout.JAVA_INT.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfLong s_littleEndianLongLayout =
+            ValueLayout.JAVA_LONG.withOrder(ByteOrder.LITTLE_ENDIAN);
+
+    private final MemorySegment m_targetSegment;
+    private final int m_laneIndex;
+    private final long m_graphHash;
+    private long m_currentByteOffset;
+    private int m_commandCount;
+    private boolean m_isFinished;
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Creates a writer positioned after the 32-byte header, which is written by
+     * finish() once the command count and total size are known.
+     *
+     * @param MemorySegment targetSegment Preallocated destination; must be 8-byte
+     *        aligned at its base and large enough for the stream being recorded
+     * @param int laneIndex The lane this stream is compiled for
+     * @param long graphHash The §8 artifact hash binding the stream to its graph
+     * @warning MemoryOwnership: targetSegment is borrowed; see the class note.
+     */
+    public CommandStreamWriter(MemorySegment targetSegment, int laneIndex, long graphHash) {
+        this.m_targetSegment = targetSegment;
+        this.m_laneIndex = laneIndex;
+        this.m_graphHash = graphHash;
+        this.m_currentByteOffset = CommandStreamFormat.s_streamHeaderByteSize;
+        this.m_commandCount = 0;
+        this.m_isFinished = false;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a Draw command (opcode 0x0010, ADR-0002 appendix A).
+     *
+     * @param int vertexCount Number of vertices to draw
+     * @param int instanceCount Number of instances to draw
+     * @param int firstVertex Offset of the first vertex
+     * @param int firstInstance Offset of the first instance
+     */
+    public void appendDraw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        writeCommandHeader(CommandStreamOpcode.DRAW, 24);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, vertexCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, instanceCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 16, firstVertex);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 20, firstInstance);
+        m_currentByteOffset += 24;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a Dispatch command (opcode 0x0020, ADR-0002 appendix A). The trailing
+     * 4 padding bytes are written as zero explicitly so the output does not depend on
+     * the allocator's zero-initialization.
+     *
+     * @param int groupCountX Workgroup count along X
+     * @param int groupCountY Workgroup count along Y
+     * @param int groupCountZ Workgroup count along Z
+     */
+    public void appendDispatch(int groupCountX, int groupCountY, int groupCountZ) {
+        writeCommandHeader(CommandStreamOpcode.DISPATCH, 24);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, groupCountX);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, groupCountY);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 16, groupCountZ);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 20, 0);
+        m_currentByteOffset += 24;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Writes the 32-byte stream header (magic, version, laneIndex, commandCount,
+     * totalByteSize, graphHash) and seals the writer.
+     *
+     * @return long The total byte size of the finished stream (header included)
+     * @throws IllegalStateException When finish() was already called
+     */
+    public long finish() {
+        if (m_isFinished) {
+            throw new IllegalStateException("CommandStreamWriter.finish() called twice");
+        }
+        m_isFinished = true;
+
+        for (int magicByteIndex = 0; magicByteIndex < 4; ++magicByteIndex) {
+            m_targetSegment.set(ValueLayout.JAVA_BYTE, magicByteIndex,
+                    CommandStreamFormat.s_expectedMagicBytes[magicByteIndex]);
+        }
+        m_targetSegment.set(s_littleEndianShortLayout, 4, CommandStreamFormat.s_currentVersionMajor);
+        m_targetSegment.set(s_littleEndianShortLayout, 6, CommandStreamFormat.s_currentVersionMinor);
+        m_targetSegment.set(s_littleEndianIntegerLayout, 8, m_laneIndex);
+        m_targetSegment.set(s_littleEndianIntegerLayout, 12, m_commandCount);
+        m_targetSegment.set(s_littleEndianLongLayout, 16, m_currentByteOffset);
+        m_targetSegment.set(s_littleEndianLongLayout, 24, m_graphHash);
+        return m_currentByteOffset;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Writes one 8-byte command header (opcode, zero reserved flags, byteSize) at the
+     * current offset and counts the command; the caller then writes the payload.
+     *
+     * @param CommandStreamOpcode opcode The command's opcode
+     * @param int commandByteSize Total command size including this header; must be a
+     *        multiple of 8 (ADR-0002 D1)
+     * @throws IllegalStateException When the writer is already finished
+     */
+    private void writeCommandHeader(CommandStreamOpcode opcode, int commandByteSize) {
+        if (m_isFinished) {
+            throw new IllegalStateException(
+                    "CommandStreamWriter: append after finish() on lane " + m_laneIndex);
+        }
+        m_targetSegment.set(s_littleEndianShortLayout, m_currentByteOffset,
+                (short) opcode.rawOpcodeValue());
+        m_targetSegment.set(s_littleEndianShortLayout, m_currentByteOffset + 2, (short) 0);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 4, commandByteSize);
+        ++m_commandCount;
+    }
+}

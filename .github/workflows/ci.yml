@@ -80,7 +80,40 @@ jobs:
       # Coverage gate (spec §4.5): C++ >= 90%. Wire gcovr/llvm-cov threshold
       # once tests exist.
 
-  # ── Mod (Java SE 25 / Gradle) ───────────────────────────────────────
+  # ── Core (Java SE 25 / Gradle) — RDG compiler + BECS writer + FFM ──
+  core:
+    name: Core (Java 25)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect module readiness
+        id: detect
+        shell: bash
+        run: |
+          if [ -f Core/settings.gradle.kts ] || [ -f Core/settings.gradle ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Core/ is still empty scaffolding — skipping build/test."
+          fi
+
+      - name: Set up JDK 25 (Microsoft OpenJDK)
+        if: steps.detect.outputs.ready == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: "25"
+
+      - name: Build & test (JUnit 5 + JaCoCo)
+        if: steps.detect.outputs.ready == 'true'
+        working-directory: Core
+        run: ./gradlew build test jacocoTestReport --no-daemon
+
+      # Coverage gate (spec §4.5): Java >= 90%. Enforce via
+      # jacocoTestCoverageVerification once the module grows beyond scaffolding.
+
+  # ── Mod (Java SE 25 / Gradle) — thin game-side loader ──────────────
   mod:
     name: Mod (Java 25)
     runs-on: ubuntu-latest

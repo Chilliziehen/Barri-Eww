@@ -11,6 +11,12 @@
 *.dll
 *.pdb
 
+# ── Core (Java / Gradle) ──────────────────────────────────────────────
+/Core/.gradle/
+/Core/build/
+/Core/**/build/
+!/Core/gradle/wrapper/gradle-wrapper.jar
+
 # ── Mod (Java / Gradle) ───────────────────────────────────────────────
 /Mod/.gradle/
 /Mod/build/
