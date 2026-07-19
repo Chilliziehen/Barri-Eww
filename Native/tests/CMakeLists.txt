@@ -8,8 +8,12 @@ FetchContent_Declare(
     GIT_TAG        v3.5.4)
 FetchContent_MakeAvailable(Catch2)
 
-add_executable(BarriEwwNativeTests
-    BuildConfigurationTests.cpp)
+set(BARRIEWW_TEST_SOURCES BuildConfigurationTests.cpp)
+if(BARRIEWW_BACKEND_VULKAN)
+    list(APPEND BARRIEWW_TEST_SOURCES VulkanContextTests.cpp)
+endif()
+
+add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})
 
 target_link_libraries(BarriEwwNativeTests
     PRIVATE

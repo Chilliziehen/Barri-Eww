@@ -25,9 +25,9 @@ option(BARRIEWW_BACKEND_METAL        "Enable the Metal backend (non-MVP placehol
 option(BARRIEWW_LOGGING              "Enable the logging system"                       ON)
 option(BARRIEWW_CRITICAL_HOTPATH_LOG "Allow log I/O on the command-recording hot path" OFF)
 
-# ── Build-orchestration options (NOT product feature macros; not injected via #if) ─────
-# NOTE: pending owner ruling on whether these belong in the §3.3 registry. They only
-# affect what CMake builds, not compiled-in product behavior.
+# ── Build-orchestration options (registered in §3.3 as the "build" dimension) ──────────
+# They only affect what CMake builds, not compiled-in product behavior, so they are NOT
+# injected as product #if macros (spec §3.3 dimension note).
 option(BARRIEWW_BUILD_TESTS    "Build Native unit tests (Catch2)"        ON)
 option(BARRIEWW_ENABLE_COVERAGE "Instrument for coverage (GCC/Clang)"    OFF)
 
@@ -62,6 +62,15 @@ foreach(featureSwitch
         target_compile_definitions(BarriEwwNative PUBLIC ${featureSwitch}=1)
     endif()
 endforeach()
+
+# ── Vulkan backend (spec §3.3 BARRIEWW_BACKEND_VULKAN) ─────────────────────────────────
+# Only linked when the Vulkan backend is enabled; the backend receives its device/queues
+# from the Java/FFM layer (ADR-0001), so no windowing/surface libraries are pulled in.
+if(BARRIEWW_BACKEND_VULKAN)
+    find_package(Vulkan REQUIRED)
+    target_sources(BarriEwwNative PRIVATE src/Vulkan/VulkanContext.cpp)
+    target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
+endif()
 
 # ── Coverage instrumentation (spec §4.5 gate: Native >= 90%) ───────────────────────────
 if(BARRIEWW_ENABLE_COVERAGE)
