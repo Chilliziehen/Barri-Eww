@@ -55,13 +55,18 @@
 
 ## 模块拓扑
 
-项目分为三个顶层模块，各自持有独立构建系统，**根目录不放置任何构建系统** (见 §3)：
+项目分为四个顶层模块，各自持有独立构建系统，**根目录不放置任何构建系统** (见 §3)：
 
 | 模块       | 语言              | 构建系统  | 职责                                                                 |
 | ---------- | ----------------- | --------- | -------------------------------------------------------------------- |
-| `Native/`  | C++23             | CMake 4.4 | 原生渲染后端 (MVP: Vulkan)，接收 Java 侧 native 调用，录制 command   |
-| `Mod/`     | Java (SE 25)      | Gradle    | Fabric mod + RDG 编译器 (IR → ASM 字节码) + Panama/FFM 绑定层        |
+| `Native/`  | C++23             | CMake 4.4 | 原生渲染后端 (MVP: Vulkan)，回放 BECS 命令流，执行提交/同步          |
+| `Core/`    | Java (SE 25)      | Gradle    | Java 大脑：RDG 编译器 (IR → ASM 字节码) + BECS 写侧 + Panama/FFM 绑定层 |
+| `Mod/`     | Java (SE 25)      | Gradle    | Fabric mod：薄二进制加载器，把 Core JIT 产物注入游戏 (依赖 Core)     |
 | `Editor/`  | TypeScript (Node.js/Electron) | npm + electron-builder | 可视化 RenderGraph 编辑器 (产出图 JSON)；非 MVP 范围 |
+
+> Core 与 Mod 的边界 (2026-07-19 所有者裁决)：一切编译/代码生成/FFM 逻辑属 `Core/`；
+> `Mod/` 只做游戏侧装载与生命周期挂接，保持最薄，便于跟随 MC 版本演进 (对齐
+> "不追内部实现类" 的非目标约束)。
 
 根目录仅提供 [`build.sh`](build.sh) / [`build.bat`](build.bat) 作为跨模块构建入口 (见 §3)。
 

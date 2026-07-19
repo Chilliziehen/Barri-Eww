@@ -9,7 +9,8 @@
 
 - **C++ (`Native/`) 使用 CMake 构建，版本锁定 CMake 4.4，语言标准锁定 C++23**
   (`set(CMAKE_CXX_STANDARD 23)` + `CMAKE_CXX_STANDARD_REQUIRED ON`)。
-- **Java (`Mod/`) 使用 Gradle 构建。**
+- **Java (`Core/` 与 `Mod/`) 使用 Gradle 构建**，两模块各自持有独立 Gradle 构建
+  (职责边界见 spec.md 模块拓扑；`Mod/` 依赖 `Core/` 的产物)。
 - **Editor (`Editor/`) 使用 npm + Vite + electron-builder 构建** (Node.js/Electron，
   语言 TypeScript，`tsc` 严格类型检查)，其构建脚本与依赖清单 (`package.json`、
   `tsconfig.json` 等) 只存在于 `Editor/` 内。
@@ -78,7 +79,7 @@ endif()
 
 ## §3.4 Java 构建变体 (Gradle)
 
-- Java 侧同样需提供多种构建变体 (平台目标 / 功能开关组合)。
+- Java 侧 (`Core/`、`Mod/`) 同样需提供多种构建变体 (平台目标 / 功能开关组合)。
 - 变体通过 Gradle 的构建参数/product flavor 或等价机制表达；与 C++ 侧开关维度**语义对齐**
   (同名功能在两侧启停一致)，避免 Java 期望某功能而 Native 未编入。
 - 具体 Gradle 变体维度定义见 ProposedExtensions (待确认技术选型后回填)。
