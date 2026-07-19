@@ -1,0 +1,22 @@
+# Native unit tests (spec §4.1) — Catch2 (spec §4.1 framework choice).
+
+include(FetchContent)
+
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.5.4)
+FetchContent_MakeAvailable(Catch2)
+
+add_executable(BarriEwwNativeTests
+    BuildConfigurationTests.cpp)
+
+target_link_libraries(BarriEwwNativeTests
+    PRIVATE
+        BarriEwwNative
+        Catch2::Catch2WithMain)
+
+# Register each Catch2 TEST_CASE with CTest so `ctest` runs them individually.
+list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+include(Catch)
+catch_discover_tests(BarriEwwNativeTests)

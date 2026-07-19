@@ -36,3 +36,6 @@
   隔离、受控扩展机制信任边界与 resolve 契约 (裁决 P8)。
 - [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 扩充建议台账 (含已裁决记录)。
 - [新增] [CHANGELOG.md](CHANGELOG.md) —— 本文件 (裁决 P9)。
+- [修改] §3.3 [BuildSystem.md](BuildSystem.md) —— 新增"构建"维度开关
+  `BARRIEWW_BUILD_TESTS` / `BARRIEWW_ENABLE_COVERAGE` 并登记入注册表 (所有者裁决:
+  所有 `BARRIEWW_` 私有开关一律登记)；明确"构建"维度不注入为产品 `#if` 宏。
