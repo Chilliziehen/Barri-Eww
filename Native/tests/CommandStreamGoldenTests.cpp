@@ -6,11 +6,17 @@
 #include <fstream>
 #include <vector>
 
+#include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamBufferMemoryKind.hpp"
+#include "BarriEww/CommandStream/CommandStreamBufferUsage.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
+using barrieww::CommandStreamBufferHandleTableValidator;
+using barrieww::CommandStreamBufferMemoryKind;
+using barrieww::CommandStreamBufferUsage;
 using barrieww::CommandStreamModuleSectionType;
 using barrieww::CommandStreamModuleValidator;
 using barrieww::CommandStreamOpcode;
@@ -78,13 +84,13 @@ TEST_CASE("Committed golden lane stream validates and decodes as authored",
 
 // Module-level arbiter: the same committed golden module must be produced byte-exactly
 // by the Java CommandStreamModuleWriter (Core test) and accepted + decoded correctly
-// here. Layout: BufferHandleTable (16 pattern bytes) + lane 0 (Draw+Dispatch) +
-// lane 1 (single Draw), shared graphHash.
+// here. Layout: schema-valid BufferHandleTable (staging + device + imported) +
+// lane 0 (Draw+Dispatch) + lane 1 (single Draw), shared graphHash.
 TEST_CASE("Committed golden module validates and decodes as authored",
           "[commandStream][golden]") {
     const std::vector<std::byte> goldenBytes =
         readTestDataFile("CommandStream/BufferTableAndTwoLaneModule.becs");
-    REQUIRE(goldenBytes.size() == 256u);
+    REQUIRE(goldenBytes.size() == 320u);
 
     const auto validationResult = CommandStreamModuleValidator::validate(goldenBytes);
     REQUIRE(validationResult.has_value());
@@ -95,9 +101,27 @@ TEST_CASE("Committed golden module validates and decodes as authored",
     const auto bufferTableSection =
         validationResult->findSection(CommandStreamModuleSectionType::BufferHandleTable);
     REQUIRE(bufferTableSection.has_value());
-    REQUIRE(bufferTableSection->size() == 16u);
-    REQUIRE((*bufferTableSection)[0] == std::byte{0xA0});
-    REQUIRE((*bufferTableSection)[15] == std::byte{0xAF});
+    const auto tableValidationResult =
+        CommandStreamBufferHandleTableValidator::validate(*bufferTableSection);
+    REQUIRE(tableValidationResult.has_value());
+    REQUIRE(tableValidationResult->entryCount() == 3u);
+
+    const auto stagingEntry = tableValidationResult->entry(0u);
+    REQUIRE(stagingEntry.byteSize == 64u);
+    REQUIRE(stagingEntry.usageFlags
+            == static_cast<std::uint32_t>(CommandStreamBufferUsage::TransferSource));
+    REQUIRE(stagingEntry.memoryKindValue
+            == static_cast<std::uint32_t>(
+                   CommandStreamBufferMemoryKind::HostVisiblePersistentMapped));
+    const auto deviceEntry = tableValidationResult->entry(1u);
+    REQUIRE(deviceEntry.byteSize == 64u);
+    REQUIRE(deviceEntry.usageFlags
+            == static_cast<std::uint32_t>(CommandStreamBufferUsage::TransferDestination));
+    REQUIRE(deviceEntry.memoryKindValue
+            == static_cast<std::uint32_t>(CommandStreamBufferMemoryKind::DeviceLocal));
+    const auto importedEntry = tableValidationResult->entry(2u);
+    REQUIRE(importedEntry.isImported());
+    REQUIRE(importedEntry.importIdentifier == 1001u);
 
     const auto& laneZeroView = validationResult->laneStream(0u);
     REQUIRE(laneZeroView.commandCount() == 2u);
