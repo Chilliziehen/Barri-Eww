@@ -63,6 +63,15 @@ foreach(featureSwitch
     endif()
 endforeach()
 
+# ── Vulkan backend (spec §3.3 BARRIEWW_BACKEND_VULKAN) ─────────────────────────────────
+# Only linked when the Vulkan backend is enabled; the backend receives its device/queues
+# from the Java/FFM layer (ADR-0001), so no windowing/surface libraries are pulled in.
+if(BARRIEWW_BACKEND_VULKAN)
+    find_package(Vulkan REQUIRED)
+    target_sources(BarriEwwNative PRIVATE src/Vulkan/VulkanContext.cpp)
+    target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
+endif()
+
 # ── Coverage instrumentation (spec §4.5 gate: Native >= 90%) ───────────────────────────
 if(BARRIEWW_ENABLE_COVERAGE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
