@@ -8,7 +8,9 @@ FetchContent_Declare(
     GIT_TAG        v3.5.4)
 FetchContent_MakeAvailable(Catch2)
 
-set(BARRIEWW_TEST_SOURCES BuildConfigurationTests.cpp)
+set(BARRIEWW_TEST_SOURCES
+    BuildConfigurationTests.cpp
+    CommandStreamValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES VulkanContextTests.cpp)
 endif()

@@ -16,6 +16,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# All sources are UTF-8; force MSVC to read/emit UTF-8 regardless of the system
+# codepage (silences C4819 on non-UTF-8 locales).
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+
 # ── Compile-time feature / platform switches (spec §3.3 registry) ──────────────────────
 # These are injected as macros below and consumed via #if in product code.
 option(THREADED_RECORDING            "Enable multithreaded command recording"          ON)
@@ -43,7 +47,9 @@ add_library(BarriEwwNative)
 
 target_sources(BarriEwwNative
     PRIVATE
-        src/BuildConfiguration.cpp)
+        src/BuildConfiguration.cpp
+        # BECS command-stream format layer (ADR-0002): backend-neutral core, always built.
+        src/CommandStream/CommandStreamValidator.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC
