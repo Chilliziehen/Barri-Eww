@@ -10,7 +10,8 @@ FetchContent_MakeAvailable(Catch2)
 
 set(BARRIEWW_TEST_SOURCES
     BuildConfigurationTests.cpp
-    CommandStreamValidatorTests.cpp)
+    CommandStreamValidatorTests.cpp
+    CommandStreamModuleValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES VulkanContextTests.cpp)
 endif()

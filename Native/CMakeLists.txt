@@ -49,7 +49,8 @@ target_sources(BarriEwwNative
     PRIVATE
         src/BuildConfiguration.cpp
         # BECS command-stream format layer (ADR-0002): backend-neutral core, always built.
-        src/CommandStream/CommandStreamValidator.cpp)
+        src/CommandStream/CommandStreamValidator.cpp
+        src/CommandStream/CommandStreamModuleValidator.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC
