@@ -8,7 +8,8 @@ namespace barrieww {
 
 /**
  * @note ThreadSafety: Plain value type; no internal synchronization.
- * @brief The externally-provided Vulkan handles used to construct a VulkanContext. Per
+ * @brief The externally-provided Vulkan handles used to construct a VulkanContext
+ *        (named after the Vulkan Vk*CreateInfo idiom, spec §1.1.2 exemption). Per
  *        ADR-0001 the native backend does not create these; the Java/FFM layer supplies
  *        them, having obtained them from Minecraft's Vulkan backend or created them itself.
  *        Mandatory handles are instance, physicalDevice, logicalDevice and graphicsQueue;
@@ -18,7 +19,7 @@ namespace barrieww {
  *          VulkanContext built from it creates or destroys them; the provider retains
  *          ownership and must outlive the VulkanContext.
  */
-struct VulkanContextCreateInformation {
+struct VulkanContextCreateInfo {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice logicalDevice = VK_NULL_HANDLE;

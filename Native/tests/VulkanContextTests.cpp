@@ -4,10 +4,10 @@
 #include <stdexcept>
 
 #include "BarriEww/Vulkan/VulkanContext.hpp"
-#include "BarriEww/Vulkan/VulkanContextCreateInformation.hpp"
+#include "BarriEww/Vulkan/VulkanContextCreateInfo.hpp"
 
 using barrieww::VulkanContext;
-using barrieww::VulkanContextCreateInformation;
+using barrieww::VulkanContextCreateInfo;
 
 namespace {
 
@@ -18,22 +18,22 @@ HandleType makeSentinelHandle(std::uintptr_t value) {
     return reinterpret_cast<HandleType>(value);
 }
 
-VulkanContextCreateInformation makeValidCreateInformation() {
-    VulkanContextCreateInformation createInformation{};
-    createInformation.instance = makeSentinelHandle<VkInstance>(0x1);
-    createInformation.physicalDevice = makeSentinelHandle<VkPhysicalDevice>(0x2);
-    createInformation.logicalDevice = makeSentinelHandle<VkDevice>(0x3);
-    createInformation.queueFamilyIndices.graphicsFamily = 0u;
-    createInformation.queueFamilyIndices.presentFamily = 0u;
-    createInformation.graphicsQueue = makeSentinelHandle<VkQueue>(0x4);
-    createInformation.presentQueue = makeSentinelHandle<VkQueue>(0x5);
-    return createInformation;
+VulkanContextCreateInfo makeValidCreateInfo() {
+    VulkanContextCreateInfo createInfo{};
+    createInfo.instance = makeSentinelHandle<VkInstance>(0x1);
+    createInfo.physicalDevice = makeSentinelHandle<VkPhysicalDevice>(0x2);
+    createInfo.logicalDevice = makeSentinelHandle<VkDevice>(0x3);
+    createInfo.queueFamilyIndices.graphicsFamily = 0u;
+    createInfo.queueFamilyIndices.presentFamily = 0u;
+    createInfo.graphicsQueue = makeSentinelHandle<VkQueue>(0x4);
+    createInfo.presentQueue = makeSentinelHandle<VkQueue>(0x5);
+    return createInfo;
 }
 
 } // namespace
 
 TEST_CASE("VulkanContext exposes the handles it was constructed with", "[vulkanContext]") {
-    const VulkanContext context{makeValidCreateInformation()};
+    const VulkanContext context{makeValidCreateInfo()};
 
     REQUIRE(context.instance() == makeSentinelHandle<VkInstance>(0x1));
     REQUIRE(context.physicalDevice() == makeSentinelHandle<VkPhysicalDevice>(0x2));
@@ -46,26 +46,26 @@ TEST_CASE("VulkanContext exposes the handles it was constructed with", "[vulkanC
 TEST_CASE("VulkanContext rejects null mandatory handles and missing families",
           "[vulkanContext]") {
     SECTION("null instance is rejected") {
-        VulkanContextCreateInformation createInformation = makeValidCreateInformation();
-        createInformation.instance = VK_NULL_HANDLE;
-        REQUIRE_THROWS_AS(VulkanContext{createInformation}, std::invalid_argument);
+        VulkanContextCreateInfo createInfo = makeValidCreateInfo();
+        createInfo.instance = VK_NULL_HANDLE;
+        REQUIRE_THROWS_AS(VulkanContext{createInfo}, std::invalid_argument);
     }
 
     SECTION("null logical device is rejected") {
-        VulkanContextCreateInformation createInformation = makeValidCreateInformation();
-        createInformation.logicalDevice = VK_NULL_HANDLE;
-        REQUIRE_THROWS_AS(VulkanContext{createInformation}, std::invalid_argument);
+        VulkanContextCreateInfo createInfo = makeValidCreateInfo();
+        createInfo.logicalDevice = VK_NULL_HANDLE;
+        REQUIRE_THROWS_AS(VulkanContext{createInfo}, std::invalid_argument);
     }
 
     SECTION("null graphics queue is rejected") {
-        VulkanContextCreateInformation createInformation = makeValidCreateInformation();
-        createInformation.graphicsQueue = VK_NULL_HANDLE;
-        REQUIRE_THROWS_AS(VulkanContext{createInformation}, std::invalid_argument);
+        VulkanContextCreateInfo createInfo = makeValidCreateInfo();
+        createInfo.graphicsQueue = VK_NULL_HANDLE;
+        REQUIRE_THROWS_AS(VulkanContext{createInfo}, std::invalid_argument);
     }
 
     SECTION("missing present family is rejected") {
-        VulkanContextCreateInformation createInformation = makeValidCreateInformation();
-        createInformation.queueFamilyIndices.presentFamily.reset();
-        REQUIRE_THROWS_AS(VulkanContext{createInformation}, std::invalid_argument);
+        VulkanContextCreateInfo createInfo = makeValidCreateInfo();
+        createInfo.queueFamilyIndices.presentFamily.reset();
+        REQUIRE_THROWS_AS(VulkanContext{createInfo}, std::invalid_argument);
     }
 }

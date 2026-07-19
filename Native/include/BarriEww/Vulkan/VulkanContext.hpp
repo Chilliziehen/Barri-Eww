@@ -2,22 +2,24 @@
 
 #include <vulkan/vulkan.h>
 
-#include "BarriEww/Vulkan/VulkanContextCreateInformation.hpp"
+#include "BarriEww/Vulkan/VulkanContextCreateInfo.hpp"
 #include "BarriEww/Vulkan/VulkanQueueFamilyIndices.hpp"
 
 namespace barrieww {
 
 /**
- * @note ThreadSafety: After construction the accessors are read-only and thread-safe
- *       (the held handles are immutable and there is no mutable state). Construction
- *       itself is not thread-safe and is expected on the slow init path.
+ * @note ThreadSafety: After construction every accessor is read-only and thread-safe
+ *       (the held handles are immutable and there is no mutable state); this blanket
+ *       statement covers all accessors below (spec §2.6). Construction itself is not
+ *       thread-safe and is expected on the slow init path.
  * @brief Immutable holder of the Vulkan handles the native backend operates on. Per
  *        ADR-0001 the backend does NOT create the instance / device / queues: they are
  *        provided by the Java/FFM layer (obtained from Minecraft's Vulkan backend or
  *        created there). This class validates the provided handles and exposes them; it
  *        performs no Vulkan API calls of its own.
- * @warning MemoryOwnership: All held handles are BORROWED from the provider. VulkanContext
- *          neither destroys them nor extends their lifetime; the provider must keep every
+ * @warning MemoryOwnership: All held handles are BORROWED from the provider; this blanket
+ *          statement covers every accessor below (spec §2.6). VulkanContext neither
+ *          destroys the handles nor extends their lifetime; the provider must keep every
  *          handle alive for the whole lifetime of this VulkanContext.
  */
 class VulkanContext {
@@ -27,70 +29,38 @@ public:
      * @brief Constructs the context from externally-provided handles, validating that the
      *        mandatory handles (instance, physicalDevice, logicalDevice, graphicsQueue) are
      *        non-null and that the required queue families (graphics, present) are present.
-     * @param createInformation The externally-provided Vulkan handles to borrow.
+     * @param createInfo The externally-provided Vulkan handles to borrow.
      * @throws std::invalid_argument When a mandatory handle is VK_NULL_HANDLE, or when a
      *         required queue family is missing.
-     * @warning MemoryOwnership: Borrows every handle in createInformation; see the class
-     *          note. No ownership is taken and none crosses back over the FFM boundary.
+     * @warning MemoryOwnership: Borrows every handle in createInfo; see the class note.
+     *          No ownership is taken and none crosses back over the FFM boundary.
      */
-    explicit VulkanContext(const VulkanContextCreateInformation& createInformation);
+    explicit VulkanContext(const VulkanContextCreateInfo& createInfo);
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed Vulkan instance.
-     * @return VkInstance The instance handle provided at construction.
-     */
+    /** The borrowed Vulkan instance provided at construction (see class notes). */
     [[nodiscard]] VkInstance instance() const noexcept { return m_instance; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed physical device.
-     * @return VkPhysicalDevice The physical device handle provided at construction.
-     */
+    /** The borrowed physical device provided at construction (see class notes). */
     [[nodiscard]] VkPhysicalDevice physicalDevice() const noexcept { return m_physicalDevice; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed logical device.
-     * @return VkDevice The logical device handle provided at construction.
-     */
+    /** The borrowed logical device provided at construction (see class notes). */
     [[nodiscard]] VkDevice logicalDevice() const noexcept { return m_logicalDevice; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns a reference to an immutable value member).
-     * @brief The resolved queue family indices for the physical device.
-     * @return const VulkanQueueFamilyIndices& The queue family indices provided at construction.
-     */
+    /** The resolved queue family indices provided at construction (see class notes). */
     [[nodiscard]] const VulkanQueueFamilyIndices& queueFamilyIndices() const noexcept {
         return m_queueFamilyIndices;
     }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed graphics queue.
-     * @return VkQueue The graphics queue handle provided at construction.
-     */
+    /** The borrowed graphics queue provided at construction (see class notes). */
     [[nodiscard]] VkQueue graphicsQueue() const noexcept { return m_graphicsQueue; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed present queue.
-     * @return VkQueue The present queue handle provided at construction (may be VK_NULL_HANDLE).
-     */
+    /** The borrowed present queue; may be VK_NULL_HANDLE (see class notes). */
     [[nodiscard]] VkQueue presentQueue() const noexcept { return m_presentQueue; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed transfer queue.
-     * @return VkQueue The transfer queue handle provided at construction (may be VK_NULL_HANDLE).
-     */
+    /** The borrowed transfer queue; may be VK_NULL_HANDLE (see class notes). */
     [[nodiscard]] VkQueue transferQueue() const noexcept { return m_transferQueue; }
 
-    /**
-     * @note ThreadSafety: Thread-safe (returns an immutable borrowed handle).
-     * @brief The borrowed compute queue.
-     * @return VkQueue The compute queue handle provided at construction (may be VK_NULL_HANDLE).
-     */
+    /** The borrowed compute queue; may be VK_NULL_HANDLE (see class notes). */
     [[nodiscard]] VkQueue computeQueue() const noexcept { return m_computeQueue; }
 
 private:

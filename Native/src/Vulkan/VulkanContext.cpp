@@ -4,15 +4,15 @@
 
 namespace barrieww {
 
-VulkanContext::VulkanContext(const VulkanContextCreateInformation& createInformation)
-    : m_instance(createInformation.instance)
-    , m_physicalDevice(createInformation.physicalDevice)
-    , m_logicalDevice(createInformation.logicalDevice)
-    , m_queueFamilyIndices(createInformation.queueFamilyIndices)
-    , m_graphicsQueue(createInformation.graphicsQueue)
-    , m_presentQueue(createInformation.presentQueue)
-    , m_transferQueue(createInformation.transferQueue)
-    , m_computeQueue(createInformation.computeQueue) {
+VulkanContext::VulkanContext(const VulkanContextCreateInfo& createInfo)
+    : m_instance(createInfo.instance)
+    , m_physicalDevice(createInfo.physicalDevice)
+    , m_logicalDevice(createInfo.logicalDevice)
+    , m_queueFamilyIndices(createInfo.queueFamilyIndices)
+    , m_graphicsQueue(createInfo.graphicsQueue)
+    , m_presentQueue(createInfo.presentQueue)
+    , m_transferQueue(createInfo.transferQueue)
+    , m_computeQueue(createInfo.computeQueue) {
     // Slow-path validation (init). Exceptions are acceptable here and must never cross the
     // FFM boundary (§6.4 / §7.1.2): the Java layer translates a failed construction into a
     // checked exception on its own side.
