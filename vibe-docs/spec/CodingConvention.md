@@ -32,7 +32,15 @@
 4. 布尔量使用 `is` / `has` / `should` / `can` 前缀 (`isTrivialCall`, `hasDepthAttachment`)。
 
 **公认缩写豁免清单：** `Vulkan/vk*`, `DX12`, `Metal`, `IR`, `JIT`, `SSA`, `GPU`, `CPU`,
-`RDG` (Render Dependency Graph), `MVP`, `FFM`, `ASM`, `MR`, `CI`, `id` (标识符)。
+`RDG` (Render Dependency Graph), `MVP`, `FFM`, `ASM`, `MR`, `CI`, `id` (标识符),
+`Info`/`CreateInfo` (仅限镜像 Vulkan `Vk*Info` / `Vk*CreateInfo` 惯用语的类型、参数与
+成员命名，2026-07-19 所有者批准)。
+
+> `Info`/`CreateInfo` 豁免的边界：仅当命名镜像图形 API 的惯用概念时可用
+> (如 `VulkanContextCreateInfo` 对应 Vulkan 的 `Vk*CreateInfo` 模式)；
+> 不得作为任意 `Information` 的通用缩写 (如日志上下文不得写 `logInfo` 之类)。
+> 理由：Vulkan 开发者对 `CreateInfo` 的流利度高于展开写法，强行展开反而降低可读性
+> (T0[2] 的目的在于可读，而非机械展开)。
 
 ---
 

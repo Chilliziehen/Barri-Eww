@@ -39,3 +39,8 @@
 - [修改] §3.3 [BuildSystem.md](BuildSystem.md) —— 新增"构建"维度开关
   `BARRIEWW_BUILD_TESTS` / `BARRIEWW_ENABLE_COVERAGE` 并登记入注册表 (所有者裁决:
   所有 `BARRIEWW_` 私有开关一律登记)；明确"构建"维度不注入为产品 `#if` 宏。
+- [修改] §1.1.2 [CodingConvention.md](CodingConvention.md) —— 豁免清单新增
+  `Info`/`CreateInfo` (仅限镜像 Vulkan `Vk*Info`/`Vk*CreateInfo` 惯用语；裁决 P12)。
+- [新增] §2.6 [CommentConvention.md](CommentConvention.md) —— 简单访问器精简注释：
+  类级总括 + 单行说明，条件三项 (单表达式/不跨 FFM/类级已总括)；跨 FFM 边界函数
+  不受影响 (裁决 P13)。

@@ -100,3 +100,28 @@ MethodHandle resolveDowncallHandle(long nativeFunctionAddress,
 
 > 注：Java 的 `@param` 形如 `@param <类型> <参数名> <说明>`，以满足"显式给出数据类型"
 > 的要求 (Javadoc 原生不带类型，故类型写入标签正文)。此为本项目约定，全项目统一。
+
+---
+
+## §2.6 简单访问器的精简注释 (2026-07-19 所有者批准)
+
+对**同时满足以下全部条件**的简单访问器 (trivial accessor)，允许使用单行 `/** ... */`
+注释 (内容即功能说明)，并可省略 `@note ThreadSafety`、`@warning MemoryOwnership`、
+`@return`：
+
+1. 函数体为**单一表达式**的成员/常量返回，无副作用、无所有权转移；
+2. **不跨越 Java↔Native (FFM) 边界** (§2.3 对跨边界函数的强制不受本节影响)；
+3. 所属**类级注释**已用 `@note ThreadSafety` / `@warning MemoryOwnership` 对
+   全部访问器作出**总括说明** (例如"全部访问器只读、线程安全；全部句柄为借用")。
+
+示例：
+
+```cpp
+/** The borrowed Vulkan instance provided at construction (see class notes). */
+[[nodiscard]] VkInstance instance() const noexcept { return m_instance; }
+```
+
+**理由：** 8 个一行访问器 × 5 行样板注释 ≈ 40 行噪声，反而淹没类级的关键所有权/
+线程安全信息 (T0[2] 的目的是可读可维护，注释密度应与信息量成正比)。类级总括 +
+单行说明保留了全部信息，去除了重复。**任何有逻辑、有副作用、有所有权语义或跨
+FFM 边界的函数，仍须完整注释块。**
