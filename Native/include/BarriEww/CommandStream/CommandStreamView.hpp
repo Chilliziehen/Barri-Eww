@@ -106,6 +106,9 @@ public:
     /** The stream format minor version (see class notes). */
     [[nodiscard]] std::uint16_t versionMinor() const noexcept { return m_header.versionMinor; }
 
+    /** The total stream byte size, header included (see class notes). */
+    [[nodiscard]] std::uint64_t totalByteSize() const noexcept { return m_header.totalByteSize; }
+
     /** Iterator at the first command, immediately after the 32-byte header. */
     [[nodiscard]] ConstIterator begin() const noexcept {
         return ConstIterator{m_streamBytes, sizeof(CommandStreamHeader)};
