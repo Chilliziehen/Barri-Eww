@@ -38,24 +38,31 @@ class CommandStreamModuleWriterTests {
         return streamSegment;
     }
 
-    /** The golden scenario: one buffer table (0xA0..0xAF) plus lanes 0 and 1. */
+    /** The golden scenario: a schema-valid buffer table plus lanes 0 and 1. */
     private static byte[] writeGoldenModule(Arena testArena) {
-        byte[] bufferTableBytes = new byte[16];
-        for (int byteIndex = 0; byteIndex < bufferTableBytes.length; ++byteIndex) {
-            bufferTableBytes[byteIndex] = (byte) (0xA0 + byteIndex);
-        }
+        // Real composition path: table writer -> module writer (staging + device +
+        // imported entries, matching the recorder's future CopyBuffer scenario).
+        CommandStreamBufferHandleTableWriter tableWriter =
+                new CommandStreamBufferHandleTableWriter();
+        tableWriter.addCreatedBuffer(64, CommandStreamBufferUsage.s_transferSource,
+                CommandStreamBufferMemoryKind.HOST_VISIBLE_PERSISTENT_MAPPED);
+        tableWriter.addCreatedBuffer(64, CommandStreamBufferUsage.s_transferDestination,
+                CommandStreamBufferMemoryKind.DEVICE_LOCAL);
+        tableWriter.addImportedBuffer(1001);
+        MemorySegment tableSegment = testArena.allocate(tableWriter.requiredByteSize(), 8);
+        tableWriter.writeTo(tableSegment);
 
         CommandStreamModuleWriter moduleWriter = new CommandStreamModuleWriter(s_goldenGraphHash);
         moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE, 0,
-                MemorySegment.ofArray(bufferTableBytes));
+                tableSegment);
         moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 0,
                 recordLaneStream(testArena, 0, s_goldenGraphHash, true));
         moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
                 recordLaneStream(testArena, 1, s_goldenGraphHash, false));
 
-        assertEquals(256, moduleWriter.requiredByteSize());
-        MemorySegment moduleSegment = testArena.allocate(256, 8);
-        assertEquals(256, moduleWriter.writeTo(moduleSegment));
+        assertEquals(320, moduleWriter.requiredByteSize());
+        MemorySegment moduleSegment = testArena.allocate(320, 8);
+        assertEquals(320, moduleWriter.writeTo(moduleSegment));
         return moduleSegment.toArray(ValueLayout.JAVA_BYTE);
     }
 

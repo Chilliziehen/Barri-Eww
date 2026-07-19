@@ -13,7 +13,8 @@ set(BARRIEWW_TEST_SOURCES
     CommandStreamValidatorTests.cpp
     CommandStreamModuleValidatorTests.cpp
     CommandStreamGoldenTests.cpp
-    CommandStreamDisassemblerTests.cpp)
+    CommandStreamDisassemblerTests.cpp
+    CommandStreamBufferHandleTableValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES VulkanContextTests.cpp)
 endif()
