@@ -22,6 +22,7 @@ if(BARRIEWW_BACKEND_VULKAN)
         VulkanContextTests.cpp
         CommandBufferRecorderTests.cpp
         ComputeDispatchTests.cpp
+        IndirectDispatchTests.cpp
         VulkanFrameLoopTests.cpp)
 endif()
 

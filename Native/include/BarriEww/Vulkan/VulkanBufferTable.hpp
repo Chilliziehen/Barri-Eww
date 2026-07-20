@@ -43,6 +43,8 @@ public:
         std::uint64_t byteSize = 0;
         /** Non-zero exactly for entries carrying the DeviceAddress usage bit. */
         VkDeviceAddress deviceAddress = 0;
+        /** The entry's backend-neutral usage mask (recorder-side usage checks, D5). */
+        std::uint32_t neutralUsageFlags = 0;
         bool isBound = false;
     };
 

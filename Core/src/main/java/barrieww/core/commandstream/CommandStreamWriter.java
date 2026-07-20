@@ -130,6 +130,27 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a DispatchIndirect command (opcode 0x0021): the GPU reads the three
+     * workgroup counts from the referenced buffer at execution time (the GPU-driven
+     * shape — the CPU prerecords, the GPU decides the workload). Pinned payload
+     * layout (mirrored by the native CommandBufferRecorder): +0 bufferSlot u32,
+     * +4 reserved zero padding, +8 bufferOffset u64; command byteSize 24.
+     *
+     * @param int bufferSlot Buffer table slot holding the indirect arguments; the
+     *        entry must carry the Indirect usage bit
+     * @param long bufferOffset Byte offset of the arguments within the buffer; must be
+     *        a multiple of 4
+     */
+    public void appendDispatchIndirect(int bufferSlot, long bufferOffset) {
+        writeCommandHeader(CommandStreamOpcode.DISPATCH_INDIRECT, 24);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 16, bufferOffset);
+        m_currentByteOffset += 24;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Appends a CopyBuffer command (opcode 0x0040). Pinned payload layout (mirrored by
      * the native CommandBufferRecorder): +0 sourceBufferSlot u32,
      * +4 destinationBufferSlot u32, +8 sourceByteOffset u64,

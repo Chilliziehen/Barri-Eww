@@ -112,6 +112,7 @@ VulkanBufferTable::createFromTable(const VulkanContext& vulkanContext,
 
         BufferSlot bufferSlot{};
         bufferSlot.byteSize = entry.byteSize;
+        bufferSlot.neutralUsageFlags = entry.usageFlags;
         VkResult vulkanResult =
             vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &bufferSlot.buffer);
         if (vulkanResult != VK_SUCCESS) {

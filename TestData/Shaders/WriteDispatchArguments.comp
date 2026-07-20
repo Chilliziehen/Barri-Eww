@@ -1,0 +1,22 @@
+#version 450
+// Test fixture: the GPU-driven argument producer — writes VkDispatchIndirectCommand
+// {2, 1, 1} through a buffer device address handed in via push constants.
+// Compiled into WriteDispatchArguments.comp.spv with:
+//   glslc --target-env=vulkan1.2 -O WriteDispatchArguments.comp -o WriteDispatchArguments.comp.spv
+#extension GL_EXT_buffer_reference : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer DispatchArguments {
+    uint values[];
+};
+
+layout(push_constant) uniform PushData {
+    DispatchArguments dispatchArguments;
+} pushData;
+
+void main() {
+    pushData.dispatchArguments.values[0] = 2u;
+    pushData.dispatchArguments.values[1] = 1u;
+    pushData.dispatchArguments.values[2] = 1u;
+}
