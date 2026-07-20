@@ -93,7 +93,7 @@ TEST_CASE("Committed golden module validates and decodes as authored",
           "[commandStream][golden]") {
     const std::vector<std::byte> goldenBytes =
         readTestDataFile("CommandStream/BufferTableAndTwoLaneModule.becs");
-    REQUIRE(goldenBytes.size() == 472u);
+    REQUIRE(goldenBytes.size() == 488u);
 
     const auto validationResult = CommandStreamModuleValidator::validate(goldenBytes);
     REQUIRE(validationResult.has_value());

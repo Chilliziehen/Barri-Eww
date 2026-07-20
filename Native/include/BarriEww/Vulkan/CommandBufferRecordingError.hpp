@@ -40,6 +40,18 @@ enum class CommandBufferRecordingError : std::uint32_t {
     MisalignedIndirectOffset = 17,
     /** The indirect arguments structure leaves the referenced buffer. */
     IndirectArgumentsOutOfBounds = 18,
+    /** The stream touches images but no image table was provided. */
+    MissingImageTable = 19,
+    /** A command or barrier references an image slot outside the table. */
+    ImageSlotOutOfRange = 20,
+    /** A command or barrier references an imported slot with no bound image (v0.1). */
+    UnboundImportedImage = 21,
+    /** A payload carries an unassigned image layout value. */
+    UnknownImageLayoutValue = 22,
+    /** A payload carries an empty or unassigned image aspect mask. */
+    UnknownImageAspectMask = 23,
+    /** A subresource range or copy region leaves the referenced image. */
+    ImageSubresourceOutOfRange = 24,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */

@@ -85,9 +85,9 @@ class CommandStreamModuleWriterTests {
         moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
                 recordLaneStream(testArena, 1, s_goldenGraphHash, false));
 
-        assertEquals(472, moduleWriter.requiredByteSize());
-        MemorySegment moduleSegment = testArena.allocate(472, 8);
-        assertEquals(472, moduleWriter.writeTo(moduleSegment));
+        assertEquals(488, moduleWriter.requiredByteSize());
+        MemorySegment moduleSegment = testArena.allocate(488, 8);
+        assertEquals(488, moduleWriter.writeTo(moduleSegment));
         return moduleSegment.toArray(ValueLayout.JAVA_BYTE);
     }
 

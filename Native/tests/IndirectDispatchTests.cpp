@@ -120,7 +120,9 @@ std::vector<std::byte> makeArgumentBarrierTableBytes() {
     appendValue(tableBytes, std::uint32_t{0});
     appendValue(tableBytes, std::uint32_t{0});  // 0 global barriers
     appendValue(tableBytes, std::uint32_t{1});  // 1 buffer barrier
-    appendValue(tableBytes, std::uint64_t{24}); // records right after the directory
+    appendValue(tableBytes, std::uint32_t{0});  // 0 image barriers
+    appendValue(tableBytes, std::uint32_t{0});  // reservedFlags
+    appendValue(tableBytes, std::uint64_t{32}); // records right after the directory
     appendValue(tableBytes, std::uint64_t{0x800}); // COMPUTE_SHADER stage
     appendValue(tableBytes, std::uint64_t{0x40});  // SHADER_WRITE access
     appendValue(tableBytes, std::uint64_t{0x2});   // DRAW_INDIRECT stage
