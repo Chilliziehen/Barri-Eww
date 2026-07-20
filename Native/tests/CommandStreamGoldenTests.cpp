@@ -6,6 +6,8 @@
 #include <fstream>
 #include <vector>
 
+#include "BarriEww/CommandStream/CommandStreamBarrierBatchTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferMemoryKind.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferUsage.hpp"
@@ -14,6 +16,7 @@
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
+using barrieww::CommandStreamBarrierBatchTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
 using barrieww::CommandStreamBufferUsage;
@@ -90,13 +93,28 @@ TEST_CASE("Committed golden module validates and decodes as authored",
           "[commandStream][golden]") {
     const std::vector<std::byte> goldenBytes =
         readTestDataFile("CommandStream/BufferTableAndTwoLaneModule.becs");
-    REQUIRE(goldenBytes.size() == 320u);
+    REQUIRE(goldenBytes.size() == 472u);
 
     const auto validationResult = CommandStreamModuleValidator::validate(goldenBytes);
     REQUIRE(validationResult.has_value());
     REQUIRE(validationResult->graphHash() == 0x0102030405060708ull);
     REQUIRE(validationResult->laneStreamCount() == 2u);
-    REQUIRE(validationResult->sectionEntries().size() == 3u);
+    REQUIRE(validationResult->sectionEntries().size() == 4u);
+
+    const auto barrierTableSection =
+        validationResult->findSection(CommandStreamModuleSectionType::BarrierBatchTable);
+    REQUIRE(barrierTableSection.has_value());
+    const auto barrierTableValidationResult =
+        CommandStreamBarrierBatchTableValidator::validate(*barrierTableSection);
+    REQUIRE(barrierTableValidationResult.has_value());
+    REQUIRE(barrierTableValidationResult->batchCount() == 2u);
+    const auto goldenGlobalBarrier = barrierTableValidationResult->globalBarrier(0u, 0u);
+    REQUIRE(goldenGlobalBarrier.sourceAccessMask == 0x1000u);   // TRANSFER_WRITE
+    REQUIRE(goldenGlobalBarrier.destinationAccessMask == 0x800u); // TRANSFER_READ
+    const auto goldenBufferBarrier = barrierTableValidationResult->bufferBarrier(1u, 0u);
+    REQUIRE(goldenBufferBarrier.bufferSlot == 1u);
+    REQUIRE(goldenBufferBarrier.byteCount
+            == barrieww::CommandStreamBufferBarrierRecord::s_wholeByteCount);
 
     const auto bufferTableSection =
         validationResult->findSection(CommandStreamModuleSectionType::BufferHandleTable);

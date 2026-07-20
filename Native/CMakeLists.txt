@@ -52,7 +52,8 @@ target_sources(BarriEwwNative
         src/CommandStream/CommandStreamValidator.cpp
         src/CommandStream/CommandStreamModuleValidator.cpp
         src/CommandStream/CommandStreamDisassembler.cpp
-        src/CommandStream/CommandStreamBufferHandleTableValidator.cpp)
+        src/CommandStream/CommandStreamBufferHandleTableValidator.cpp
+        src/CommandStream/CommandStreamBarrierBatchTableValidator.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC

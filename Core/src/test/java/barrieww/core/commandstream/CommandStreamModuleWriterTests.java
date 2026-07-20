@@ -9,6 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -52,17 +53,41 @@ class CommandStreamModuleWriterTests {
         MemorySegment tableSegment = testArena.allocate(tableWriter.requiredByteSize(), 8);
         tableWriter.writeTo(tableSegment);
 
+        // Barrier batch table matching the golden: one global batch, one buffer batch.
+        CommandStreamBarrierBatchTableWriter barrierTableWriter =
+                new CommandStreamBarrierBatchTableWriter();
+        barrierTableWriter.addBatch(
+                List.of(new CommandStreamBarrierBatchTableWriter.GlobalBarrierDescription(
+                        CommandStreamPipelineStage.s_transfer,
+                        CommandStreamMemoryAccess.s_transferWrite,
+                        CommandStreamPipelineStage.s_transfer,
+                        CommandStreamMemoryAccess.s_transferRead)),
+                List.of());
+        barrierTableWriter.addBatch(
+                List.of(),
+                List.of(new CommandStreamBarrierBatchTableWriter.BufferBarrierDescription(
+                        CommandStreamPipelineStage.s_transfer,
+                        CommandStreamMemoryAccess.s_transferWrite,
+                        CommandStreamPipelineStage.s_transfer,
+                        CommandStreamMemoryAccess.s_transferRead,
+                        1, 0, CommandStreamBarrierBatchTableWriter.s_wholeByteCount)));
+        MemorySegment barrierTableSegment =
+                testArena.allocate(barrierTableWriter.requiredByteSize(), 8);
+        barrierTableWriter.writeTo(barrierTableSegment);
+
         CommandStreamModuleWriter moduleWriter = new CommandStreamModuleWriter(s_goldenGraphHash);
         moduleWriter.addSection(CommandStreamModuleSectionType.BUFFER_HANDLE_TABLE, 0,
                 tableSegment);
+        moduleWriter.addSection(CommandStreamModuleSectionType.BARRIER_BATCH_TABLE, 0,
+                barrierTableSegment);
         moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 0,
                 recordLaneStream(testArena, 0, s_goldenGraphHash, true));
         moduleWriter.addSection(CommandStreamModuleSectionType.LANE_STREAM, 1,
                 recordLaneStream(testArena, 1, s_goldenGraphHash, false));
 
-        assertEquals(320, moduleWriter.requiredByteSize());
-        MemorySegment moduleSegment = testArena.allocate(320, 8);
-        assertEquals(320, moduleWriter.writeTo(moduleSegment));
+        assertEquals(472, moduleWriter.requiredByteSize());
+        MemorySegment moduleSegment = testArena.allocate(472, 8);
+        assertEquals(472, moduleWriter.writeTo(moduleSegment));
         return moduleSegment.toArray(ValueLayout.JAVA_BYTE);
     }
 

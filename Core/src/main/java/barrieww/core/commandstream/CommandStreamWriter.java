@@ -124,6 +124,21 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends an ExecuteBarrierBatch command (opcode 0x0032). Pinned payload layout:
+     * +0 barrierBatchSlot u32, +4 zero padding u32; command byteSize 16.
+     *
+     * @param int barrierBatchSlot The BarrierBatchTable slot to execute
+     */
+    public void appendExecuteBarrierBatch(int barrierBatchSlot) {
+        writeCommandHeader(CommandStreamOpcode.EXECUTE_BARRIER_BATCH, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                barrierBatchSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Writes the 32-byte stream header (magic, version, laneIndex, commandCount,
      * totalByteSize, graphHash) and seals the writer.
      *
