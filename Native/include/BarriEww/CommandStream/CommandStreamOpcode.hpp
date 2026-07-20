@@ -21,6 +21,13 @@ enum class CommandStreamOpcode : std::uint16_t {
     PushConstants = 0x0005,
     SetViewport = 0x0006,
     SetScissor = 0x0007,
+    /**
+     * Pushes a buffer's device address (8 bytes) into the bound pipeline's push
+     * constants. The stream carries the SLOT; the load-time recorder resolves it to
+     * the actual VkDeviceAddress (addresses only exist after materialization, so this
+     * keeps bake artifacts pure data — ADR-0002 D2 slot indirection).
+     */
+    PushBufferDeviceAddress = 0x0008,
 
     // Core range: draws.
     Draw = 0x0010,
@@ -76,6 +83,7 @@ enum class CommandStreamOpcode : std::uint16_t {
         case CommandStreamOpcode::PushConstants:
         case CommandStreamOpcode::SetViewport:
         case CommandStreamOpcode::SetScissor:
+        case CommandStreamOpcode::PushBufferDeviceAddress:
         case CommandStreamOpcode::Draw:
         case CommandStreamOpcode::DrawIndexed:
         case CommandStreamOpcode::DrawIndirect:

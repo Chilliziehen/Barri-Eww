@@ -41,6 +41,8 @@ public:
         VkDeviceMemory deviceMemory = VK_NULL_HANDLE;
         std::byte* mappedPointer = nullptr;
         std::uint64_t byteSize = 0;
+        /** Non-zero exactly for entries carrying the DeviceAddress usage bit. */
+        VkDeviceAddress deviceAddress = 0;
         bool isBound = false;
     };
 

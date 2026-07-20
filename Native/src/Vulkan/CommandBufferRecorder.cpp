@@ -61,6 +61,19 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *                             range error -> BarrierRangeOutOfBounds)
  *           vkCmdPipelineBarrier(commandBuffer, orSourceStages, orDestinationStages,
  *                                0, globals, bufferBarriers, no image barriers)
+ *         case BindComputePipeline:
+ *           slot checks against pipelineTable              -> Missing.../PipelineSlotOutOfRange
+ *           vkCmdBindPipeline(COMPUTE); remember the slot's layout and push range
+ *         case PushBufferDeviceAddress:
+ *           requires a bound compute pipeline              -> NoBoundComputePipeline
+ *           buffer slot checks; slot.deviceAddress != 0    -> MissingBufferDeviceAddress
+ *           pushOffset + 8 within declared push range      -> PushConstantRangeExceeded
+ *           vkCmdPushConstants(boundLayout, COMPUTE, offset, 8, &resolvedAddress)
+ *           // The stream carries the SLOT; the address exists only after
+ *           // materialization, so it is baked here at record time (load path).
+ *         case Dispatch:
+ *           requires a bound compute pipeline              -> NoBoundComputePipeline
+ *           vkCmdDispatch(x, y, z)
  *         default                                          -> UnsupportedOpcode
  *     vkEndCommandBuffer(commandBuffer)
  */
@@ -68,7 +81,8 @@ std::expected<void, CommandBufferRecordingFailure>
 CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                               const CommandStreamView& streamView,
                               const VulkanBufferTable& bufferTable,
-                              const CommandStreamBarrierBatchTableView* barrierBatchTableView) {
+                              const CommandStreamBarrierBatchTableView* barrierBatchTableView,
+                              const VulkanPipelineTable* pipelineTable) {
     using enum CommandBufferRecordingError;
 
     constexpr std::uint32_t noCommandIndex = UINT32_MAX;
@@ -84,6 +98,12 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
     if (vulkanResult != VK_SUCCESS) {
         return fail(CommandBufferBeginFailed, noCommandIndex, vulkanResult);
     }
+
+    // Recording-walk pipeline state: which compute pipeline is currently bound and the
+    // push range it declared (needed by push constant emission).
+    bool hasBoundComputePipeline = false;
+    VkPipelineLayout boundComputePipelineLayout = VK_NULL_HANDLE;
+    std::uint32_t boundPushConstantByteSize = 0;
 
     std::uint32_t commandIndex = 0;
     for (const CommandStreamView::CommandRecord commandRecord : streamView) {
@@ -218,6 +238,69 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     static_cast<std::uint32_t>(globalBarriers.size()), globalBarriers.data(),
                     static_cast<std::uint32_t>(bufferBarriers.size()), bufferBarriers.data(),
                     0u, nullptr);
+                break;
+            }
+            case CommandStreamOpcode::BindComputePipeline: {
+                const auto pipelineSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                if (pipelineTable == nullptr) {
+                    return fail(MissingPipelineTable, commandIndex, VK_SUCCESS);
+                }
+                if (pipelineSlot >= pipelineTable->slotCount()) {
+                    return fail(PipelineSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanPipelineTable::PipelineSlot& boundSlot =
+                    pipelineTable->slot(pipelineSlot);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  boundSlot.pipeline);
+                hasBoundComputePipeline = true;
+                boundComputePipelineLayout = boundSlot.pipelineLayout;
+                boundPushConstantByteSize = boundSlot.pushConstantByteSize;
+                break;
+            }
+            case CommandStreamOpcode::PushBufferDeviceAddress: {
+                // Pinned payload: +0 bufferSlot u32, +4 pushConstantByteOffset u32.
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto pushConstantByteOffset =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                if (!hasBoundComputePipeline) {
+                    return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& addressedSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!addressedSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if (addressedSlot.deviceAddress == 0u) {
+                    return fail(MissingBufferDeviceAddress, commandIndex, VK_SUCCESS);
+                }
+                if (pushConstantByteOffset + sizeof(VkDeviceAddress)
+                    > boundPushConstantByteSize) {
+                    return fail(PushConstantRangeExceeded, commandIndex, VK_SUCCESS);
+                }
+                // The address exists only after materialization; baking it here keeps
+                // the stream pure data (slot indirection) while the prerecorded buffer
+                // carries the resolved value (ADR-0003: decided at load, not per frame).
+                vkCmdPushConstants(commandBuffer, boundComputePipelineLayout,
+                                   VK_SHADER_STAGE_COMPUTE_BIT, pushConstantByteOffset,
+                                   sizeof(VkDeviceAddress), &addressedSlot.deviceAddress);
+                break;
+            }
+            case CommandStreamOpcode::Dispatch: {
+                const auto groupCountX =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto groupCountY =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                const auto groupCountZ =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u);
+                if (!hasBoundComputePipeline) {
+                    return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
+                }
+                vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
                 break;
             }
             default:

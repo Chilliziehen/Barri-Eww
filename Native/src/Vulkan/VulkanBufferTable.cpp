@@ -25,6 +25,8 @@ VkBufferUsageFlags mapUsageFlags(std::uint32_t neutralUsageFlags) {
     mapBit(CommandStreamBufferUsage::Uniform, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     mapBit(CommandStreamBufferUsage::Storage, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     mapBit(CommandStreamBufferUsage::Indirect, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+    mapBit(CommandStreamBufferUsage::DeviceAddress,
+           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
     return vulkanUsageFlags;
 }
 
@@ -150,8 +152,16 @@ VulkanBufferTable::createFromTable(const VulkanContext& vulkanContext,
             return fail(NoSuitableMemoryType, slotIndex, VK_SUCCESS);
         }
 
+        const bool wantsDeviceAddress =
+            (entry.usageFlags
+             & static_cast<std::uint32_t>(CommandStreamBufferUsage::DeviceAddress))
+            != 0u;
+        VkMemoryAllocateFlagsInfo memoryAllocateFlagsInfo{};
+        memoryAllocateFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        memoryAllocateFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
         VkMemoryAllocateInfo memoryAllocateInfo{};
         memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        memoryAllocateInfo.pNext = wantsDeviceAddress ? &memoryAllocateFlagsInfo : nullptr;
         memoryAllocateInfo.allocationSize = memoryRequirements.size;
         memoryAllocateInfo.memoryTypeIndex = static_cast<std::uint32_t>(memoryTypeIndex);
         vulkanResult = vkAllocateMemory(logicalDevice, &memoryAllocateInfo, nullptr,
@@ -175,6 +185,15 @@ VulkanBufferTable::createFromTable(const VulkanContext& vulkanContext,
                 return fail(MemoryMappingFailed, slotIndex, vulkanResult);
             }
             ownedSlot.mappedPointer = static_cast<std::byte*>(mappedAddress);
+        }
+        if (wantsDeviceAddress) {
+            // Requires the bufferDeviceAddress device feature (core 1.2), enabled by
+            // the host that owns the device (the test harness, later Minecraft).
+            VkBufferDeviceAddressInfo bufferDeviceAddressInfo{};
+            bufferDeviceAddressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            bufferDeviceAddressInfo.buffer = ownedSlot.buffer;
+            ownedSlot.deviceAddress =
+                vkGetBufferDeviceAddress(logicalDevice, &bufferDeviceAddressInfo);
         }
         ownedSlot.isBound = true;
     }

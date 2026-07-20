@@ -27,6 +27,18 @@ enum class CommandStreamHandleTableValidationError : std::uint32_t {
     InvalidCreatedBufferDescription = 7,
     /** An imported entry (importIdentifier != 0) has a memory kind other than None. */
     InvalidImportedBufferDescription = 8,
+    /** A pipeline entry's kind value is not assigned in this schema version. */
+    UnknownPipelineKind = 9,
+    /** A pipeline entry's push constant size is not a multiple of 4 or exceeds 128. */
+    InvalidPushConstantByteSize = 10,
+    /** A shader blob region leaves the table or intrudes into the directory. */
+    ShaderBlobOutOfBounds = 11,
+    /** A shader blob offset is not 8-byte aligned. */
+    MisalignedShaderBlob = 12,
+    /** A shader blob does not start with the SPIR-V magic word. */
+    InvalidShaderBlobMagic = 13,
+    /** A shader blob size is below the SPIR-V minimum or not a multiple of 4. */
+    InvalidShaderBlobByteSize = 14,
 };
 
 } // namespace barrieww

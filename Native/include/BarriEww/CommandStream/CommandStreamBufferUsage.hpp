@@ -20,10 +20,12 @@ enum class CommandStreamBufferUsage : std::uint32_t {
     Uniform = 0x10,
     Storage = 0x20,
     Indirect = 0x40,
+    /** The buffer's device address may be queried and pushed (Vulkan: bufferDeviceAddress). */
+    DeviceAddress = 0x80,
 };
 
 /** OR-mask of every usage bit assigned in the v0.1 schema. */
-inline constexpr std::uint32_t g_allKnownCommandStreamBufferUsageFlags = 0x7Fu;
+inline constexpr std::uint32_t g_allKnownCommandStreamBufferUsageFlags = 0xFFu;
 
 /**
  * @note ThreadSafety: Thread-safe (pure constant expression).

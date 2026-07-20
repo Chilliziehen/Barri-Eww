@@ -53,7 +53,9 @@ target_sources(BarriEwwNative
         src/CommandStream/CommandStreamModuleValidator.cpp
         src/CommandStream/CommandStreamDisassembler.cpp
         src/CommandStream/CommandStreamBufferHandleTableValidator.cpp
-        src/CommandStream/CommandStreamBarrierBatchTableValidator.cpp)
+        src/CommandStream/CommandStreamBarrierBatchTableValidator.cpp
+        src/CommandStream/CommandStreamShaderModuleTableValidator.cpp
+        src/CommandStream/CommandStreamPipelineHandleTableValidator.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC
@@ -83,7 +85,8 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/VulkanContext.cpp
             src/Vulkan/VulkanBufferTable.cpp
             src/Vulkan/CommandBufferRecorder.cpp
-            src/Vulkan/VulkanFrameLoop.cpp)
+            src/Vulkan/VulkanFrameLoop.cpp
+            src/Vulkan/VulkanPipelineTable.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
 

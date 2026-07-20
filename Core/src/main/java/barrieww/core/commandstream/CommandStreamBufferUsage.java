@@ -15,9 +15,11 @@ public final class CommandStreamBufferUsage {
     public static final int s_uniform = 0x10;
     public static final int s_storage = 0x20;
     public static final int s_indirect = 0x40;
+    /** The buffer's device address may be queried and pushed (Vulkan: bufferDeviceAddress). */
+    public static final int s_deviceAddress = 0x80;
 
     /** OR-mask of every usage bit assigned in the v0.1 schema. */
-    public static final int s_allKnownUsageFlags = 0x7F;
+    public static final int s_allKnownUsageFlags = 0xFF;
 
     private CommandStreamBufferUsage() {
         // Constants holder; never instantiated.

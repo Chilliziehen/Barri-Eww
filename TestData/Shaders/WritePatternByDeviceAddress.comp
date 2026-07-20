@@ -1,0 +1,20 @@
+#version 450
+// Test fixture: writes values[i] = i * 7 + 3 through a buffer device address handed in
+// via push constants (no descriptor sets; Vulkan 1.2 bufferDeviceAddress feature).
+// Compiled into WritePatternByDeviceAddress.comp.spv with:
+//   glslc --target-env=vulkan1.2 -O WritePatternByDeviceAddress.comp -o WritePatternByDeviceAddress.comp.spv
+#extension GL_EXT_buffer_reference : require
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer OutputValues {
+    uint values[];
+};
+
+layout(push_constant) uniform PushData {
+    OutputValues outputValues;
+} pushData;
+
+void main() {
+    pushData.outputValues.values[gl_GlobalInvocationID.x] = gl_GlobalInvocationID.x * 7u + 3u;
+}

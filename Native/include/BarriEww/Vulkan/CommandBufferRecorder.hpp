@@ -8,6 +8,7 @@
 #include "BarriEww/CommandStream/CommandStreamView.hpp"
 #include "BarriEww/Vulkan/CommandBufferRecordingFailure.hpp"
 #include "BarriEww/Vulkan/VulkanBufferTable.hpp"
+#include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
 
 namespace barrieww {
 
@@ -44,6 +45,9 @@ public:
      * @param barrierBatchTableView The validated barrier batch table for
      *        ExecuteBarrierBatch commands, or nullptr for streams without barriers
      *        (executing a batch then fails with MissingBarrierBatchTable).
+     * @param pipelineTable The materialized pipeline table for BindComputePipeline /
+     *        Dispatch / PushBufferDeviceAddress commands, or nullptr for streams
+     *        without pipelines (those commands then fail with MissingPipelineTable).
      * @return std::expected<void, CommandBufferRecordingFailure> Nothing on success;
      *         the first failure (category, command index, VkResult) otherwise. Errors
      *         are values so the FFM boundary needs no unwinding (§6.4).
@@ -54,7 +58,8 @@ public:
     [[nodiscard]] static std::expected<void, CommandBufferRecordingFailure>
     record(VkCommandBuffer commandBuffer, const CommandStreamView& streamView,
            const VulkanBufferTable& bufferTable,
-           const CommandStreamBarrierBatchTableView* barrierBatchTableView = nullptr);
+           const CommandStreamBarrierBatchTableView* barrierBatchTableView = nullptr,
+           const VulkanPipelineTable* pipelineTable = nullptr);
 };
 
 } // namespace barrieww
