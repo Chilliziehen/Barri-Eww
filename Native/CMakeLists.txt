@@ -82,7 +82,8 @@ if(BARRIEWW_BACKEND_VULKAN)
         PRIVATE
             src/Vulkan/VulkanContext.cpp
             src/Vulkan/VulkanBufferTable.cpp
-            src/Vulkan/CommandBufferRecorder.cpp)
+            src/Vulkan/CommandBufferRecorder.cpp
+            src/Vulkan/VulkanFrameLoop.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
 
