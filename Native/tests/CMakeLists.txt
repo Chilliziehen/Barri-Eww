@@ -19,7 +19,8 @@ set(BARRIEWW_TEST_SOURCES
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES
         VulkanContextTests.cpp
-        CommandBufferRecorderTests.cpp)
+        CommandBufferRecorderTests.cpp
+        VulkanFrameLoopTests.cpp)
 endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})
