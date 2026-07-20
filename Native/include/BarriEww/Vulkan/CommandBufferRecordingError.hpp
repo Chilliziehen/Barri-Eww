@@ -34,6 +34,12 @@ enum class CommandBufferRecordingError : std::uint32_t {
     PushConstantRangeExceeded = 14,
     /** PushBufferDeviceAddress references a buffer without a device address. */
     MissingBufferDeviceAddress = 15,
+    /** An indirect command references a buffer without the Indirect usage bit. */
+    MissingIndirectUsage = 16,
+    /** An indirect arguments offset is not a multiple of 4. */
+    MisalignedIndirectOffset = 17,
+    /** The indirect arguments structure leaves the referenced buffer. */
+    IndirectArgumentsOutOfBounds = 18,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */

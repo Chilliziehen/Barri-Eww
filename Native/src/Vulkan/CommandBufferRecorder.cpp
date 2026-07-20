@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
+#include "BarriEww/CommandStream/CommandStreamBufferUsage.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 
 namespace barrieww {
@@ -74,6 +75,15 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *         case Dispatch:
  *           requires a bound compute pipeline              -> NoBoundComputePipeline
  *           vkCmdDispatch(x, y, z)
+ *         case DispatchIndirect:
+ *           requires a bound compute pipeline              -> NoBoundComputePipeline
+ *           buffer slot checks (bounds/bound as above)
+ *           buffer must carry the Indirect usage bit       -> MissingIndirectUsage
+ *           offset % 4 == 0                                -> MisalignedIndirectOffset
+ *           offset + 12 within the buffer                  -> IndirectArgumentsOutOfBounds
+ *           vkCmdDispatchIndirect(buffer, offset)
+ *           // The GPU decides the workload at execution time; the CPU prerecorded
+ *           // everything (the GPU-driven shape of ADR-0001).
  *         default                                          -> UnsupportedOpcode
  *     vkEndCommandBuffer(commandBuffer)
  */
@@ -301,6 +311,38 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
                 }
                 vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+                break;
+            }
+            case CommandStreamOpcode::DispatchIndirect: {
+                // Pinned payload: +0 bufferSlot u32, +4 reserved, +8 bufferOffset u64.
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto bufferOffset =
+                    readPayloadValue<std::uint64_t>(commandRecord.payloadBytes, 8u);
+                if (!hasBoundComputePipeline) {
+                    return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& argumentsSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!argumentsSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if ((argumentsSlot.neutralUsageFlags
+                     & static_cast<std::uint32_t>(CommandStreamBufferUsage::Indirect))
+                    == 0u) {
+                    return fail(MissingIndirectUsage, commandIndex, VK_SUCCESS);
+                }
+                if (bufferOffset % 4u != 0u) {
+                    return fail(MisalignedIndirectOffset, commandIndex, VK_SUCCESS);
+                }
+                // VkDispatchIndirectCommand is three u32 workgroup counts (12 bytes).
+                if (bufferOffset + 12u > argumentsSlot.byteSize) {
+                    return fail(IndirectArgumentsOutOfBounds, commandIndex, VK_SUCCESS);
+                }
+                vkCmdDispatchIndirect(commandBuffer, argumentsSlot.buffer, bufferOffset);
                 break;
             }
             default:
