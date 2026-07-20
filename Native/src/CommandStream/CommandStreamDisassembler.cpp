@@ -20,6 +20,7 @@ const char* opcodeName(CommandStreamOpcode opcode) {
         case CommandStreamOpcode::PushConstants: return "PushConstants";
         case CommandStreamOpcode::SetViewport: return "SetViewport";
         case CommandStreamOpcode::SetScissor: return "SetScissor";
+        case CommandStreamOpcode::PushBufferDeviceAddress: return "PushBufferDeviceAddress";
         case CommandStreamOpcode::Draw: return "Draw";
         case CommandStreamOpcode::DrawIndexed: return "DrawIndexed";
         case CommandStreamOpcode::DrawIndirect: return "DrawIndirect";
@@ -54,6 +55,7 @@ const char* sectionTypeName(std::uint16_t sectionTypeValue) {
         case CommandStreamModuleSectionType::ImageHandleTable: return "ImageHandleTable";
         case CommandStreamModuleSectionType::ImageViewHandleTable: return "ImageViewHandleTable";
         case CommandStreamModuleSectionType::SamplerHandleTable: return "SamplerHandleTable";
+        case CommandStreamModuleSectionType::ShaderModuleTable: return "ShaderModuleTable";
         case CommandStreamModuleSectionType::BarrierBatchTable: return "BarrierBatchTable";
         case CommandStreamModuleSectionType::RenderingTemplateTable: return "RenderingTemplateTable";
         case CommandStreamModuleSectionType::PushDescriptorTemplateTable: return "PushDescriptorTemplateTable";

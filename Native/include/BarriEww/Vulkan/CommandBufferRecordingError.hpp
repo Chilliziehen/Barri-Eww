@@ -24,6 +24,16 @@ enum class CommandBufferRecordingError : std::uint32_t {
     UnboundImportedBuffer = 5,
     /** A copy's offset + byteCount leaves the referenced buffer. */
     CopyRangeOutOfBounds = 6,
+    /** The stream binds or dispatches pipelines but no pipeline table was provided. */
+    MissingPipelineTable = 11,
+    /** A command references a pipeline slot outside the table. */
+    PipelineSlotOutOfRange = 12,
+    /** Dispatch or push constants were recorded before any BindComputePipeline. */
+    NoBoundComputePipeline = 13,
+    /** A push constant write leaves the bound pipeline's declared range. */
+    PushConstantRangeExceeded = 14,
+    /** PushBufferDeviceAddress references a buffer without a device address. */
+    MissingBufferDeviceAddress = 15,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */

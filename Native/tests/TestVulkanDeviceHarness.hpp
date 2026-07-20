@@ -48,6 +48,11 @@ public:
         }
     }
 
+    /** Whether the device was created with the bufferDeviceAddress feature (core 1.2). */
+    [[nodiscard]] bool supportsBufferDeviceAddress() const noexcept {
+        return m_supportsBufferDeviceAddress;
+    }
+
     /** Borrowed-handle create info for constructing a VulkanContext (see class notes). */
     [[nodiscard]] VulkanContextCreateInfo makeContextCreateInfo() const {
         VulkanContextCreateInfo contextCreateInfo{};
@@ -135,6 +140,24 @@ private:
             return false;
         }
 
+        // Query and, when available, enable bufferDeviceAddress (core 1.2 feature) so
+        // BDA-using tests can run; tests SKIP via supportsBufferDeviceAddress() otherwise.
+        VkPhysicalDeviceVulkan12Features supportedVulkan12Features{};
+        supportedVulkan12Features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceFeatures2 supportedFeatures{};
+        supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        supportedFeatures.pNext = &supportedVulkan12Features;
+        vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supportedFeatures);
+        m_supportsBufferDeviceAddress =
+            supportedVulkan12Features.bufferDeviceAddress == VK_TRUE;
+
+        VkPhysicalDeviceVulkan12Features enabledVulkan12Features{};
+        enabledVulkan12Features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        enabledVulkan12Features.bufferDeviceAddress =
+            m_supportsBufferDeviceAddress ? VK_TRUE : VK_FALSE;
+
         const float queuePriority = 1.0f;
         VkDeviceQueueCreateInfo queueCreateInfo{};
         queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -143,6 +166,7 @@ private:
         queueCreateInfo.pQueuePriorities = &queuePriority;
         VkDeviceCreateInfo deviceCreateInfo{};
         deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        deviceCreateInfo.pNext = &enabledVulkan12Features;
         deviceCreateInfo.queueCreateInfoCount = 1u;
         deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
         if (vkCreateDevice(m_physicalDevice, &deviceCreateInfo, nullptr, &m_logicalDevice)
@@ -165,6 +189,7 @@ private:
     std::uint32_t m_queueFamilyIndex = 0;
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
+    bool m_supportsBufferDeviceAddress = false;
 };
 
 } // namespace barrieww::testing

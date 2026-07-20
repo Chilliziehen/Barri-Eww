@@ -15,11 +15,13 @@ set(BARRIEWW_TEST_SOURCES
     CommandStreamGoldenTests.cpp
     CommandStreamDisassemblerTests.cpp
     CommandStreamBufferHandleTableValidatorTests.cpp
-    CommandStreamBarrierBatchTableValidatorTests.cpp)
+    CommandStreamBarrierBatchTableValidatorTests.cpp
+    CommandStreamPipelineAndShaderTableValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES
         VulkanContextTests.cpp
         CommandBufferRecorderTests.cpp
+        ComputeDispatchTests.cpp
         VulkanFrameLoopTests.cpp)
 endif()
 

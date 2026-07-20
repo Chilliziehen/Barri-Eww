@@ -17,6 +17,8 @@ public enum CommandStreamOpcode {
     PUSH_CONSTANTS(0x0005),
     SET_VIEWPORT(0x0006),
     SET_SCISSOR(0x0007),
+    /** Pushes a buffer's device address; the stream carries the SLOT, resolved at load. */
+    PUSH_BUFFER_DEVICE_ADDRESS(0x0008),
 
     // Core range: draws.
     DRAW(0x0010),

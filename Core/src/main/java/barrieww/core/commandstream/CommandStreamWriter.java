@@ -94,6 +94,42 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a BindComputePipeline command (opcode 0x0002). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 pipelineSlot u32,
+     * +4 reserved zero padding; command byteSize 16.
+     *
+     * @param int pipelineSlot Pipeline table slot to bind at the compute bind point
+     */
+    public void appendBindComputePipeline(int pipelineSlot) {
+        writeCommandHeader(CommandStreamOpcode.BIND_COMPUTE_PIPELINE, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                pipelineSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a PushBufferDeviceAddress command (opcode 0x0008): the stream carries the
+     * buffer SLOT and the native recorder resolves it to the actual device address at
+     * load time (addresses only exist after materialization, so this keeps the bake
+     * artifact pure data). Pinned payload layout: +0 bufferSlot u32,
+     * +4 pushConstantByteOffset u32; command byteSize 16.
+     *
+     * @param int bufferSlot Buffer table slot whose device address to push
+     * @param int pushConstantByteOffset Byte offset within the bound pipeline's push
+     *        constant range receiving the 8-byte address
+     */
+    public void appendPushBufferDeviceAddress(int bufferSlot, int pushConstantByteOffset) {
+        writeCommandHeader(CommandStreamOpcode.PUSH_BUFFER_DEVICE_ADDRESS, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12,
+                pushConstantByteOffset);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Appends a CopyBuffer command (opcode 0x0040). Pinned payload layout (mirrored by
      * the native CommandBufferRecorder): +0 sourceBufferSlot u32,
      * +4 destinationBufferSlot u32, +8 sourceByteOffset u64,
