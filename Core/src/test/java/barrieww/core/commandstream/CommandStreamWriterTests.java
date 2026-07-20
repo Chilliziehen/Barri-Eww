@@ -67,6 +67,31 @@ class CommandStreamWriterTests {
     }
 
     @Test
+    void copyBufferCommandUsesThePinnedPayloadLayout() {
+        ByteBuffer expectedBytes = ByteBuffer.allocate(72).order(ByteOrder.LITTLE_ENDIAN);
+        expectedBytes.put(new byte[] {0x42, 0x45, 0x43, 0x53});
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMajor);
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMinor);
+        expectedBytes.putInt(0);
+        expectedBytes.putInt(1);
+        expectedBytes.putLong(72);
+        expectedBytes.putLong(s_goldenGraphHash);
+        expectedBytes.putShort((short) 0x0040).putShort((short) 0).putInt(40);
+        expectedBytes.putInt(0).putInt(1);
+        expectedBytes.putLong(16).putLong(32).putLong(64);
+
+        try (Arena testArena = Arena.ofConfined()) {
+            MemorySegment streamSegment = testArena.allocate(72, 8);
+            CommandStreamWriter streamWriter =
+                    new CommandStreamWriter(streamSegment, 0, s_goldenGraphHash);
+            streamWriter.appendCopyBuffer(0, 1, 16, 32, 64);
+            assertEquals(72, streamWriter.finish());
+            assertArrayEquals(expectedBytes.array(),
+                    streamSegment.toArray(ValueLayout.JAVA_BYTE));
+        }
+    }
+
+    @Test
     void writerRejectsUseAfterFinish() {
         try (Arena testArena = Arena.ofConfined()) {
             MemorySegment streamSegment = testArena.allocate(80, 8);

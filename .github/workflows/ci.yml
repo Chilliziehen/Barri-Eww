@@ -54,20 +54,23 @@ jobs:
         with:
           cmake-version: "4.4"
 
-      - name: Install Vulkan software rasterizer (lavapipe, Linux)
+      - name: Install Vulkan loader and software rasterizer (lavapipe, Linux)
         if: steps.detect.outputs.ready == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools
           echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
 
+      # Windows runners have no Vulkan SDK, so the Vulkan backend builds on Linux only
+      # (lavapipe executes the GPU tests there); Windows still covers the backend-neutral
+      # format layer across the THREADED_RECORDING variants.
       - name: Configure
         if: steps.detect.outputs.ready == 'true'
         run: >
           cmake -S Native -B Native/build
           -DCMAKE_BUILD_TYPE=Release
           -DTHREADED_RECORDING=${{ matrix.threadedRecording }}
-          -DBARRIEWW_BACKEND_VULKAN=ON
+          -DBARRIEWW_BACKEND_VULKAN=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
 
       - name: Build
         if: steps.detect.outputs.ready == 'true'
