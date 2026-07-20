@@ -112,7 +112,9 @@ std::vector<std::byte> makeSingleBufferBarrierTable(std::uint32_t bufferSlot,
     appendValue(tableBytes, std::uint32_t{0});
     appendValue(tableBytes, std::uint32_t{0}); // 0 global barriers
     appendValue(tableBytes, std::uint32_t{1}); // 1 buffer barrier
-    appendValue(tableBytes, std::uint64_t{24}); // records right after the directory
+    appendValue(tableBytes, std::uint32_t{0}); // 0 image barriers
+    appendValue(tableBytes, std::uint32_t{0}); // reservedFlags
+    appendValue(tableBytes, std::uint64_t{32}); // records right after the directory
     appendValue(tableBytes, stageMask);                    // sourceStageMask
     appendValue(tableBytes, std::uint64_t{0x1000u});       // TRANSFER_WRITE
     appendValue(tableBytes, stageMask);                    // destinationStageMask

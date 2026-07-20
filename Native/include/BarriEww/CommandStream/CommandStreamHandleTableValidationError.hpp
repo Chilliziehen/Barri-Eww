@@ -39,6 +39,16 @@ enum class CommandStreamHandleTableValidationError : std::uint32_t {
     InvalidShaderBlobMagic = 13,
     /** A shader blob size is below the SPIR-V minimum or not a multiple of 4. */
     InvalidShaderBlobByteSize = 14,
+    /** An image entry's kind value is not assigned in this schema version. */
+    UnknownImageKind = 15,
+    /** An image entry's format value is not assigned in this schema version. */
+    UnknownImageFormat = 16,
+    /** An image entry's sample count is not 1, 2, 4 or 8. */
+    UnknownSampleCount = 17,
+    /** An image entry has a zero dimension/count, or a 3D image with layers != 1. */
+    InvalidImageDimensions = 18,
+    /** A created image entry (importIdentifier 0) has an empty usage mask. */
+    InvalidCreatedImageDescription = 19,
 };
 
 } // namespace barrieww

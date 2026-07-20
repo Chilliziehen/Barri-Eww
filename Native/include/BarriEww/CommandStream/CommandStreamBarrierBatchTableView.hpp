@@ -8,6 +8,7 @@
 #include "BarriEww/CommandStream/CommandStreamBarrierBatchRecord.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
 #include "BarriEww/CommandStream/CommandStreamGlobalBarrierRecord.hpp"
+#include "BarriEww/CommandStream/CommandStreamImageBarrierRecord.hpp"
 
 namespace barrieww {
 
@@ -67,6 +68,23 @@ public:
                               * sizeof(CommandStreamGlobalBarrierRecord)
                         + static_cast<std::size_t>(barrierIndex)
                               * sizeof(CommandStreamBufferBarrierRecord),
+                    sizeof barrierRecord);
+        return barrierRecord;
+    }
+
+    /** One image barrier of a batch; precondition barrierIndex < imageBarrierCount. */
+    [[nodiscard]] CommandStreamImageBarrierRecord
+    imageBarrier(std::uint32_t batchSlot, std::uint32_t barrierIndex) const noexcept {
+        const CommandStreamBarrierBatchRecord batchRecord = batch(batchSlot);
+        CommandStreamImageBarrierRecord barrierRecord{};
+        std::memcpy(&barrierRecord,
+                    m_tableBytes.data() + batchRecord.barriersByteOffset
+                        + batchRecord.globalBarrierCount
+                              * sizeof(CommandStreamGlobalBarrierRecord)
+                        + batchRecord.bufferBarrierCount
+                              * sizeof(CommandStreamBufferBarrierRecord)
+                        + static_cast<std::size_t>(barrierIndex)
+                              * sizeof(CommandStreamImageBarrierRecord),
                     sizeof barrierRecord);
         return barrierRecord;
     }

@@ -25,6 +25,12 @@ enum class CommandStreamBarrierBatchTableValidationError : std::uint32_t {
     BarrierRegionOutOfBounds = 6,
     /** A barrier record has an empty source or destination stage mask. */
     ZeroStageMask = 7,
+    /** An image barrier record carries an unassigned old or new layout value. */
+    UnknownImageLayout = 8,
+    /** An image barrier record's aspect mask is empty or has unassigned bits. */
+    UnusableImageAspectMask = 9,
+    /** An image barrier record has a zero mip level or array layer count. */
+    EmptyImageSubresourceRange = 10,
 };
 
 } // namespace barrieww
