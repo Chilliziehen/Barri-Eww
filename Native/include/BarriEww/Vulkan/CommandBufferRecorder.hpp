@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "BarriEww/CommandStream/CommandStreamBarrierBatchTableView.hpp"
 #include "BarriEww/CommandStream/CommandStreamView.hpp"
 #include "BarriEww/Vulkan/CommandBufferRecordingFailure.hpp"
 #include "BarriEww/Vulkan/VulkanBufferTable.hpp"
@@ -20,8 +21,12 @@ namespace barrieww {
  *        artifact is loaded, producing prerecorded, reusable command buffers whose
  *        per-frame cost is submission only). Payload decoding happens here, so this is
  *        also where slot and range validation land (ADR-0002 D5: still load-time).
- *        v0.1 opcode coverage: CopyBuffer. Assigned-but-unimplemented opcodes fail
- *        loudly rather than being skipped.
+ *        v0.1 opcode coverage: CopyBuffer and ExecuteBarrierBatch (global and buffer
+ *        barriers, mapped onto legacy vkCmdPipelineBarrier — sync2 bit values below
+ *        bit 32 equal the sync1 bits by Vulkan's design, so the mapping is a
+ *        truncation plus a per-call OR of the per-barrier stage masks; masks using
+ *        bits above bit 31 are rejected until a sync2 recording path lands).
+ *        Assigned-but-unimplemented opcodes fail loudly rather than being skipped.
  */
 class CommandBufferRecorder {
 public:
@@ -36,16 +41,20 @@ public:
      *        recorded without one-time flags so the result is reusable (ADR-0003 D1).
      * @param streamView The validated lane stream to record.
      * @param bufferTable The materialized buffer table the stream's slots refer to.
+     * @param barrierBatchTableView The validated barrier batch table for
+     *        ExecuteBarrierBatch commands, or nullptr for streams without barriers
+     *        (executing a batch then fails with MissingBarrierBatchTable).
      * @return std::expected<void, CommandBufferRecordingFailure> Nothing on success;
      *         the first failure (category, command index, VkResult) otherwise. Errors
      *         are values so the FFM boundary needs no unwinding (§6.4).
-     * @warning MemoryOwnership: All three inputs are BORROWED; the recorder owns
-     *          nothing. commandBuffer's pool, the stream's backing bytes and the buffer
-     *          table must all outlive the recorded command buffer's use.
+     * @warning MemoryOwnership: All inputs are BORROWED; the recorder owns nothing.
+     *          commandBuffer's pool, the stream's backing bytes and both tables must
+     *          outlive the recorded command buffer's use.
      */
     [[nodiscard]] static std::expected<void, CommandBufferRecordingFailure>
     record(VkCommandBuffer commandBuffer, const CommandStreamView& streamView,
-           const VulkanBufferTable& bufferTable);
+           const VulkanBufferTable& bufferTable,
+           const CommandStreamBarrierBatchTableView* barrierBatchTableView = nullptr);
 };
 
 } // namespace barrieww

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <vector>
 
+#include "BarriEww/CommandStream/CommandStreamBarrierBatchTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
@@ -17,6 +19,8 @@
 
 using barrieww::CommandBufferRecorder;
 using barrieww::CommandBufferRecordingError;
+using barrieww::CommandStreamBarrierBatchTableValidator;
+using barrieww::CommandStreamBufferBarrierRecord;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamOpcode;
 using barrieww::CommandStreamValidator;
@@ -89,6 +93,37 @@ std::vector<std::byte> makeSingleCopyStream(std::uint32_t laneIndex,
     return streamBuilder.build();
 }
 
+/** The pinned 8-byte ExecuteBarrierBatch payload (slot + zero padding). */
+std::vector<std::byte> makeExecuteBarrierBatchPayload(std::uint32_t barrierBatchSlot) {
+    std::vector<std::byte> payloadBytes;
+    appendValue(payloadBytes, barrierBatchSlot);
+    appendValue(payloadBytes, std::uint32_t{0});
+    return payloadBytes;
+}
+
+/**
+ * A one-batch table with a single whole-size buffer barrier on bufferSlot, using the
+ * given sync2 masks (transfer write -> transfer read by default).
+ */
+std::vector<std::byte> makeSingleBufferBarrierTable(std::uint32_t bufferSlot,
+                                                    std::uint64_t stageMask = 0x1000u) {
+    std::vector<std::byte> tableBytes;
+    appendValue(tableBytes, std::uint32_t{1});
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint32_t{0}); // 0 global barriers
+    appendValue(tableBytes, std::uint32_t{1}); // 1 buffer barrier
+    appendValue(tableBytes, std::uint64_t{24}); // records right after the directory
+    appendValue(tableBytes, stageMask);                    // sourceStageMask
+    appendValue(tableBytes, std::uint64_t{0x1000u});       // TRANSFER_WRITE
+    appendValue(tableBytes, stageMask);                    // destinationStageMask
+    appendValue(tableBytes, std::uint64_t{0x800u});        // TRANSFER_READ
+    appendValue(tableBytes, bufferSlot);
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint64_t{0});
+    appendValue(tableBytes, CommandStreamBufferBarrierRecord::s_wholeByteCount);
+    return tableBytes;
+}
+
 } // namespace
 
 // First real GPU execution of the toolchain: BufferHandleTable -> VulkanBufferTable
@@ -143,6 +178,129 @@ TEST_CASE("Recorded CopyBuffer chain executes on the GPU and round-trips bytes",
     for (std::uint32_t byteIndex = 0; byteIndex < 64u; ++byteIndex) {
         REQUIRE(bufferTable.slot(2u).mappedPointer[byteIndex]
                 == static_cast<std::byte>(0x5A ^ byteIndex));
+    }
+}
+
+// Single-lane, single-submit variant of the transfer chain: the hazard between the two
+// copies is ordered by an ExecuteBarrierBatch (transfer write -> transfer read buffer
+// barrier from the BarrierBatchTable) instead of a submission boundary — the compile-
+// time barrier pass's output executing inside one prerecorded command buffer.
+TEST_CASE("Recorded copy-barrier-copy chain executes in one submission",
+          "[commandBufferRecorder][gpu]") {
+    const auto harness = TestVulkanDeviceHarness::create();
+    if (harness == nullptr) {
+        SKIP("no usable Vulkan driver on this machine");
+    }
+    const VulkanContext vulkanContext{harness->makeContextCreateInfo()};
+
+    const std::vector<std::byte> tableBytes = makeTransferChainTableBytes();
+    const auto tableValidationResult =
+        CommandStreamBufferHandleTableValidator::validate(tableBytes);
+    REQUIRE(tableValidationResult.has_value());
+    auto bufferTableResult =
+        VulkanBufferTable::createFromTable(vulkanContext, *tableValidationResult);
+    REQUIRE(bufferTableResult.has_value());
+    const VulkanBufferTable& bufferTable = *bufferTableResult;
+
+    const std::vector<std::byte> barrierTableBytes = makeSingleBufferBarrierTable(1u);
+    const auto barrierTableView =
+        CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
+    REQUIRE(barrierTableView.has_value());
+
+    for (std::uint32_t byteIndex = 0; byteIndex < 64u; ++byteIndex) {
+        bufferTable.slot(0u).mappedPointer[byteIndex] =
+            static_cast<std::byte>(0xC3 ^ byteIndex);
+    }
+
+    TestCommandStreamBuilder streamBuilder{0u};
+    streamBuilder.appendCommand(static_cast<std::uint16_t>(CommandStreamOpcode::CopyBuffer),
+                                makeCopyBufferPayload(0u, 1u, 0u, 0u, 64u));
+    streamBuilder.appendCommand(
+        static_cast<std::uint16_t>(CommandStreamOpcode::ExecuteBarrierBatch),
+        makeExecuteBarrierBatchPayload(0u));
+    streamBuilder.appendCommand(static_cast<std::uint16_t>(CommandStreamOpcode::CopyBuffer),
+                                makeCopyBufferPayload(1u, 2u, 0u, 0u, 64u));
+    const std::vector<std::byte> streamBytes = streamBuilder.build();
+    const auto streamView = CommandStreamValidator::validate(streamBytes);
+    REQUIRE(streamView.has_value());
+
+    const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView, bufferTable,
+                                          &barrierTableView.value())
+                .has_value());
+    REQUIRE(harness->submitAndWait(commandBuffer));
+
+    for (std::uint32_t byteIndex = 0; byteIndex < 64u; ++byteIndex) {
+        REQUIRE(bufferTable.slot(2u).mappedPointer[byteIndex]
+                == static_cast<std::byte>(0xC3 ^ byteIndex));
+    }
+}
+
+TEST_CASE("Recorder rejects invalid barrier batches with the precise failure",
+          "[commandBufferRecorder][gpu]") {
+    const auto harness = TestVulkanDeviceHarness::create();
+    if (harness == nullptr) {
+        SKIP("no usable Vulkan driver on this machine");
+    }
+    const VulkanContext vulkanContext{harness->makeContextCreateInfo()};
+    const std::vector<std::byte> tableBytes = makeTransferChainTableBytes();
+    const auto tableValidationResult =
+        CommandStreamBufferHandleTableValidator::validate(tableBytes);
+    REQUIRE(tableValidationResult.has_value());
+    auto bufferTableResult =
+        VulkanBufferTable::createFromTable(vulkanContext, *tableValidationResult);
+    REQUIRE(bufferTableResult.has_value());
+
+    TestCommandStreamBuilder streamBuilder{0u};
+    streamBuilder.appendCommand(
+        static_cast<std::uint16_t>(CommandStreamOpcode::ExecuteBarrierBatch),
+        makeExecuteBarrierBatchPayload(0u));
+    const std::vector<std::byte> streamBytes = streamBuilder.build();
+    const auto streamView = CommandStreamValidator::validate(streamBytes);
+    REQUIRE(streamView.has_value());
+
+    SECTION("stream with barriers but no barrier table provided") {
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView, *bufferTableResult, nullptr);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::MissingBarrierBatchTable);
+    }
+
+    SECTION("barrier batch slot outside the table") {
+        const std::vector<std::byte> barrierTableBytes = makeSingleBufferBarrierTable(1u);
+        const auto barrierTableView =
+            CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
+        REQUIRE(barrierTableView.has_value());
+        TestCommandStreamBuilder outOfRangeStreamBuilder{0u};
+        outOfRangeStreamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::ExecuteBarrierBatch),
+            makeExecuteBarrierBatchPayload(5u));
+        const std::vector<std::byte> outOfRangeStreamBytes = outOfRangeStreamBuilder.build();
+        const auto outOfRangeStreamView =
+            CommandStreamValidator::validate(outOfRangeStreamBytes);
+        REQUIRE(outOfRangeStreamView.has_value());
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *outOfRangeStreamView, *bufferTableResult,
+            &barrierTableView.value());
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::BarrierBatchSlotOutOfRange);
+    }
+
+    SECTION("sync2-only stage bits are rejected by the legacy-mapping recorder") {
+        // VK_PIPELINE_STAGE_2_COPY_BIT (0x100000000) has no sync1 equivalent.
+        const std::vector<std::byte> barrierTableBytes =
+            makeSingleBufferBarrierTable(1u, 0x100000000ull);
+        const auto barrierTableView =
+            CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
+        REQUIRE(barrierTableView.has_value());
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView, *bufferTableResult,
+            &barrierTableView.value());
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnmappableSynchronizationScope);
     }
 }
 

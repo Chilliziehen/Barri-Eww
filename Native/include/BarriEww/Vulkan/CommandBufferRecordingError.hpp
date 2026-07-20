@@ -24,6 +24,15 @@ enum class CommandBufferRecordingError : std::uint32_t {
     UnboundImportedBuffer = 5,
     /** A copy's offset + byteCount leaves the referenced buffer. */
     CopyRangeOutOfBounds = 6,
+    /** The stream executes a barrier batch but no barrier batch table was provided. */
+    MissingBarrierBatchTable = 7,
+    /** A command references a barrier batch slot outside the table. */
+    BarrierBatchSlotOutOfRange = 8,
+    /** A synchronization2 mask uses bits above bit 31; the v0.1 legacy-mapping
+     *  recorder cannot express them via vkCmdPipelineBarrier (sync2 path pending). */
+    UnmappableSynchronizationScope = 9,
+    /** A buffer barrier's byte range leaves the referenced buffer. */
+    BarrierRangeOutOfBounds = 10,
 };
 
 } // namespace barrieww
