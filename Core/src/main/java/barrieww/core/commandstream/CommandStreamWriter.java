@@ -94,6 +94,36 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a CopyBuffer command (opcode 0x0040). Pinned payload layout (mirrored by
+     * the native CommandBufferRecorder): +0 sourceBufferSlot u32,
+     * +4 destinationBufferSlot u32, +8 sourceByteOffset u64,
+     * +16 destinationByteOffset u64, +24 copyByteCount u64; command byteSize 40.
+     *
+     * @param int sourceBufferSlot Buffer table slot to copy from
+     * @param int destinationBufferSlot Buffer table slot to copy into
+     * @param long sourceByteOffset Byte offset within the source buffer
+     * @param long destinationByteOffset Byte offset within the destination buffer
+     * @param long copyByteCount Number of bytes to copy
+     */
+    public void appendCopyBuffer(int sourceBufferSlot, int destinationBufferSlot,
+                                 long sourceByteOffset, long destinationByteOffset,
+                                 long copyByteCount) {
+        writeCommandHeader(CommandStreamOpcode.COPY_BUFFER, 40);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                sourceBufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12,
+                destinationBufferSlot);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 16,
+                sourceByteOffset);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 24,
+                destinationByteOffset);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 32,
+                copyByteCount);
+        m_currentByteOffset += 40;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Writes the 32-byte stream header (magic, version, laneIndex, commandCount,
      * totalByteSize, graphHash) and seals the writer.
      *

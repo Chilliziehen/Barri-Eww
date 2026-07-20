@@ -16,7 +16,9 @@ set(BARRIEWW_TEST_SOURCES
     CommandStreamDisassemblerTests.cpp
     CommandStreamBufferHandleTableValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
-    list(APPEND BARRIEWW_TEST_SOURCES VulkanContextTests.cpp)
+    list(APPEND BARRIEWW_TEST_SOURCES
+        VulkanContextTests.cpp
+        CommandBufferRecorderTests.cpp)
 endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})

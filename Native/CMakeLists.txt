@@ -77,7 +77,11 @@ endforeach()
 # from the Java/FFM layer (ADR-0001), so no windowing/surface libraries are pulled in.
 if(BARRIEWW_BACKEND_VULKAN)
     find_package(Vulkan REQUIRED)
-    target_sources(BarriEwwNative PRIVATE src/Vulkan/VulkanContext.cpp)
+    target_sources(BarriEwwNative
+        PRIVATE
+            src/Vulkan/VulkanContext.cpp
+            src/Vulkan/VulkanBufferTable.cpp
+            src/Vulkan/CommandBufferRecorder.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
 
