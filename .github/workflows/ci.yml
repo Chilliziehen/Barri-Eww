@@ -54,12 +54,22 @@ jobs:
         with:
           cmake-version: "4.4"
 
-      - name: Install Vulkan loader and software rasterizer (lavapipe, Linux)
+      - name: Install and verify Vulkan software implementation (lavapipe, Linux)
         if: steps.detect.outputs.ready == 'true' && runner.os == 'Linux'
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools
-          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          lavapipeManifest="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
+          if [ -z "$lavapipeManifest" ]; then
+            echo "No lavapipe ICD manifest found under /usr/share/vulkan/icd.d" >&2
+            ls -la /usr/share/vulkan/icd.d >&2
+            exit 1
+          fi
+          echo "VK_DRIVER_FILES=$lavapipeManifest" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$lavapipeManifest" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$lavapipeManifest" VK_ICD_FILENAMES="$lavapipeManifest" \
+            vulkaninfo --summary
 
       # Windows runners have no Vulkan SDK, so the Vulkan backend builds on Linux only
       # (lavapipe executes the GPU tests there); Windows still covers the backend-neutral
