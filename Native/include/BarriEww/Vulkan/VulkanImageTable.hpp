@@ -87,6 +87,9 @@ public:
         return m_imageSlots[slotIndex];
     }
 
+    /** The borrowed device that owns every slot handle (see class ownership notes). */
+    [[nodiscard]] VkDevice logicalDevice() const noexcept { return m_logicalDevice; }
+
 private:
     VulkanImageTable(VkDevice logicalDevice, std::vector<ImageSlot> imageSlots) noexcept
         : m_logicalDevice(logicalDevice), m_imageSlots(std::move(imageSlots)) {}
