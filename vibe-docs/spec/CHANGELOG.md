@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-07-21
+
+- [新增] §9 [CommandStreamFormat.md](CommandStreamFormat.md) —— 将 BECS typed handle-table ABI
+  提升为规范性格式文档；定义 `ImageViewHandleTable` v0.1 的 8-byte header、32-byte entry、
+  typed slot indirection、load-time materialization/lifetime 与 v0.1 exclusions（所有者裁决 P14）。
+- [修改] §4.2 [Testing.md](Testing.md) —— 在 Java IR/ASM/classload/Panama load path 尚未落地
+  前，为仅扩展既有 BECS resource table 的 feature 增加 shared Java/C++ golden + native
+  Vulkan materialization 的 staged integration gate；FFM load path 落地后必须替换为完整
+  end-to-end integration（所有者裁决 P14）。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P14 已裁决并迁入 §9 / §4.2.1。
+
+---
+
 ## 2026-07-19
 
 初始规约建立，及首轮所有者裁决落地。
