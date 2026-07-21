@@ -27,6 +27,8 @@ public final class CommandStreamWriter {
             ValueLayout.JAVA_INT.withOrder(ByteOrder.LITTLE_ENDIAN);
     private static final ValueLayout.OfLong s_littleEndianLongLayout =
             ValueLayout.JAVA_LONG.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfFloat s_littleEndianFloatLayout =
+            ValueLayout.JAVA_FLOAT.withOrder(ByteOrder.LITTLE_ENDIAN);
 
     private final MemorySegment m_targetSegment;
     private final int m_laneIndex;
@@ -192,6 +194,99 @@ public final class CommandStreamWriter {
                 barrierBatchSlot);
         m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
         m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a ClearColorImage command (opcode 0x0043). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 imageSlot u32,
+     * +4 imageLayoutValue u32, +8..+20 RGBA clear color f32, +24 aspectMaskValue u32,
+     * +28 baseMipLevel u32, +32 mipLevelCount u32, +36 baseArrayLayer u32,
+     * +40 arrayLayerCount u32, +44 reserved zero; command byteSize 56.
+     *
+     * @param int imageSlot Image table slot to clear
+     * @param CommandStreamImageLayout imageLayout The layout the image is in when the
+     *        clear executes (General or TransferDestination)
+     * @param float clearRed Red clear component
+     * @param float clearGreen Green clear component
+     * @param float clearBlue Blue clear component
+     * @param float clearAlpha Alpha clear component
+     * @param int aspectMaskValue OR-mask of CommandStreamImageAspect bits
+     * @param int baseMipLevel First mip level of the cleared range
+     * @param int mipLevelCount Mip level count (CommandStreamBarrierBatchTableWriter
+     *        .s_remainingCount for all remaining)
+     * @param int baseArrayLayer First array layer of the cleared range
+     * @param int arrayLayerCount Array layer count (s_remainingCount for all remaining)
+     */
+    public void appendClearColorImage(int imageSlot, CommandStreamImageLayout imageLayout,
+                                      float clearRed, float clearGreen, float clearBlue,
+                                      float clearAlpha, int aspectMaskValue,
+                                      int baseMipLevel, int mipLevelCount,
+                                      int baseArrayLayer, int arrayLayerCount) {
+        writeCommandHeader(CommandStreamOpcode.CLEAR_COLOR_IMAGE, 56);
+        long payloadOffset = m_currentByteOffset + 8;
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset, imageSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 4,
+                imageLayout.rawImageLayoutValue());
+        m_targetSegment.set(s_littleEndianFloatLayout, payloadOffset + 8, clearRed);
+        m_targetSegment.set(s_littleEndianFloatLayout, payloadOffset + 12, clearGreen);
+        m_targetSegment.set(s_littleEndianFloatLayout, payloadOffset + 16, clearBlue);
+        m_targetSegment.set(s_littleEndianFloatLayout, payloadOffset + 20, clearAlpha);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 24, aspectMaskValue);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 28, baseMipLevel);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 32, mipLevelCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 36, baseArrayLayer);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 40, arrayLayerCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 44, 0);
+        m_currentByteOffset += 56;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a CopyImageToBuffer command (opcode 0x0047, tightly packed region at
+     * image origin). Pinned payload layout (mirrored by the native
+     * CommandBufferRecorder): +0 imageSlot u32, +4 bufferSlot u32,
+     * +8 imageLayoutValue u32, +12 aspectMaskValue u32, +16 mipLevel u32,
+     * +20 baseArrayLayer u32, +24 arrayLayerCount u32, +28 reserved,
+     * +32 bufferByteOffset u64, +40 copyWidth u32, +44 copyHeight u32,
+     * +48 copyDepth u32, +52 reserved zero; command byteSize 64.
+     *
+     * @param int imageSlot Image table slot to copy from
+     * @param int bufferSlot Buffer table slot to copy into
+     * @param CommandStreamImageLayout imageLayout The layout the image is in when the
+     *        copy executes (General or TransferSource)
+     * @param int aspectMaskValue OR-mask of CommandStreamImageAspect bits
+     * @param int mipLevel The mip level to copy
+     * @param int baseArrayLayer First array layer to copy
+     * @param int arrayLayerCount Array layer count; must be concrete (no sentinel)
+     * @param long bufferByteOffset Byte offset within the destination buffer
+     * @param int copyWidth Copied extent width in texels
+     * @param int copyHeight Copied extent height in texels
+     * @param int copyDepth Copied extent depth in texels
+     */
+    public void appendCopyImageToBuffer(int imageSlot, int bufferSlot,
+                                        CommandStreamImageLayout imageLayout,
+                                        int aspectMaskValue, int mipLevel,
+                                        int baseArrayLayer, int arrayLayerCount,
+                                        long bufferByteOffset, int copyWidth,
+                                        int copyHeight, int copyDepth) {
+        writeCommandHeader(CommandStreamOpcode.COPY_IMAGE_TO_BUFFER, 64);
+        long payloadOffset = m_currentByteOffset + 8;
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset, imageSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 4, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 8,
+                imageLayout.rawImageLayoutValue());
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 12, aspectMaskValue);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 16, mipLevel);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 20, baseArrayLayer);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 24, arrayLayerCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 28, 0);
+        m_targetSegment.set(s_littleEndianLongLayout, payloadOffset + 32, bufferByteOffset);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 40, copyWidth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 44, copyHeight);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 48, copyDepth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 52, 0);
+        m_currentByteOffset += 64;
     }
 
     /**

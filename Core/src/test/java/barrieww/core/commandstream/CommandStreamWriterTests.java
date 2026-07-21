@@ -143,6 +143,48 @@ class CommandStreamWriterTests {
     }
 
     @Test
+    void imageCommandsUseThePinnedPayloadLayouts() {
+        // ClearColorImage (56B) followed by CopyImageToBuffer (64B): 32 + 120 = 152.
+        ByteBuffer expectedBytes = ByteBuffer.allocate(152).order(ByteOrder.LITTLE_ENDIAN);
+        expectedBytes.put(new byte[] {0x42, 0x45, 0x43, 0x53});
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMajor);
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMinor);
+        expectedBytes.putInt(0);
+        expectedBytes.putInt(2);
+        expectedBytes.putLong(152);
+        expectedBytes.putLong(s_goldenGraphHash);
+        expectedBytes.putShort((short) 0x0043).putShort((short) 0).putInt(56);
+        expectedBytes.putInt(0).putInt(6);
+        expectedBytes.putFloat(1.0f).putFloat(0.0f).putFloat(1.0f).putFloat(1.0f);
+        expectedBytes.putInt(CommandStreamImageAspect.s_color).putInt(0)
+                .putInt(CommandStreamBarrierBatchTableWriter.s_remainingCount).putInt(0)
+                .putInt(CommandStreamBarrierBatchTableWriter.s_remainingCount).putInt(0);
+        expectedBytes.putShort((short) 0x0047).putShort((short) 0).putInt(64);
+        expectedBytes.putInt(0).putInt(1).putInt(5)
+                .putInt(CommandStreamImageAspect.s_color).putInt(0).putInt(0).putInt(1)
+                .putInt(0);
+        expectedBytes.putLong(0);
+        expectedBytes.putInt(8).putInt(8).putInt(1).putInt(0);
+
+        try (Arena testArena = Arena.ofConfined()) {
+            MemorySegment streamSegment = testArena.allocate(152, 8);
+            CommandStreamWriter streamWriter =
+                    new CommandStreamWriter(streamSegment, 0, s_goldenGraphHash);
+            streamWriter.appendClearColorImage(0,
+                    CommandStreamImageLayout.TRANSFER_DESTINATION, 1.0f, 0.0f, 1.0f, 1.0f,
+                    CommandStreamImageAspect.s_color, 0,
+                    CommandStreamBarrierBatchTableWriter.s_remainingCount, 0,
+                    CommandStreamBarrierBatchTableWriter.s_remainingCount);
+            streamWriter.appendCopyImageToBuffer(0, 1,
+                    CommandStreamImageLayout.TRANSFER_SOURCE,
+                    CommandStreamImageAspect.s_color, 0, 0, 1, 0, 8, 8, 1);
+            assertEquals(152, streamWriter.finish());
+            assertArrayEquals(expectedBytes.array(),
+                    streamSegment.toArray(ValueLayout.JAVA_BYTE));
+        }
+    }
+
+    @Test
     void writerRejectsUseAfterFinish() {
         try (Arena testArena = Arena.ofConfined()) {
             MemorySegment streamSegment = testArena.allocate(80, 8);
