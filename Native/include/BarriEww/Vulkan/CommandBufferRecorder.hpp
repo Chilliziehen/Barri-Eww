@@ -4,12 +4,9 @@
 
 #include <vulkan/vulkan.h>
 
-#include "BarriEww/CommandStream/CommandStreamBarrierBatchTableView.hpp"
 #include "BarriEww/CommandStream/CommandStreamView.hpp"
 #include "BarriEww/Vulkan/CommandBufferRecordingFailure.hpp"
-#include "BarriEww/Vulkan/VulkanBufferTable.hpp"
-#include "BarriEww/Vulkan/VulkanImageTable.hpp"
-#include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
+#include "BarriEww/Vulkan/CommandBufferRecordingInputs.hpp"
 
 namespace barrieww {
 
@@ -42,29 +39,20 @@ public:
      * @param commandBuffer The target command buffer, freshly allocated or reset;
      *        recorded without one-time flags so the result is reusable (ADR-0003 D1).
      * @param streamView The validated lane stream to record.
-     * @param bufferTable The materialized buffer table the stream's slots refer to.
-     * @param barrierBatchTableView The validated barrier batch table for
-     *        ExecuteBarrierBatch commands, or nullptr for streams without barriers
-     *        (executing a batch then fails with MissingBarrierBatchTable).
-     * @param pipelineTable The materialized pipeline table for BindComputePipeline /
-     *        Dispatch / PushBufferDeviceAddress commands, or nullptr for streams
-     *        without pipelines (those commands then fail with MissingPipelineTable).
-     * @param imageTable The materialized image table for image barriers and image
-     *        commands (ClearColorImage / CopyImageToBuffer), or nullptr for streams
-     *        without images (those commands then fail with MissingImageTable).
+     * @param recordingInputs The materialized tables and views the stream's slots refer
+     *        to (see CommandBufferRecordingInputs). bufferTable is required; a command
+     *        referencing an optional table not supplied fails with the matching
+     *        Missing...Table error.
      * @return std::expected<void, CommandBufferRecordingFailure> Nothing on success;
      *         the first failure (category, command index, VkResult) otherwise. Errors
      *         are values so the FFM boundary needs no unwinding (§6.4).
      * @warning MemoryOwnership: All inputs are BORROWED; the recorder owns nothing.
-     *          commandBuffer's pool, the stream's backing bytes and both tables must
-     *          outlive the recorded command buffer's use.
+     *          commandBuffer's pool, the stream's backing bytes and every table in
+     *          recordingInputs must outlive the recorded command buffer's use.
      */
     [[nodiscard]] static std::expected<void, CommandBufferRecordingFailure>
     record(VkCommandBuffer commandBuffer, const CommandStreamView& streamView,
-           const VulkanBufferTable& bufferTable,
-           const CommandStreamBarrierBatchTableView* barrierBatchTableView = nullptr,
-           const VulkanPipelineTable* pipelineTable = nullptr,
-           const VulkanImageTable* imageTable = nullptr);
+           const CommandBufferRecordingInputs& recordingInputs);
 };
 
 } // namespace barrieww

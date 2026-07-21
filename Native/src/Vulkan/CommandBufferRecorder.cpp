@@ -11,8 +11,12 @@
 #include "BarriEww/CommandStream/CommandStreamImageBarrierRecord.hpp"
 #include "BarriEww/CommandStream/CommandStreamImageFormat.hpp"
 #include "BarriEww/CommandStream/CommandStreamImageLayout.hpp"
+#include "BarriEww/CommandStream/CommandStreamBarrierBatchTableView.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
+#include "BarriEww/Vulkan/VulkanBufferTable.hpp"
 #include "BarriEww/Vulkan/VulkanFormatMapping.hpp"
+#include "BarriEww/Vulkan/VulkanImageTable.hpp"
+#include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
 
 namespace barrieww {
 
@@ -43,7 +47,7 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  * buffer is then trusted every frame).
  *
  * Pseudocode (complete semantics):
- *   record(commandBuffer, streamView, bufferTable, barrierBatchTableView):
+ *   record(commandBuffer, streamView, recordingInputs {bufferTable, ...}):
  *     vkBeginCommandBuffer(commandBuffer, no one-time flags)   // reusable (ADR-0003 D1)
  *     for commandIndex, command in enumerate(streamView):
  *       switch command.opcode:
@@ -107,10 +111,7 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
 std::expected<void, CommandBufferRecordingFailure>
 CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                               const CommandStreamView& streamView,
-                              const VulkanBufferTable& bufferTable,
-                              const CommandStreamBarrierBatchTableView* barrierBatchTableView,
-                              const VulkanPipelineTable* pipelineTable,
-                              const VulkanImageTable* imageTable) {
+                              const CommandBufferRecordingInputs& recordingInputs) {
     using enum CommandBufferRecordingError;
 
     constexpr std::uint32_t noCommandIndex = UINT32_MAX;
@@ -119,6 +120,18 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
         return std::unexpected(CommandBufferRecordingFailure{
             error, commandIndex, static_cast<std::int32_t>(vulkanResult)});
     };
+
+    // Unpack the bundled inputs into the names the walk below uses. bufferTable is
+    // required (almost every command may reference a buffer); the rest stay optional
+    // pointers checked at their use sites (the matching Missing...Table errors).
+    if (recordingInputs.bufferTable == nullptr) {
+        return fail(MissingBufferTable, noCommandIndex, VK_SUCCESS);
+    }
+    const VulkanBufferTable& bufferTable = *recordingInputs.bufferTable;
+    const CommandStreamBarrierBatchTableView* barrierBatchTableView =
+        recordingInputs.barrierBatchTableView;
+    const VulkanPipelineTable* pipelineTable = recordingInputs.pipelineTable;
+    const VulkanImageTable* imageTable = recordingInputs.imageTable;
 
     VkCommandBufferBeginInfo commandBufferBeginInfo{};
     commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;

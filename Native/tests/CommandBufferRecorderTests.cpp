@@ -168,9 +168,11 @@ TEST_CASE("Recorded CopyBuffer chain executes on the GPU and round-trips bytes",
 
     const VkCommandBuffer firstCommandBuffer = harness->allocateCommandBuffer();
     const VkCommandBuffer secondCommandBuffer = harness->allocateCommandBuffer();
-    REQUIRE(CommandBufferRecorder::record(firstCommandBuffer, *firstStreamView, bufferTable)
+    REQUIRE(CommandBufferRecorder::record(firstCommandBuffer, *firstStreamView,
+            {.bufferTable = &bufferTable})
                 .has_value());
-    REQUIRE(CommandBufferRecorder::record(secondCommandBuffer, *secondStreamView, bufferTable)
+    REQUIRE(CommandBufferRecorder::record(secondCommandBuffer, *secondStreamView,
+            {.bufferTable = &bufferTable})
                 .has_value());
 
     REQUIRE(harness->submitAndWait(firstCommandBuffer));
@@ -227,8 +229,8 @@ TEST_CASE("Recorded copy-barrier-copy chain executes in one submission",
     REQUIRE(streamView.has_value());
 
     const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
-    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView, bufferTable,
-                                          &barrierTableView.value())
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView,
+            {.bufferTable = &bufferTable, .barrierBatchTableView = &barrierTableView.value()})
                 .has_value());
     REQUIRE(harness->submitAndWait(commandBuffer));
 
@@ -262,8 +264,8 @@ TEST_CASE("Recorder rejects invalid barrier batches with the precise failure",
     REQUIRE(streamView.has_value());
 
     SECTION("stream with barriers but no barrier table provided") {
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTableResult, nullptr);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::MissingBarrierBatchTable);
@@ -282,9 +284,8 @@ TEST_CASE("Recorder rejects invalid barrier batches with the precise failure",
         const auto outOfRangeStreamView =
             CommandStreamValidator::validate(outOfRangeStreamBytes);
         REQUIRE(outOfRangeStreamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *outOfRangeStreamView, *bufferTableResult,
-            &barrierTableView.value());
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *outOfRangeStreamView,
+            {.bufferTable = &*bufferTableResult, .barrierBatchTableView = &barrierTableView.value()});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::BarrierBatchSlotOutOfRange);
@@ -297,9 +298,8 @@ TEST_CASE("Recorder rejects invalid barrier batches with the precise failure",
         const auto barrierTableView =
             CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
         REQUIRE(barrierTableView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTableResult,
-            &barrierTableView.value());
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult, .barrierBatchTableView = &barrierTableView.value()});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::UnmappableSynchronizationScope);
@@ -326,8 +326,8 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = makeSingleCopyStream(0u, 0u, 9u, 64u);
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTableResult);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::BufferSlotOutOfRange);
@@ -338,8 +338,8 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = makeSingleCopyStream(0u, 0u, 1u, 128u);
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTableResult);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::CopyRangeOutOfBounds);
@@ -352,8 +352,8 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = streamBuilder.build();
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTableResult);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::UnsupportedOpcode);
@@ -384,8 +384,8 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = makeSingleCopyStream(0u, 0u, 1u, 64u);
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *importedBufferTable);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*importedBufferTable});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::UnboundImportedBuffer);

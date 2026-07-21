@@ -169,8 +169,8 @@ TEST_CASE("Recorded compute dispatch writes the arithmetic pattern through a dev
     REQUIRE(streamView.has_value());
 
     const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
-    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView, *bufferTable,
-                                          nullptr, &*pipelineTable)
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView,
+            {.bufferTable = &*bufferTable, .pipelineTable = &*pipelineTable})
                 .has_value());
     REQUIRE(harness->submitAndWait(commandBuffer));
 
@@ -219,8 +219,8 @@ TEST_CASE("Compute recording rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = makeComputeStreamBytes(1u);
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
-            harness->allocateCommandBuffer(), *streamView, *bufferTable);
+        const auto recordingResult = CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTable});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::MissingPipelineTable);
@@ -240,7 +240,7 @@ TEST_CASE("Compute recording rejects invalid streams with the precise failure",
         REQUIRE(streamView.has_value());
         const auto recordingResult =
             CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
-                                          *bufferTable, nullptr, &*pipelineTable);
+            {.bufferTable = &*bufferTable, .pipelineTable = &*pipelineTable});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::NoBoundComputePipeline);
@@ -262,7 +262,7 @@ TEST_CASE("Compute recording rejects invalid streams with the precise failure",
         REQUIRE(streamView.has_value());
         const auto recordingResult =
             CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
-                                          *plainBufferTable, nullptr, &*pipelineTable);
+            {.bufferTable = &*plainBufferTable, .pipelineTable = &*pipelineTable});
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::MissingBufferDeviceAddress);

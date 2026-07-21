@@ -240,8 +240,8 @@ TEST_CASE("GPU-computed indirect arguments drive a prerecorded dispatch",
     REQUIRE(streamView.has_value());
 
     const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
-    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView, *bufferTable,
-                                          &*barrierTableView, &*pipelineTable)
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView,
+            {.bufferTable = &*bufferTable, .barrierBatchTableView = &*barrierTableView, .pipelineTable = &*pipelineTable})
                 .has_value());
     REQUIRE(harness->submitAndWait(commandBuffer));
 
@@ -293,7 +293,7 @@ TEST_CASE("Indirect dispatch recording rejects invalid streams with the precise 
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
         return CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
-                                             bufferTable, nullptr, &*pipelineTable);
+            {.bufferTable = &bufferTable, .pipelineTable = &*pipelineTable});
     };
 
     SECTION("arguments buffer without the Indirect usage bit") {
