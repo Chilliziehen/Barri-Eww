@@ -222,8 +222,8 @@ TEST_CASE("Recorded clear and copy chain round-trips image texels",
     REQUIRE(streamView.has_value());
 
     const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
-    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView, *bufferTable,
-                                          &*barrierTableView, nullptr, &*imageTable)
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView,
+            {.bufferTable = &*bufferTable, .barrierBatchTableView = &*barrierTableView, .imageTable = &*imageTable})
                 .has_value());
     REQUIRE(harness->submitAndWait(commandBuffer));
 
@@ -268,8 +268,7 @@ TEST_CASE("Image command recording rejects invalid streams with the precise fail
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
         return CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
-                                             *bufferTable, nullptr, nullptr,
-                                             imageTablePointer);
+            {.bufferTable = &*bufferTable, .imageTable = imageTablePointer});
     };
 
     SECTION("missing image table") {

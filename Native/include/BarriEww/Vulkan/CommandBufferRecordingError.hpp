@@ -52,6 +52,8 @@ enum class CommandBufferRecordingError : std::uint32_t {
     UnknownImageAspectMask = 23,
     /** A subresource range or copy region leaves the referenced image. */
     ImageSubresourceOutOfRange = 24,
+    /** No buffer table was supplied (bufferTable is required, see recording inputs). */
+    MissingBufferTable = 25,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */

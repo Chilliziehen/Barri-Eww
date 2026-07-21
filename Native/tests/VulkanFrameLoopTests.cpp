@@ -108,7 +108,7 @@ TEST_CASE("Frame loop paces six frames over two slots with prerecorded buffers",
         REQUIRE(streamView.has_value());
         frameCommandBuffers[frameSlot] = harness->allocateCommandBuffer();
         REQUIRE(CommandBufferRecorder::record(frameCommandBuffers[frameSlot], *streamView,
-                                              bufferTable)
+            {.bufferTable = &bufferTable})
                     .has_value());
     }
 
