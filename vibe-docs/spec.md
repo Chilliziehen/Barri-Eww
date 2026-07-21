@@ -85,5 +85,6 @@
 | §6   | Panama/FFM 绑定层 | [`spec/FfmBinding.md`](spec/FfmBinding.md)              |
 | §7   | 错误处理与日志 | [`spec/ErrorHandlingAndLogging.md`](spec/ErrorHandlingAndLogging.md) |
 | §8   | 生成产物与 ClassLoader | [`spec/GeneratedArtifacts.md`](spec/GeneratedArtifacts.md) |
+| §9   | BECS 命令流格式 | [`spec/CommandStreamFormat.md`](spec/CommandStreamFormat.md) |
 | —    | 扩充建议     | [`spec/ProposedExtensions.md`](spec/ProposedExtensions.md)   |
 | —    | 规约变更记录 | [`spec/CHANGELOG.md`](spec/CHANGELOG.md)                     |

@@ -24,6 +24,7 @@
 | P11  | 覆盖率门槛 C++/Java ≥ 90%、TS ≥ 70%               | Testing §4.5                               |
 | P12  | §1.1.2 豁免 Vulkan 惯用语 `Info`/`CreateInfo` (限镜像 API 概念) | CodingConvention §1.1.2       |
 | P13  | 简单访问器精简注释 (类级总括 + 单行说明)          | CommentConvention §2.6                     |
+| P14  | ImageViewHandleTable v0.1 ABI + BECS staged integration gate | CommandStreamFormat §9.2 / Testing §4.2.1 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
 | —    | 新增开关 `BARRIEWW_CRITICAL_HOTPATH_LOG`          | BuildSystem §3.3 / §7.2.1 (所有者补充)      |

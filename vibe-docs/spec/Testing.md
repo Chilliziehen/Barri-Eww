@@ -24,6 +24,22 @@
 - 集成测试须覆盖跨语言链路 (Java IR → ASM 字节码 → classload → Panama downcall →
   Native 执行) 的正确性，而非仅单侧 mock。
 
+### §4.2.1 BECS staged integration gate（FFM load path 落地前）
+
+在 Java IR → ASM → classload → Panama → Native load path 尚未实现并纳入测试的阶段，
+**仅扩展既有 BECS resource table 的 feature** 可以暂以以下 staged integration gate
+满足本节的跨语言验证要求：
+
+1. Core JUnit writer test 必须生成 byte-exact 的 committed shared golden；
+2. Native Catch2 test 必须读取同一 fixture、验证、解码并断言完整 schema fields；
+3. 涉及 native materialization 的 feature 必须有 headless Vulkan integration coverage；
+4. Java 与 Native 完整 unit/regression suite 及 Native `THREADED_RECORDING` on/off
+   构建变体必须通过；
+5. Java/FFM load path 落地的同一 feature 或紧接 follow-up 必须把该 staged gate 替换为
+   完整的 §4.2 end-to-end integration test。
+
+该条只是一项可验证的过渡门禁，不放宽最终的 Java-to-Native end-to-end 要求。
+
 ## §4.3 CI 门禁 (强制于向 main 的 MR)
 
 - **所有向 `main` 的 MR 必须经过 CI，CI 使用 GitHub Actions。**
