@@ -36,3 +36,14 @@
   隔离、受控扩展机制信任边界与 resolve 契约 (裁决 P8)。
 - [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 扩充建议台账 (含已裁决记录)。
 - [新增] [CHANGELOG.md](CHANGELOG.md) —— 本文件 (裁决 P9)。
+- [修改] §3.3 [BuildSystem.md](BuildSystem.md) —— 新增"构建"维度开关
+  `BARRIEWW_BUILD_TESTS` / `BARRIEWW_ENABLE_COVERAGE` 并登记入注册表 (所有者裁决:
+  所有 `BARRIEWW_` 私有开关一律登记)；明确"构建"维度不注入为产品 `#if` 宏。
+- [修改] spec.md 模块拓扑 + §3.1/§3.4 [BuildSystem.md](BuildSystem.md) —— 新增 `Core/`
+  模块 (Java 大脑：RDG 编译器 + BECS 写侧 + FFM)；`Mod/` 重定义为薄二进制加载器，
+  只做游戏侧装载 (所有者裁决 2026-07-19)。
+- [修改] §1.1.2 [CodingConvention.md](CodingConvention.md) —— 豁免清单新增
+  `Info`/`CreateInfo` (仅限镜像 Vulkan `Vk*Info`/`Vk*CreateInfo` 惯用语；裁决 P12)。
+- [新增] §2.6 [CommentConvention.md](CommentConvention.md) —— 简单访问器精简注释：
+  类级总括 + 单行说明，条件三项 (单表达式/不跨 FFM/类级已总括)；跨 FFM 边界函数
+  不受影响 (裁决 P13)。

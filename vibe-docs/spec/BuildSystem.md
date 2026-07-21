@@ -9,7 +9,8 @@
 
 - **C++ (`Native/`) 使用 CMake 构建，版本锁定 CMake 4.4，语言标准锁定 C++23**
   (`set(CMAKE_CXX_STANDARD 23)` + `CMAKE_CXX_STANDARD_REQUIRED ON`)。
-- **Java (`Mod/`) 使用 Gradle 构建。**
+- **Java (`Core/` 与 `Mod/`) 使用 Gradle 构建**，两模块各自持有独立 Gradle 构建
+  (职责边界见 spec.md 模块拓扑；`Mod/` 依赖 `Core/` 的产物)。
 - **Editor (`Editor/`) 使用 npm + Vite + electron-builder 构建** (Node.js/Electron，
   语言 TypeScript，`tsc` 严格类型检查)，其构建脚本与依赖清单 (`package.json`、
   `tsconfig.json` 等) 只存在于 `Editor/` 内。
@@ -58,6 +59,13 @@ endif()
 | `BARRIEWW_BACKEND_METAL`        | 平台 | OFF | 启用 Metal 后端 (非 MVP，占位)             | Native |
 | `BARRIEWW_LOGGING`              | 功能 | ON  | 启用日志系统 (关闭则日志宏编译为 no-op)     | Native |
 | `BARRIEWW_CRITICAL_HOTPATH_LOG` | 功能 | OFF | 允许热路径 (command 录制) 内的日志 I/O      | Native |
+| `BARRIEWW_BUILD_TESTS`          | 构建 | ON  | 是否构建单元测试 (Catch2)                   | Native |
+| `BARRIEWW_ENABLE_COVERAGE`      | 构建 | OFF | 是否为覆盖率插桩 (GCC/Clang)                | Native |
+
+> **维度说明**：`功能`/`平台` 维度的开关会被注入为产品代码宏 (`<SWITCH>=1`) 并由 `#if`
+> 消费；`构建` 维度的开关 (`BARRIEWW_BUILD_TESTS`/`BARRIEWW_ENABLE_COVERAGE`) 仅影响
+> CMake 构建什么，**不注入为产品 `#if` 宏**。两类均须登记于本表 (已确认：所有
+> `BARRIEWW_` 私有开关一律登记，禁止散落式新增)。
 
 > `BARRIEWW_CRITICAL_HOTPATH_LOG` 默认 **OFF**：T0[1] 要求热路径禁止日志 I/O，此开关仅供
 > 排障时临时开启；开启后热路径的日志宏才展开为实际 I/O，否则编译为 no-op。
@@ -71,7 +79,7 @@ endif()
 
 ## §3.4 Java 构建变体 (Gradle)
 
-- Java 侧同样需提供多种构建变体 (平台目标 / 功能开关组合)。
+- Java 侧 (`Core/`、`Mod/`) 同样需提供多种构建变体 (平台目标 / 功能开关组合)。
 - 变体通过 Gradle 的构建参数/product flavor 或等价机制表达；与 C++ 侧开关维度**语义对齐**
   (同名功能在两侧启停一致)，避免 Java 期望某功能而 Native 未编入。
 - 具体 Gradle 变体维度定义见 ProposedExtensions (待确认技术选型后回填)。
