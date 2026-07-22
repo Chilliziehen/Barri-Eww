@@ -77,6 +77,91 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a BeginRendering command (opcode 0x0030, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 renderingTemplateSlot u32,
+     * +4 reserved.
+     *
+     * @param int renderingTemplateSlot The RenderingTemplateTable slot to open
+     */
+    public void appendBeginRendering(int renderingTemplateSlot) {
+        writeCommandHeader(CommandStreamOpcode.BEGIN_RENDERING, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                renderingTemplateSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends an EndRendering command (opcode 0x0031, §9.11; header-only, no payload).
+     */
+    public void appendEndRendering() {
+        writeCommandHeader(CommandStreamOpcode.END_RENDERING, 8);
+        m_currentByteOffset += 8;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a BindGraphicsPipeline command (opcode 0x0001, §9.11). Pinned payload
+     * layout (mirrored by the native CommandBufferRecorder): +0 graphicsPipelineSlot
+     * u32, +4 reserved.
+     *
+     * @param int graphicsPipelineSlot The GraphicsPipelineTable slot to bind
+     */
+    public void appendBindGraphicsPipeline(int graphicsPipelineSlot) {
+        writeCommandHeader(CommandStreamOpcode.BIND_GRAPHICS_PIPELINE, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                graphicsPipelineSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a SetViewport command (opcode 0x0006, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): six f32 values.
+     *
+     * @param float x The viewport x origin
+     * @param float y The viewport y origin
+     * @param float width The viewport width
+     * @param float height The viewport height
+     * @param float minDepth The minimum viewport depth
+     * @param float maxDepth The maximum viewport depth
+     */
+    public void appendSetViewport(float x, float y, float width, float height,
+                                  float minDepth, float maxDepth) {
+        writeCommandHeader(CommandStreamOpcode.SET_VIEWPORT, 32);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 8, x);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 12, y);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 16, width);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 20, height);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 24, minDepth);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 28, maxDepth);
+        m_currentByteOffset += 32;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a SetScissor command (opcode 0x0007, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 offsetX i32, +4 offsetY i32,
+     * +8 width u32, +12 height u32.
+     *
+     * @param int offsetX The scissor x offset
+     * @param int offsetY The scissor y offset
+     * @param int width The scissor width
+     * @param int height The scissor height
+     */
+    public void appendSetScissor(int offsetX, int offsetY, int width, int height) {
+        writeCommandHeader(CommandStreamOpcode.SET_SCISSOR, 24);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, offsetX);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, offsetY);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 16, width);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 20, height);
+        m_currentByteOffset += 24;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Appends a Dispatch command (opcode 0x0020, ADR-0002 appendix A). The trailing
      * 4 padding bytes are written as zero explicitly so the output does not depend on
      * the allocator's zero-initialization.
