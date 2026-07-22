@@ -243,6 +243,10 @@ resources reach the shader through buffer device addresses (see PushBufferDevice
 §9.11) — classic per-pipeline descriptor set layouts are absent. `shaderModuleSlot`
 existence is a cross-table materialization check.
 
+Graphics pipelines do NOT live in this table: their fixed state is wider, and resizing
+this entry would be a breaking change under §9.13. They get their own additive section,
+GraphicsPipelineTable (§9.14).
+
 ---
 
 ## §9.9 BarrierBatchTable v0.1
@@ -359,9 +363,21 @@ CopyImageToBuffer        0x0047  byteSize 64  {imageSlot u32, bufferSlot u32, im
                                                aspectMaskValue u32, mipLevel u32, baseArrayLayer u32,
                                                arrayLayerCount u32, reserved u32, bufferByteOffset u64,
                                                copyWidth u32, copyHeight u32, copyDepth u32, reserved u32}
-BeginRendering           0x0030  byteSize 16  {renderingTemplateSlot u32, reserved u32}   // recording: later increment
-EndRendering             0x0031  byteSize 8   {}                                          // recording: later increment
+BeginRendering           0x0030  byteSize 16  {renderingTemplateSlot u32, reserved u32}
+EndRendering             0x0031  byteSize 8   {}
+BindGraphicsPipeline     0x0001  byteSize 16  {graphicsPipelineSlot u32, reserved u32}
+SetViewport              0x0006  byteSize 32  {x f32, y f32, width f32, height f32, minDepth f32, maxDepth f32}
+SetScissor               0x0007  byteSize 24  {offsetX i32, offsetY i32, width u32, height u32}
 ```
+
+`graphicsPipelineSlot` indexes the module GraphicsPipelineTable (§9.14). Viewport and
+scissor are ALWAYS dynamic pipeline state in v0.1: the recorder rejects a Draw recorded
+before both have been set in the command buffer, and rejects Draw / BindGraphicsPipeline
+/ SetViewport / SetScissor outside an open rendering scope, plus Draw without a bound
+graphics pipeline. When a graphics pipeline is bound inside an open scope, the recorder
+also checks the pipeline's declared attachment formats against the scope's rendering
+template (count, and per-attachment format resolved through the ImageViewHandleTable) —
+a record-time cross-table check per ADR-0002 D5.
 
 Payload decoding is the load-time point where slot ranges, bind state, usage bits and
 copy/subresource ranges are validated against the materialized tables (ADR-0002 D5);
@@ -395,6 +411,12 @@ ImageViewKind:             OneDimensional 1, TwoDimensional 2, ThreeDimensional 
 PipelineKind:              Compute 1
 AttachmentLoadOp:          Load 0, Clear 1, DontCare 2
 AttachmentStoreOp:         Store 0, DontCare 1
+PrimitiveTopology:         PointList 1, LineList 2, LineStrip 3, TriangleList 4,
+                           TriangleStrip 5
+CompareOperation:          Never 1, Less 2, Equal 3, LessOrEqual 4, Greater 5,
+                           NotEqual 6, GreaterOrEqual 7, Always 8
+CullMode:                  None 1, Front 2, Back 3, FrontAndBack 4
+FrontFace:                 CounterClockwise 1, Clockwise 2
 ```
 
 ---
@@ -407,3 +429,54 @@ appended (never reordered or resized) trailing fields. Every layout, size, offse
 enumeration value above is stable v0.1 ABI. Each cross-language format fixture under
 `TestData/CommandStream/` is the byte-exact arbiter that the Java writers and the C++
 validators agree (§4 staged integration gate).
+
+---
+
+## §9.14 GraphicsPipelineTable v0.1
+
+Section type `0x0007`. Fixed graphics pipeline state, fully determined at compile time
+(T0[1]); the load path materializes each record into one `VkGraphicsPipeline` against
+dynamic rendering (`VkPipelineRenderingCreateInfo`, no render passes). Appended after
+§9.13 to keep earlier section numbering stable. Header `{pipelineCount u32,
+reservedFlags u32}` then fixed 80-byte records; exact size `8 + pipelineCount * 80`.
+
+```text
+GraphicsPipelineRecord (80 bytes):
+  +0  vertexShaderModuleSlot         u32   // slot into the module ShaderModuleTable
+  +4  fragmentShaderModuleSlot       u32   // slot into the module ShaderModuleTable
+  +8  pushConstantByteSize           u32   // multiple of 4, at most 128 (0 = no range)
+  +12 topologyValue                  u32   // §9.12 primitive topology
+  +16 colorAttachmentCount           u32   // at most 8
+  +20 depthAttachmentFormatValue     u32   // 0 = no depth attachment; else a §9.12 depth format
+  +24 depthTestEnable                u32   // 0 or 1
+  +28 depthWriteEnable               u32   // 0 or 1
+  +32 depthCompareOperationValue     u32   // §9.12 compare operation; 0 when depthTestEnable = 0
+  +36 cullModeValue                  u32   // §9.12 cull mode
+  +40 frontFaceValue                 u32   // §9.12 front face
+  +44 reservedFlags                  u32   // must be zero
+  +48 colorAttachmentFormatValues[8] u32   // §9.12 image formats; indices >= count must be 0
+```
+
+Rules: assigned topology, cull mode and front face; `pushConstantByteSize` a multiple of
+4 in `[0, 128]`; `colorAttachmentCount <= 8`; at least one attachment
+(`colorAttachmentCount > 0` or `depthAttachmentFormatValue != 0`); every used color
+format is an assigned color format and every unused array index is zero;
+`depthAttachmentFormatValue` is zero or an assigned depth-capable format (`D32Float`,
+`D24UnormS8Uint`); `depthTestEnable`/`depthWriteEnable` are 0 or 1; `depthWriteEnable`
+requires `depthTestEnable`; depth enables require a depth attachment format; when
+`depthTestEnable` is 1 the compare operation is assigned, when 0 it must be 0. Both
+shader-module slots' existence is a cross-table materialization check. Entry points are
+the fixed convention `"main"`; the push-constant range is visible to the vertex and
+fragment stages together; the pipeline layout is push-constants only (resources arrive
+via buffer device addresses, §9.8).
+
+Fixed v0.1 pipeline state (not encoded, materialization constants): no vertex input
+state (vertex pulling via device addresses — BindVertexBuffers/BindIndexBuffer stay
+reserved), fill polygon mode, one-sample multisampling, blending disabled with all color
+channels written, no stencil state, viewport and scissor dynamic (§9.11).
+
+### §9.14.1 v0.1 exclusions
+
+Blending, multisampling, stencil, tessellation/geometry stages, specialization
+constants, pipeline caches and derivatives, and classic vertex input are all excluded;
+each lands as its own additive extension when a consumer exists.
