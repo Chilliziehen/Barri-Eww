@@ -368,6 +368,8 @@ EndRendering             0x0031  byteSize 8   {}
 BindGraphicsPipeline     0x0001  byteSize 16  {graphicsPipelineSlot u32, reserved u32}
 SetViewport              0x0006  byteSize 32  {x f32, y f32, width f32, height f32, minDepth f32, maxDepth f32}
 SetScissor               0x0007  byteSize 24  {offsetX i32, offsetY i32, width u32, height u32}
+DrawIndirect             0x0012  byteSize 32  {bufferSlot u32, drawCount u32, bufferOffset u64,
+                                               strideByteCount u32, reserved u32}
 ```
 
 `graphicsPipelineSlot` indexes the module GraphicsPipelineTable (§9.14). Viewport and
@@ -378,6 +380,15 @@ graphics pipeline. When a graphics pipeline is bound inside an open scope, the r
 also checks the pipeline's declared attachment formats against the scope's rendering
 template (count, and per-attachment format resolved through the ImageViewHandleTable) —
 a record-time cross-table check per ADR-0002 D5.
+
+DrawIndirect is the GPU-driven draw: its arguments (one 16-byte VkDrawIndirectCommand
+per draw) live in the referenced buffer and are typically produced by a compute stage
+in the same stream — the CPU prerecords the command without ever knowing the workload
+(ADR-0001). It obeys every Draw recording rule above, and additionally requires the
+Indirect usage bit on the buffer, a 4-aligned `bufferOffset`, and
+`bufferOffset + drawCount * 16` inside the buffer. v0.1 recorders accept only
+`drawCount == 1` with `strideByteCount == 16`; multi-draw is a later additive increment
+gated on the device's multi-draw capability.
 
 Payload decoding is the load-time point where slot ranges, bind state, usage bits and
 copy/subresource ranges are validated against the materialized tables (ADR-0002 D5);
