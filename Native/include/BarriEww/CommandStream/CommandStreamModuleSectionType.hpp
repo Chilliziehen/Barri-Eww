@@ -22,6 +22,8 @@ enum class CommandStreamModuleSectionType : std::uint16_t {
     SamplerHandleTable = 0x0005,
     /** SPIR-V shader blobs (variable-size records; pipelines reference blobs by slot). */
     ShaderModuleTable = 0x0006,
+    /** Fixed graphics pipeline state against dynamic rendering (§9.14). */
+    GraphicsPipelineTable = 0x0007,
 
     BarrierBatchTable = 0x0010,
     RenderingTemplateTable = 0x0011,
@@ -47,6 +49,7 @@ isAssignedCommandStreamModuleSectionType(std::uint16_t rawSectionTypeValue) noex
         case CommandStreamModuleSectionType::ImageViewHandleTable:
         case CommandStreamModuleSectionType::SamplerHandleTable:
         case CommandStreamModuleSectionType::ShaderModuleTable:
+        case CommandStreamModuleSectionType::GraphicsPipelineTable:
         case CommandStreamModuleSectionType::BarrierBatchTable:
         case CommandStreamModuleSectionType::RenderingTemplateTable:
         case CommandStreamModuleSectionType::PushDescriptorTemplateTable:

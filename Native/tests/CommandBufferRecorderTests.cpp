@@ -347,8 +347,9 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
 
     SECTION("assigned but unimplemented opcode fails loudly") {
         TestCommandStreamBuilder streamBuilder{0u};
-        streamBuilder.appendCommand(static_cast<std::uint16_t>(CommandStreamOpcode::Draw),
-                                    std::vector<std::byte>(16u, std::byte{0}));
+        streamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::DrawIndexed),
+            std::vector<std::byte>(16u, std::byte{0}));
         const std::vector<std::byte> streamBytes = streamBuilder.build();
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());

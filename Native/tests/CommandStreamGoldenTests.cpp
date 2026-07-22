@@ -14,11 +14,13 @@
 #include "BarriEww/CommandStream/CommandStreamImageViewHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamGraphicsPipelineTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
 using barrieww::CommandStreamBarrierBatchTableValidator;
+using barrieww::CommandStreamGraphicsPipelineTableValidator;
 using barrieww::CommandStreamRenderingTemplateTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
@@ -151,6 +153,36 @@ TEST_CASE("Committed rendering template table golden validates and decodes as au
     REQUIRE(attachment.loadOpValue == 1u);      // Clear
     REQUIRE(attachment.storeOpValue == 0u);     // Store
     REQUIRE(attachment.clearValue[3] == 1.0f);
+}
+
+// GraphicsPipelineTable ABI arbiter: Java emits the committed table byte-exactly, and
+// this Native test validates and decodes the same fixture. Shader-module slots are
+// deliberately not resolved here; that is the materialization's cross-table check.
+TEST_CASE("Committed graphics pipeline table golden validates and decodes as authored",
+          "[commandStream][golden][graphicsPipelineTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/GraphicsPipelineTable.becs");
+    REQUIRE(goldenBytes.size() == 88u);
+
+    const auto validationResult =
+        CommandStreamGraphicsPipelineTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->pipelineCount() == 1u);
+
+    const auto record = validationResult->pipelineRecord(0u);
+    REQUIRE(record.vertexShaderModuleSlot == 0u);
+    REQUIRE(record.fragmentShaderModuleSlot == 1u);
+    REQUIRE(record.pushConstantByteSize == 8u);
+    REQUIRE(record.topologyValue == 4u); // TriangleList
+    REQUIRE(record.colorAttachmentCount == 1u);
+    REQUIRE(record.colorAttachmentFormatValues[0] == 1u); // R8G8B8A8Unorm
+    REQUIRE(record.colorAttachmentFormatValues[7] == 0u);
+    REQUIRE(record.depthAttachmentFormatValue == 5u); // D32Float
+    REQUIRE(record.depthTestEnable == 1u);
+    REQUIRE(record.depthWriteEnable == 1u);
+    REQUIRE(record.depthCompareOperationValue == 4u); // LessOrEqual
+    REQUIRE(record.cullModeValue == 3u);              // Back
+    REQUIRE(record.frontFaceValue == 1u);             // CounterClockwise
 }
 
 // Module-level arbiter: the same committed golden module must be produced byte-exactly

@@ -19,7 +19,8 @@ set(BARRIEWW_TEST_SOURCES
     CommandStreamPipelineAndShaderTableValidatorTests.cpp
     CommandStreamImageHandleTableValidatorTests.cpp
     CommandStreamImageViewHandleTableValidatorTests.cpp
-    CommandStreamRenderingTemplateTableValidatorTests.cpp)
+    CommandStreamRenderingTemplateTableValidatorTests.cpp
+    CommandStreamGraphicsPipelineTableValidatorTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES
         VulkanContextTests.cpp
@@ -29,7 +30,8 @@ if(BARRIEWW_BACKEND_VULKAN)
         VulkanFrameLoopTests.cpp
         ImageExecutionTests.cpp
         VulkanImageViewTableTests.cpp
-        DynamicRenderingTests.cpp)
+        DynamicRenderingTests.cpp
+        GraphicsPipelineExecutionTests.cpp)
 endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})
