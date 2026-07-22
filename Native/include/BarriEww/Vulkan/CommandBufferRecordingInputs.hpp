@@ -3,6 +3,7 @@
 namespace barrieww {
 
 class VulkanBufferTable;
+class VulkanGraphicsPipelineTable;
 class VulkanImageTable;
 class VulkanImageViewTable;
 class VulkanPipelineTable;
@@ -29,6 +30,7 @@ struct CommandBufferRecordingInputs {
     const VulkanImageTable* imageTable = nullptr;
     const VulkanImageViewTable* imageViewTable = nullptr;
     const CommandStreamRenderingTemplateTableView* renderingTemplateTableView = nullptr;
+    const VulkanGraphicsPipelineTable* graphicsPipelineTable = nullptr;
 };
 
 } // namespace barrieww

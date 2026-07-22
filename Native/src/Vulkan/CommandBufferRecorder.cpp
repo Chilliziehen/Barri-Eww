@@ -17,6 +17,7 @@
 #include "BarriEww/Vulkan/VulkanBufferTable.hpp"
 #include "BarriEww/Vulkan/VulkanFormatMapping.hpp"
 #include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableView.hpp"
+#include "BarriEww/Vulkan/VulkanGraphicsPipelineTable.hpp"
 #include "BarriEww/Vulkan/VulkanImageTable.hpp"
 #include "BarriEww/Vulkan/VulkanImageViewTable.hpp"
 #include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
@@ -108,6 +109,30 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *           bufferOffset + texelSize * extent * layers within the buffer
  *                                                          -> CopyRangeOutOfBounds
  *           vkCmdCopyImageToBuffer(image, mappedLayout, buffer, one tightly packed region)
+ *         case BeginRendering:
+ *           template table present, slot in range; no scope already open
+ *                                                          -> NestedRenderingScope
+ *           resolve each attachment through the image view table (present, slot in
+ *           range); build VkRenderingInfo from the template record
+ *           vkCmdBeginRendering; remember the open template slot
+ *         case EndRendering:
+ *           a scope must be open                           -> RenderingScopeNotOpen
+ *           vkCmdEndRendering
+ *         case BindGraphicsPipeline / SetViewport / SetScissor / Draw:
+ *           all four require an open rendering scope       -> GraphicsCommandOutsideRenderingScope
+ *         case BindGraphicsPipeline:
+ *           graphics table present, slot in range
+ *           pipeline attachment formats must match the open scope's template
+ *           (count and per-attachment format resolved through the image view
+ *           table — the §9.11 record-time cross-table check)
+ *                                                          -> AttachmentFormatMismatch
+ *           vkCmdBindPipeline(GRAPHICS); remember the slot's layout and push range
+ *         case SetViewport:  vkCmdSetViewport(decoded VkViewport)
+ *         case SetScissor:   vkCmdSetScissor(decoded VkRect2D)
+ *         case Draw:
+ *           requires a bound graphics pipeline             -> NoBoundGraphicsPipeline
+ *           requires viewport and scissor both set         -> ViewportOrScissorNotSet
+ *           vkCmdDraw(vertexCount, instanceCount, firstVertex, firstInstance)
  *         default                                          -> UnsupportedOpcode
  *     vkEndCommandBuffer(commandBuffer)
  */
@@ -138,6 +163,8 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
     const VulkanImageViewTable* imageViewTable = recordingInputs.imageViewTable;
     const CommandStreamRenderingTemplateTableView* renderingTemplateTableView =
         recordingInputs.renderingTemplateTableView;
+    const VulkanGraphicsPipelineTable* graphicsPipelineTable =
+        recordingInputs.graphicsPipelineTable;
 
     VkCommandBufferBeginInfo commandBufferBeginInfo{};
     commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -147,11 +174,17 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
     }
 
     // Recording-walk pipeline state: which compute pipeline is currently bound and the
-    // push range it declared (needed by push constant emission).
+    // push range it declared (needed by push constant emission), plus the graphics-side
+    // state the §9.11 recording rules track (open scope + its template, bound graphics
+    // pipeline, dynamic viewport/scissor set).
     bool hasBoundComputePipeline = false;
     bool hasOpenRenderingScope = false;
     VkPipelineLayout boundComputePipelineLayout = VK_NULL_HANDLE;
     std::uint32_t boundPushConstantByteSize = 0;
+    std::uint32_t openRenderingTemplateSlot = 0;
+    bool hasBoundGraphicsPipeline = false;
+    bool hasSetViewport = false;
+    bool hasSetScissor = false;
 
     std::uint32_t commandIndex = 0;
     for (const CommandStreamView::CommandRecord commandRecord : streamView) {
@@ -695,6 +728,7 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     hasDepthAttachment ? &depthAttachmentInfo : nullptr;
                 vkCmdBeginRendering(commandBuffer, &renderingInfo);
                 hasOpenRenderingScope = true;
+                openRenderingTemplateSlot = renderingTemplateSlot;
                 break;
             }
             case CommandStreamOpcode::EndRendering: {
@@ -703,6 +737,122 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                 }
                 vkCmdEndRendering(commandBuffer);
                 hasOpenRenderingScope = false;
+                break;
+            }
+            case CommandStreamOpcode::BindGraphicsPipeline: {
+                // Pinned payload: +0 graphicsPipelineSlot u32, +4 reserved.
+                const auto graphicsPipelineSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (graphicsPipelineTable == nullptr) {
+                    return fail(MissingGraphicsPipelineTable, commandIndex, VK_SUCCESS);
+                }
+                if (graphicsPipelineSlot >= graphicsPipelineTable->slotCount()) {
+                    return fail(GraphicsPipelineSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+
+                // §9.11 record-time cross-table check: the pipeline's declared
+                // attachment formats must match the open scope's template, each
+                // template attachment format resolved through its image view. An open
+                // scope guarantees imageViewTable was present at BeginRendering.
+                const CommandStreamGraphicsPipelineRecord& pipelineRecord =
+                    graphicsPipelineTable->pipelineRecord(graphicsPipelineSlot);
+                const CommandStreamRenderingTemplateRecord templateRecord =
+                    renderingTemplateTableView->templateRecord(openRenderingTemplateSlot);
+                if (pipelineRecord.colorAttachmentCount
+                    != templateRecord.colorAttachmentCount) {
+                    return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                }
+                const bool pipelineHasDepthAttachment =
+                    pipelineRecord.depthAttachmentFormatValue != 0u;
+                if (pipelineHasDepthAttachment
+                    != (templateRecord.depthAttachmentPresent == 1u)) {
+                    return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                }
+                const std::uint32_t attachmentCount =
+                    templateRecord.colorAttachmentCount
+                    + templateRecord.depthAttachmentPresent;
+                for (std::uint32_t attachmentIndex = 0; attachmentIndex < attachmentCount;
+                     ++attachmentIndex) {
+                    const CommandStreamRenderingAttachmentRecord attachmentRecord =
+                        renderingTemplateTableView->attachmentRecord(
+                            openRenderingTemplateSlot, attachmentIndex);
+                    const std::uint32_t attachmentFormatValue =
+                        imageViewTable->description(attachmentRecord.imageViewSlot)
+                            .formatValue;
+                    const std::uint32_t pipelineFormatValue =
+                        attachmentIndex < templateRecord.colorAttachmentCount
+                            ? pipelineRecord.colorAttachmentFormatValues[attachmentIndex]
+                            : pipelineRecord.depthAttachmentFormatValue;
+                    if (attachmentFormatValue != pipelineFormatValue) {
+                        return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                    }
+                }
+
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  graphicsPipelineTable->slot(graphicsPipelineSlot).pipeline);
+                hasBoundGraphicsPipeline = true;
+                break;
+            }
+            case CommandStreamOpcode::SetViewport: {
+                // Pinned payload: +0 x f32, +4 y f32, +8 width f32, +12 height f32,
+                // +16 minDepth f32, +20 maxDepth f32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                VkViewport viewport{};
+                viewport.x = readPayloadValue<float>(commandRecord.payloadBytes, 0u);
+                viewport.y = readPayloadValue<float>(commandRecord.payloadBytes, 4u);
+                viewport.width = readPayloadValue<float>(commandRecord.payloadBytes, 8u);
+                viewport.height = readPayloadValue<float>(commandRecord.payloadBytes, 12u);
+                viewport.minDepth = readPayloadValue<float>(commandRecord.payloadBytes, 16u);
+                viewport.maxDepth = readPayloadValue<float>(commandRecord.payloadBytes, 20u);
+                vkCmdSetViewport(commandBuffer, 0u, 1u, &viewport);
+                hasSetViewport = true;
+                break;
+            }
+            case CommandStreamOpcode::SetScissor: {
+                // Pinned payload: +0 offsetX i32, +4 offsetY i32, +8 width u32,
+                // +12 height u32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                VkRect2D scissor{};
+                scissor.offset.x =
+                    readPayloadValue<std::int32_t>(commandRecord.payloadBytes, 0u);
+                scissor.offset.y =
+                    readPayloadValue<std::int32_t>(commandRecord.payloadBytes, 4u);
+                scissor.extent.width =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u);
+                scissor.extent.height =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u);
+                vkCmdSetScissor(commandBuffer, 0u, 1u, &scissor);
+                hasSetScissor = true;
+                break;
+            }
+            case CommandStreamOpcode::Draw: {
+                // Pinned payload: +0 vertexCount u32, +4 instanceCount u32,
+                // +8 firstVertex u32, +12 firstInstance u32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (!hasBoundGraphicsPipeline) {
+                    return fail(NoBoundGraphicsPipeline, commandIndex, VK_SUCCESS);
+                }
+                if (!hasSetViewport || !hasSetScissor) {
+                    return fail(ViewportOrScissorNotSet, commandIndex, VK_SUCCESS);
+                }
+                vkCmdDraw(commandBuffer,
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u));
                 break;
             }
             default:

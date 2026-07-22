@@ -66,6 +66,18 @@ enum class CommandBufferRecordingError : std::uint32_t {
     NestedRenderingScope = 30,
     /** EndRendering was recorded without an open rendering scope. */
     RenderingScopeNotOpen = 31,
+    /** The stream binds graphics pipelines but no graphics pipeline table was provided. */
+    MissingGraphicsPipelineTable = 32,
+    /** A command references a graphics pipeline slot outside the table. */
+    GraphicsPipelineSlotOutOfRange = 33,
+    /** A graphics command was recorded outside an open rendering scope (§9.11). */
+    GraphicsCommandOutsideRenderingScope = 34,
+    /** Draw was recorded before any BindGraphicsPipeline. */
+    NoBoundGraphicsPipeline = 35,
+    /** Draw was recorded before both SetViewport and SetScissor (§9.11). */
+    ViewportOrScissorNotSet = 36,
+    /** A bound pipeline's attachment formats do not match the open scope's template. */
+    AttachmentFormatMismatch = 37,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */
