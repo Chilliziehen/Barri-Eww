@@ -80,10 +80,12 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *           slot checks against pipelineTable              -> Missing.../PipelineSlotOutOfRange
  *           vkCmdBindPipeline(COMPUTE); remember the slot's layout and push range
  *         case PushBufferDeviceAddress:
- *           requires a bound compute pipeline              -> NoBoundComputePipeline
+ *           requires a bound pipeline (push constants target the MOST RECENTLY bound
+ *           pipeline; its layout, declared range and stage flags — compute, or
+ *           vertex+fragment per §9.14)                     -> NoBoundComputePipeline
  *           buffer slot checks; slot.deviceAddress != 0    -> MissingBufferDeviceAddress
  *           pushOffset + 8 within declared push range      -> PushConstantRangeExceeded
- *           vkCmdPushConstants(boundLayout, COMPUTE, offset, 8, &resolvedAddress)
+ *           vkCmdPushConstants(targetLayout, targetStages, offset, 8, &resolvedAddress)
  *           // The stream carries the SLOT; the address exists only after
  *           // materialization, so it is baked here at record time (load path).
  *         case Dispatch:
@@ -173,13 +175,17 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
         return fail(CommandBufferBeginFailed, noCommandIndex, vulkanResult);
     }
 
-    // Recording-walk pipeline state: which compute pipeline is currently bound and the
-    // push range it declared (needed by push constant emission), plus the graphics-side
-    // state the §9.11 recording rules track (open scope + its template, bound graphics
-    // pipeline, dynamic viewport/scissor set).
+    // Recording-walk pipeline state: which compute/graphics pipeline is currently
+    // bound, plus the graphics-side state the §9.11 recording rules track (open scope +
+    // its template, dynamic viewport/scissor set). Push constants target the MOST
+    // RECENTLY bound pipeline (§9.11: pushes land in the bound pipeline's declared
+    // range), so each bind updates the shared push target below — the layout, the
+    // declared range and the stage flags the layout's range was created with (compute,
+    // or vertex+fragment per §9.14).
     bool hasBoundComputePipeline = false;
     bool hasOpenRenderingScope = false;
-    VkPipelineLayout boundComputePipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout pushTargetPipelineLayout = VK_NULL_HANDLE;
+    VkShaderStageFlags pushTargetStageFlags = 0;
     std::uint32_t boundPushConstantByteSize = 0;
     std::uint32_t openRenderingTemplateSlot = 0;
     bool hasBoundGraphicsPipeline = false;
@@ -393,7 +399,8 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                   boundSlot.pipeline);
                 hasBoundComputePipeline = true;
-                boundComputePipelineLayout = boundSlot.pipelineLayout;
+                pushTargetPipelineLayout = boundSlot.pipelineLayout;
+                pushTargetStageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
                 boundPushConstantByteSize = boundSlot.pushConstantByteSize;
                 break;
             }
@@ -403,7 +410,7 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
                 const auto pushConstantByteOffset =
                     readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
-                if (!hasBoundComputePipeline) {
+                if (pushTargetPipelineLayout == VK_NULL_HANDLE) {
                     return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
                 }
                 if (bufferSlot >= bufferTable.slotCount()) {
@@ -424,8 +431,8 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                 // The address exists only after materialization; baking it here keeps
                 // the stream pure data (slot indirection) while the prerecorded buffer
                 // carries the resolved value (ADR-0003: decided at load, not per frame).
-                vkCmdPushConstants(commandBuffer, boundComputePipelineLayout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, pushConstantByteOffset,
+                vkCmdPushConstants(commandBuffer, pushTargetPipelineLayout,
+                                   pushTargetStageFlags, pushConstantByteOffset,
                                    sizeof(VkDeviceAddress), &addressedSlot.deviceAddress);
                 break;
             }
@@ -792,9 +799,15 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     }
                 }
 
+                const VulkanGraphicsPipelineTable::GraphicsPipelineSlot& boundGraphicsSlot =
+                    graphicsPipelineTable->slot(graphicsPipelineSlot);
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  graphicsPipelineTable->slot(graphicsPipelineSlot).pipeline);
+                                  boundGraphicsSlot.pipeline);
                 hasBoundGraphicsPipeline = true;
+                pushTargetPipelineLayout = boundGraphicsSlot.pipelineLayout;
+                pushTargetStageFlags =
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+                boundPushConstantByteSize = boundGraphicsSlot.pushConstantByteSize;
                 break;
             }
             case CommandStreamOpcode::SetViewport: {

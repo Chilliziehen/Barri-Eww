@@ -28,7 +28,8 @@ enum class CommandBufferRecordingError : std::uint32_t {
     MissingPipelineTable = 11,
     /** A command references a pipeline slot outside the table. */
     PipelineSlotOutOfRange = 12,
-    /** Dispatch or push constants were recorded before any BindComputePipeline. */
+    /** Dispatch was recorded before BindComputePipeline, or push constants before any
+     *  pipeline bind (pushes target the most recently bound pipeline, §9.11). */
     NoBoundComputePipeline = 13,
     /** A push constant write leaves the bound pipeline's declared range. */
     PushConstantRangeExceeded = 14,
