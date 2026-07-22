@@ -52,7 +52,7 @@ namespace barrieww {
  *     return view(moduleBytes, header, entries, laneViews)
  */
 std::expected<CommandStreamModuleView, CommandStreamModuleValidationFailure>
-CommandStreamModuleValidator::validate(std::span<const std::byte> moduleBytes) noexcept {
+CommandStreamModuleValidator::validate(std::span<const std::byte> moduleBytes) {
     using enum CommandStreamModuleValidationError;
 
     constexpr std::size_t moduleHeaderByteSize = sizeof(CommandStreamModuleHeader);

@@ -20,7 +20,8 @@ set(BARRIEWW_TEST_SOURCES
     CommandStreamImageHandleTableValidatorTests.cpp
     CommandStreamImageViewHandleTableValidatorTests.cpp
     CommandStreamRenderingTemplateTableValidatorTests.cpp
-    CommandStreamGraphicsPipelineTableValidatorTests.cpp)
+    CommandStreamGraphicsPipelineTableValidatorTests.cpp
+    NativeCommandStreamModuleValidationOperationTests.cpp)
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES
         VulkanContextTests.cpp
@@ -39,13 +40,24 @@ endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})
 
+add_executable(BarriEwwNativeFfmBoundaryTests
+    NativeCommandStreamModuleValidationBoundaryTests.cpp)
+
 target_link_libraries(BarriEwwNativeTests
     PRIVATE
         BarriEwwNative
         Catch2::Catch2WithMain)
 
+target_link_libraries(BarriEwwNativeFfmBoundaryTests
+    PRIVATE
+        BarriEwwNativeFfm
+        Catch2::Catch2WithMain)
+
 # Repository-level shared fixtures (cross-language golden files, ADR-0002).
 target_compile_definitions(BarriEwwNativeTests
+    PRIVATE
+        BARRIEWW_TEST_DATA_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/../../TestData")
+target_compile_definitions(BarriEwwNativeFfmBoundaryTests
     PRIVATE
         BARRIEWW_TEST_DATA_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/../../TestData")
 
@@ -53,3 +65,6 @@ target_compile_definitions(BarriEwwNativeTests
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(BarriEwwNativeTests)
+catch_discover_tests(BarriEwwNativeFfmBoundaryTests
+    DL_PATHS
+        $<TARGET_FILE_DIR:BarriEwwNativeFfm>)

@@ -64,7 +64,7 @@ class FirstTriangleModuleGoldenTests {
     }
 
     /** Assembles the golden module through the real write-side composition path. */
-    private static byte[] writeGoldenModule(Arena testArena) throws Exception {
+    static MemorySegment writeGoldenModule(Arena testArena) throws Exception {
         CommandStreamBufferHandleTableWriter bufferTableWriter =
                 new CommandStreamBufferHandleTableWriter();
         bufferTableWriter.addCreatedBuffer(24, CommandStreamBufferUsage.s_deviceAddress,
@@ -153,7 +153,7 @@ class FirstTriangleModuleGoldenTests {
         assertEquals(2280, moduleWriter.requiredByteSize());
         MemorySegment moduleSegment = testArena.allocate(2280, 8);
         assertEquals(2280, moduleWriter.writeTo(moduleSegment));
-        return moduleSegment.toArray(ValueLayout.JAVA_BYTE);
+        return moduleSegment;
     }
 
     @Test
@@ -164,7 +164,8 @@ class FirstTriangleModuleGoldenTests {
         assertEquals(2280, goldenBytes.length);
 
         try (Arena testArena = Arena.ofConfined()) {
-            assertArrayEquals(goldenBytes, writeGoldenModule(testArena));
+            assertArrayEquals(goldenBytes,
+                    writeGoldenModule(testArena).toArray(ValueLayout.JAVA_BYTE));
         }
     }
 }

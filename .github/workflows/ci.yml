@@ -92,8 +92,72 @@ jobs:
         if: steps.detect.outputs.ready == 'true'
         run: ctest --test-dir Native/build -C Release --output-on-failure
 
-      # Coverage gate (spec §4.5): C++ >= 90%. Wire gcovr/llvm-cov threshold
-      # once tests exist.
+      - name: Set up JDK 25 for Core FFM integration
+        if: steps.detect.outputs.ready == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: "25"
+
+      - name: Test Core Java-to-Native FFM integration and coverage
+        if: steps.detect.outputs.ready == 'true'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            nativeLibraryPath="$(cygpath -m "$PWD/Native/build/ffm/BarriEwwNativeFfm.dll")"
+          else
+            nativeLibraryPath="$PWD/Native/build/ffm/libBarriEwwNativeFfm.so"
+          fi
+          test -f "$nativeLibraryPath"
+          ./Core/gradlew -p Core clean test nativeIntegrationTest \
+            jacocoTestReport jacocoTestCoverageVerification \
+            -PbarriewwNativeLibraryPath="$nativeLibraryPath" --no-daemon
+
+  native-coverage:
+    name: Native coverage (Linux, Vulkan, THREADED_RECORDING=ON)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake 4.4
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "4.4"
+
+      - name: Install coverage and Vulkan software implementation
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcovr libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          lavapipeManifest="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
+          if [ -z "$lavapipeManifest" ]; then
+            echo "No lavapipe ICD manifest found under /usr/share/vulkan/icd.d" >&2
+            exit 1
+          fi
+          echo "VK_DRIVER_FILES=$lavapipeManifest" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$lavapipeManifest" >> "$GITHUB_ENV"
+
+      - name: Configure coverage build
+        run: >
+          cmake -S Native -B Native/build-coverage
+          -DCMAKE_BUILD_TYPE=Debug
+          -DTHREADED_RECORDING=ON
+          -DBARRIEWW_BACKEND_VULKAN=ON
+          -DBARRIEWW_ENABLE_COVERAGE=ON
+
+      - name: Build and test coverage variant
+        run: |
+          cmake --build Native/build-coverage --config Debug
+          ctest --test-dir Native/build-coverage -C Debug --output-on-failure
+
+      - name: Enforce Native line coverage
+        run: >
+          gcovr --root Native
+          --filter 'src/'
+          --filter 'include/'
+          --exclude 'build-coverage/'
+          --fail-under-line 90
+          --print-summary
 
   # ── Core (Java SE 25 / Gradle) — RDG compiler + BECS writer + FFM ──
   core:
@@ -120,13 +184,13 @@ jobs:
           distribution: microsoft
           java-version: "25"
 
-      - name: Build & test (JUnit 5 + JaCoCo)
+      - name: Build & test (JUnit 5)
         if: steps.detect.outputs.ready == 'true'
         working-directory: Core
-        run: ./gradlew build test jacocoTestReport --no-daemon
+        run: ./gradlew build test --no-daemon
 
-      # Coverage gate (spec §4.5): Java >= 90%. Enforce via
-      # jacocoTestCoverageVerification once the module grows beyond scaffolding.
+      # The Java >=90% gate merges unit and real FFM integration execution data in every
+      # Native matrix cell, where the exact platform shared library is available.
 
   # ── Mod (Java SE 25 / Gradle) — thin game-side loader ──────────────
   mod:
