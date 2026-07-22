@@ -90,7 +90,7 @@ std::vector<std::byte> makeImageViewTableBytes() {
  * ColorAttachment, loadOp Clear to magenta {1,0,1,1}, storeOp Store, over an 8x8 area.
  * Directory ends at 8 + 40 = 48; one 32-byte attachment record at 48; total 80.
  */
-std::vector<std::byte> makeRenderingTemplateTableBytes() {
+std::vector<std::byte> makeRenderingTemplateTableBytes(std::uint32_t imageViewSlot = 0u) {
     std::vector<std::byte> tableBytes;
     appendValue(tableBytes, std::uint32_t{1}); // templateCount
     appendValue(tableBytes, std::uint32_t{0});
@@ -103,7 +103,7 @@ std::vector<std::byte> makeRenderingTemplateTableBytes() {
     appendValue(tableBytes, std::uint32_t{1}); // layerCount
     appendValue(tableBytes, std::uint32_t{0}); // viewMask
     appendValue(tableBytes, std::uint64_t{48}); // attachmentsByteOffset
-    appendValue(tableBytes, std::uint32_t{0}); // imageViewSlot
+    appendValue(tableBytes, imageViewSlot);
     appendValue(tableBytes, std::uint32_t{2}); // ColorAttachment layout
     appendValue(tableBytes, std::uint32_t{1}); // Clear
     appendValue(tableBytes, std::uint32_t{0}); // Store
@@ -380,6 +380,45 @@ TEST_CASE("Dynamic-rendering recording rejects invalid streams with the precise 
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::MissingImageViewTable);
+    }
+
+    SECTION("nested rendering scope") {
+        TestCommandStreamBuilder streamBuilder{0u};
+        for (std::uint32_t beginIndex = 0; beginIndex < 2u; ++beginIndex) {
+            std::vector<std::byte> payloadBytes;
+            appendValue(payloadBytes, std::uint32_t{0});
+            appendValue(payloadBytes, std::uint32_t{0});
+            streamBuilder.appendCommand(
+                static_cast<std::uint16_t>(CommandStreamOpcode::BeginRendering),
+                payloadBytes);
+        }
+        const std::vector<std::byte> streamBytes = streamBuilder.build();
+        const auto streamView = CommandStreamValidator::validate(streamBytes);
+        REQUIRE(streamView.has_value());
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTable,
+             .imageTable = sharedImageTable.get(),
+             .imageViewTable = &*imageViewTable,
+             .renderingTemplateTableView = &*renderingTemplateTableView});
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::NestedRenderingScope);
+        REQUIRE(recordingResult.error().commandIndex == 1u);
+    }
+
+    SECTION("attachment referencing an image-view slot outside the table") {
+        const std::vector<std::byte> outOfRangeTemplateTableBytes =
+            makeRenderingTemplateTableBytes(/*imageViewSlot=*/9u);
+        const auto outOfRangeTemplateTableView =
+            CommandStreamRenderingTemplateTableValidator::validate(
+                outOfRangeTemplateTableBytes);
+        REQUIRE(outOfRangeTemplateTableView.has_value());
+        const auto recordingResult =
+            recordBeginRendering(0u, &*outOfRangeTemplateTableView, &*imageViewTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::ImageViewSlotOutOfRange);
     }
 
     SECTION("end rendering without an open scope") {

@@ -43,8 +43,11 @@ void appendValue(std::vector<std::byte>& targetBytes, ValueType value) {
     std::memcpy(targetBytes.data() + writeOffset, &value, sizeof value);
 }
 
-/** One created 8x8 R8G8B8A8Unorm image (TransferSource | TransferDestination). */
-std::vector<std::byte> makeImageTableBytes() {
+/**
+ * One 8x8 R8G8B8A8Unorm image (TransferSource | TransferDestination); a non-zero
+ * importIdentifier makes it an IMPORTED entry (v0.1: stays an unbound placeholder).
+ */
+std::vector<std::byte> makeImageTableBytes(std::uint32_t importIdentifier = 0u) {
     std::vector<std::byte> tableBytes;
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0});
@@ -57,7 +60,7 @@ std::vector<std::byte> makeImageTableBytes() {
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0x3});
-    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, importIdentifier);
     return tableBytes;
 }
 
@@ -123,7 +126,8 @@ std::vector<std::byte> makeLayoutTransitionBarrierTableBytes() {
 /** Pinned 48-byte ClearColorImage payload (full color subresource). */
 std::vector<std::byte> makeClearColorImagePayload(std::uint32_t imageSlot,
                                                   std::uint32_t imageLayoutValue,
-                                                  std::uint32_t baseMipLevel = 0u) {
+                                                  std::uint32_t baseMipLevel = 0u,
+                                                  std::uint32_t aspectMaskValue = 0x1u) {
     std::vector<std::byte> payloadBytes;
     appendValue(payloadBytes, imageSlot);
     appendValue(payloadBytes, imageLayoutValue);
@@ -131,7 +135,7 @@ std::vector<std::byte> makeClearColorImagePayload(std::uint32_t imageSlot,
     appendValue(payloadBytes, 0.0f);
     appendValue(payloadBytes, 1.0f);
     appendValue(payloadBytes, 1.0f);
-    appendValue(payloadBytes, std::uint32_t{0x1}); // Color aspect
+    appendValue(payloadBytes, aspectMaskValue);
     appendValue(payloadBytes, baseMipLevel);
     appendValue(payloadBytes, CommandStreamImageBarrierRecord::s_remainingCount);
     appendValue(payloadBytes, std::uint32_t{0});
@@ -301,5 +305,30 @@ TEST_CASE("Image command recording rejects invalid streams with the precise fail
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::ImageSubresourceOutOfRange);
+    }
+
+    SECTION("empty aspect mask") {
+        const auto recordingResult = recordSingleClear(
+            makeClearColorImagePayload(0u, 6u, 0u, /*aspectMaskValue=*/0u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnknownImageAspectMask);
+    }
+
+    SECTION("unbound imported image slot") {
+        const std::vector<std::byte> importedTableBytes =
+            makeImageTableBytes(/*importIdentifier=*/7u);
+        const auto importedTableView =
+            CommandStreamImageHandleTableValidator::validate(importedTableBytes);
+        REQUIRE(importedTableView.has_value());
+        auto importedImageTable =
+            VulkanImageTable::createFromTable(vulkanContext, *importedTableView);
+        REQUIRE(importedImageTable.has_value());
+        REQUIRE_FALSE(importedImageTable->slot(0u).isBound);
+        const auto recordingResult = recordSingleClear(
+            makeClearColorImagePayload(0u, 6u), &*importedImageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnboundImportedImage);
     }
 }

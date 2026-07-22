@@ -226,6 +226,25 @@ TEST_CASE("Compute recording rejects invalid streams with the precise failure",
                 == CommandBufferRecordingError::MissingPipelineTable);
     }
 
+    SECTION("pipeline slot outside the table") {
+        TestCommandStreamBuilder streamBuilder{0u};
+        std::vector<std::byte> payloadBytes;
+        appendValue(payloadBytes, std::uint32_t{9}); // one-entry table: slot 9 is out
+        appendValue(payloadBytes, std::uint32_t{0});
+        streamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::BindComputePipeline),
+            payloadBytes);
+        const std::vector<std::byte> streamBytes = streamBuilder.build();
+        const auto streamView = CommandStreamValidator::validate(streamBytes);
+        REQUIRE(streamView.has_value());
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTable, .pipelineTable = &*pipelineTable});
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::PipelineSlotOutOfRange);
+    }
+
     SECTION("dispatch without a bound pipeline") {
         TestCommandStreamBuilder streamBuilder{0u};
         std::vector<std::byte> payloadBytes;
