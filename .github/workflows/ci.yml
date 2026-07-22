@@ -71,9 +71,11 @@ jobs:
           VK_DRIVER_FILES="$lavapipeManifest" VK_ICD_FILENAMES="$lavapipeManifest" \
             vulkaninfo --summary
 
-      # Windows runners have no Vulkan SDK, so the Vulkan backend builds on Linux only
-      # (lavapipe executes the GPU tests there); Windows still covers the backend-neutral
-      # format layer across the THREADED_RECORDING variants.
+      # Windows runners have no Vulkan SDK/driver, so the Vulkan backend builds on Linux
+      # only (lavapipe executes the GPU tests there); Windows still covers the
+      # backend-neutral format layer across the THREADED_RECORDING variants. Software
+      # rasterization on Windows is deliberately not built from source in CI — it would
+      # cost a full SwiftShader compile per run for coverage lavapipe already provides.
       - name: Configure
         if: steps.detect.outputs.ready == 'true'
         run: >
@@ -88,7 +90,7 @@ jobs:
 
       - name: Test (Catch2 via CTest)
         if: steps.detect.outputs.ready == 'true'
-        run: ctest --test-dir Native/build --output-on-failure
+        run: ctest --test-dir Native/build -C Release --output-on-failure
 
       # Coverage gate (spec §4.5): C++ >= 90%. Wire gcovr/llvm-cov threshold
       # once tests exist.

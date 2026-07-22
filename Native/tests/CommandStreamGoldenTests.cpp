@@ -11,6 +11,7 @@
 #include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferMemoryKind.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferUsage.hpp"
+#include "BarriEww/CommandStream/CommandStreamImageViewHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
@@ -20,6 +21,7 @@ using barrieww::CommandStreamBarrierBatchTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
 using barrieww::CommandStreamBufferUsage;
+using barrieww::CommandStreamImageViewHandleTableValidator;
 using barrieww::CommandStreamModuleSectionType;
 using barrieww::CommandStreamModuleValidator;
 using barrieww::CommandStreamOpcode;
@@ -83,6 +85,41 @@ TEST_CASE("Committed golden lane stream validates and decodes as authored",
 
     ++commandIterator;
     REQUIRE(commandIterator == validationResult->end());
+}
+
+// ImageViewHandleTable ABI arbiter: Java emits the committed table byte-exactly, and this
+// Native test validates and decodes the same fixture. The source slots are deliberately
+// not resolved here; that is VulkanImageViewTable's cross-table responsibility.
+TEST_CASE("Committed ImageView table golden validates and decodes as authored",
+          "[commandStream][golden][imageViewHandleTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/ImageViewHandleTable.becs");
+    REQUIRE(goldenBytes.size() == 72u);
+
+    const auto validationResult =
+        CommandStreamImageViewHandleTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->entryCount() == 2u);
+
+    const auto firstEntry = validationResult->entry(0u);
+    REQUIRE(firstEntry.imageSlot == 4u);
+    REQUIRE(firstEntry.imageViewKindValue == 2u);
+    REQUIRE(firstEntry.formatValue == 1u);
+    REQUIRE(firstEntry.aspectMaskValue == 0x1u);
+    REQUIRE(firstEntry.baseMipLevel == 1u);
+    REQUIRE(firstEntry.mipLevelCount == 2u);
+    REQUIRE(firstEntry.baseArrayLayer == 3u);
+    REQUIRE(firstEntry.arrayLayerCount == 1u);
+
+    const auto secondEntry = validationResult->entry(1u);
+    REQUIRE(secondEntry.imageSlot == 8u);
+    REQUIRE(secondEntry.imageViewKindValue == 3u);
+    REQUIRE(secondEntry.formatValue == 5u);
+    REQUIRE(secondEntry.aspectMaskValue == 0x2u);
+    REQUIRE(secondEntry.baseMipLevel == 0u);
+    REQUIRE(secondEntry.mipLevelCount == 1u);
+    REQUIRE(secondEntry.baseArrayLayer == 0u);
+    REQUIRE(secondEntry.arrayLayerCount == 1u);
 }
 
 // Module-level arbiter: the same committed golden module must be produced byte-exactly

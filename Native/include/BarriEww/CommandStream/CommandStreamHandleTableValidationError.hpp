@@ -49,6 +49,12 @@ enum class CommandStreamHandleTableValidationError : std::uint32_t {
     InvalidImageDimensions = 18,
     /** A created image entry (importIdentifier 0) has an empty usage mask. */
     InvalidCreatedImageDescription = 19,
+    /** An image-view entry's kind value is not assigned in this schema version. */
+    UnknownImageViewKind = 20,
+    /** An image-view entry's aspect mask is empty or contains unassigned bits. */
+    UnusableImageAspectMask = 21,
+    /** An image-view entry has an invalid explicit mip/layer range for its view kind. */
+    InvalidImageViewSubresourceCounts = 22,
 };
 
 } // namespace barrieww
