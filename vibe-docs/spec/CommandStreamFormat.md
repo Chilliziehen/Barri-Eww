@@ -88,3 +88,322 @@ The following are deliberately not part of this version: format reinterpretation
 component swizzle, array/cube views, `VK_REMAINING_*` sentinels, graphics command
 consumers, rendering/descriptor templates and imported-image host binding. Additions
 must preserve existing field values and follow the command-stream minor-version policy.
+
+---
+
+## §9.3 Lane stream 与命令头
+
+A lane stream is the flat, straight-line command tape a compiler emits for one
+recording lane (ADR-0002 D3). The version pair is shared across the whole format family
+(`versionMajor = 0`, `versionMinor = 1` in v0.1).
+
+```text
+LaneStreamHeader (32 bytes):
+  +0  magicBytes[4]   u8   // "BECS" = {0x42,0x45,0x43,0x53}
+  +4  versionMajor    u16
+  +6  versionMinor    u16
+  +8  laneIndex       u32
+  +12 commandCount    u32
+  +16 totalByteSize   u64
+  +24 graphHash       u64
+
+CommandHeader (8 bytes, precedes every command payload):
+  +0  opcode          u16   // §9.11 catalog
+  +2  reservedFlags   u16   // must be zero
+  +4  byteSize        u32   // whole command incl. this header; multiple of 8
+```
+
+Rules: `totalByteSize` equals the byte range; the command walk visits exactly
+`commandCount` commands and ends exactly at `totalByteSize`; each `byteSize` is at least
+8 and a multiple of 8; `reservedFlags` is zero; `opcode` is an assigned catalog value.
+The stream carries no handles — commands reference resources by slot (§9.11).
+
+---
+
+## §9.4 Module container (BECM)
+
+A module is the bake artifact handed to the native side once per graph: a header, a
+section directory, then the section byte ranges (ADR-0002 D2). Handle/barrier/template
+tables and per-lane streams are all sections.
+
+```text
+ModuleHeader (32 bytes):
+  +0  magicBytes[4]    u8   // "BECM" = {0x42,0x45,0x43,0x4D}
+  +4  versionMajor     u16
+  +6  versionMinor     u16
+  +8  sectionCount     u32
+  +12 laneStreamCount  u32
+  +16 totalByteSize    u64
+  +24 graphHash        u64
+
+SectionDirectoryEntry (24 bytes):
+  +0  sectionTypeValue u16   // §9.4 section-type table
+  +2  reservedFlags    u16   // must be zero
+  +4  sectionIndex     u32   // lane index for LaneStream; 0 for singletons
+  +8  byteOffset       u64   // from module base; 8-byte aligned
+  +16 byteSize         u64
+```
+
+Section types: `0x0001 PipelineHandleTable`, `0x0002 BufferHandleTable`,
+`0x0003 ImageHandleTable`, `0x0004 ImageViewHandleTable`, `0x0005 SamplerHandleTable`
+(reserved), `0x0006 ShaderModuleTable`, `0x0010 BarrierBatchTable`,
+`0x0011 RenderingTemplateTable`, `0x0012 PushDescriptorTemplateTable` (reserved),
+`0x0020 LaneStream`.
+
+Rules: sections lie inside the module and outside the directory, are 8-byte aligned, and
+do not overlap; no two directory entries share a `(sectionTypeValue, sectionIndex)`
+identity; `laneStreamCount` equals the number of `LaneStream` sections and their
+`sectionIndex` values are exactly `0..laneStreamCount-1`; each embedded lane stream
+independently validates (§9.3) and its `graphHash` equals the module's.
+
+---
+
+## §9.5 BufferHandleTable v0.1
+
+Section type `0x0002`. Header `{entryCount u32, reservedFlags u32}` then fixed 24-byte
+entries; exact size `8 + entryCount * 24`.
+
+```text
+BufferHandleTableEntry (24 bytes):
+  +0  byteSize          u64
+  +8  usageFlags        u32   // OR-mask of §9.12 buffer usage bits
+  +12 memoryKindValue   u32   // §9.12 buffer memory kind
+  +16 importIdentifier  u32   // 0 = created; non-zero = imported
+  +20 reservedFlags     u32   // must be zero
+```
+
+Rules: a CREATED entry (`importIdentifier == 0`) has a positive `byteSize`, a non-empty
+assigned usage mask, and a memory kind other than `None`. An IMPORTED entry
+(`importIdentifier != 0`) carries memory kind `None`; the provider owns handle and
+memory (§6.3). Imported slots are unbound placeholders in v0.1.
+
+---
+
+## §9.6 ImageHandleTable v0.1
+
+Section type `0x0003`. Header `{entryCount u32, reservedFlags u32}` then fixed 40-byte
+entries; exact size `8 + entryCount * 40`.
+
+```text
+ImageHandleTableEntry (40 bytes):
+  +0  imageKindValue    u32   // §9.12 image kind
+  +4  formatValue       u32   // §9.12 image format
+  +8  width             u32
+  +12 height            u32
+  +16 depth             u32
+  +20 mipLevelCount     u32
+  +24 arrayLayerCount   u32
+  +28 sampleCountValue  u32   // 1, 2, 4 or 8
+  +32 usageFlags        u32   // OR-mask of §9.12 image usage bits
+  +36 importIdentifier  u32   // 0 = created; non-zero = imported
+```
+
+Rules: assigned kind/format; sample count in `{1,2,4,8}`; all extents and counts
+positive; a 3D image (`imageKindValue == 3`) has exactly one array layer; usage mask
+assigned; a CREATED entry has a non-empty usage mask. Descriptive fields are valid for
+both shapes so the host can verify a bound imported image against them. CREATED images
+are device-local, optimally tiled, initial layout Undefined — the compile-time barrier
+pass owns the first transition.
+
+---
+
+## §9.7 ShaderModuleTable v0.1
+
+Section type `0x0006`. Header `{entryCount u32, reservedFlags u32}`, `entryCount`
+16-byte directory entries, then the SPIR-V blob region.
+
+```text
+ShaderModuleTableEntry (16 bytes):
+  +0  blobByteOffset    u64   // from table base; 8-byte aligned
+  +8  blobByteSize      u64
+```
+
+Rules: each blob lies inside the table and outside the directory, is at least the SPIR-V
+minimum (20 bytes), a multiple of 4 bytes, and begins with the SPIR-V magic word
+`0x07230203`. Blob regions may be shared between entries (deduplication).
+
+---
+
+## §9.8 PipelineHandleTable v0.1
+
+Section type `0x0001`. Header `{entryCount u32, reservedFlags u32}` then fixed 16-byte
+entries; exact size `8 + entryCount * 16`.
+
+```text
+PipelineHandleTableEntry (16 bytes):
+  +0  pipelineKindValue    u32   // §9.12 pipeline kind (v0.1: Compute only)
+  +4  shaderModuleSlot     u32   // slot into the module ShaderModuleTable
+  +8  pushConstantByteSize u32   // multiple of 4, at most 128 (0 = no range)
+  +12 reservedFlags        u32   // must be zero
+```
+
+Rules: assigned kind; `pushConstantByteSize` a multiple of 4 in `[0, 128]`. The entry
+point is the fixed convention `"main"`. The v0.1 pipeline layout is push-constants only;
+resources reach the shader through buffer device addresses (see PushBufferDeviceAddress,
+§9.11) — classic per-pipeline descriptor set layouts are absent. `shaderModuleSlot`
+existence is a cross-table materialization check.
+
+---
+
+## §9.9 BarrierBatchTable v0.1
+
+Section type `0x0010`. The compile-time barrier pass emits one batch per
+ExecuteBarrierBatch site. Header `{batchCount u32, reservedFlags u32}`, `batchCount`
+24-byte directory records, then the barrier record region (global records first, buffer
+records next, image records last per batch). Barrier masks are synchronization2 stage /
+access masks; the v0.1 recorder maps them to legacy `vkCmdPipelineBarrier` and therefore
+rejects any mask using bits above bit 31.
+
+```text
+BarrierBatchDirectoryRecord (24 bytes):
+  +0  globalBarrierCount   u32
+  +4  bufferBarrierCount   u32
+  +8  imageBarrierCount    u32
+  +12 reservedFlags        u32   // must be zero
+  +16 barriersByteOffset   u64   // from table base; 8-byte aligned
+
+GlobalBarrierRecord (32 bytes):
+  +0  sourceStageMask      u64
+  +8  sourceAccessMask     u64
+  +16 destinationStageMask u64
+  +24 destinationAccessMask u64
+
+BufferBarrierRecord (56 bytes):
+  +0  sourceStageMask      u64
+  +8  sourceAccessMask     u64
+  +16 destinationStageMask u64
+  +24 destinationAccessMask u64
+  +32 bufferSlot           u32
+  +36 reservedFlags        u32   // must be zero
+  +40 byteOffset           u64
+  +48 byteCount            u64   // 0xFFFFFFFFFFFFFFFF = whole size
+
+ImageBarrierRecord (64 bytes):
+  +0  sourceStageMask      u64
+  +8  sourceAccessMask     u64
+  +16 destinationStageMask u64
+  +24 destinationAccessMask u64
+  +32 imageSlot            u32
+  +36 aspectMaskValue      u32   // §9.12 image aspect bits
+  +40 oldLayoutValue       u32   // §9.12 image layout
+  +44 newLayoutValue       u32   // §9.12 image layout
+  +48 baseMipLevel         u32
+  +52 mipLevelCount        u32   // 0xFFFFFFFF = remaining
+  +56 baseArrayLayer       u32
+  +60 arrayLayerCount      u32   // 0xFFFFFFFF = remaining
+```
+
+Rules: every barrier's source and destination stage masks are non-zero; image records
+carry assigned layouts, a usable aspect mask, and non-zero mip/layer counts (sentinel
+allowed). Barrier regions may be shared between batches. Buffer/image slot ranges and
+bind state are record-time checks against the materialized tables.
+
+---
+
+## §9.10 RenderingTemplateTable v0.1
+
+Section type `0x0011`. The compile-time output for one BeginRendering site (dynamic
+rendering, no render passes — ADR-0003 / MC 26.2). Header
+`{templateCount u32, reservedFlags u32}`, `templateCount` 40-byte directory records,
+then per-template attachment regions (color records first, then one depth record when
+present).
+
+```text
+RenderingTemplateDirectoryRecord (40 bytes):
+  +0  colorAttachmentCount    u32
+  +4  depthAttachmentPresent  u32   // 0 or 1
+  +8  renderAreaOffsetX       i32
+  +12 renderAreaOffsetY       i32
+  +16 renderAreaWidth         u32
+  +20 renderAreaHeight        u32
+  +24 layerCount              u32
+  +28 viewMask                u32
+  +32 attachmentsByteOffset   u64   // from table base; 8-byte aligned
+
+RenderingAttachmentRecord (32 bytes):
+  +0  imageViewSlot   u32   // slot into the module ImageViewHandleTable
+  +4  imageLayoutValue u32  // §9.12 image layout
+  +8  loadOpValue     u32   // §9.12 attachment load op
+  +12 storeOpValue    u32   // §9.12 attachment store op
+  +16 clearValue[4]   f32   // color RGBA; depth in [0], stencil bits in [1]
+```
+
+Rules: `depthAttachmentPresent` is 0 or 1; a template has at least one attachment, a
+positive render area and a positive layer count; every attachment record carries an
+assigned layout, load op and store op. Attachment regions may be shared between
+templates. Image-view slot existence and format/layout compatibility are record-time
+checks.
+
+---
+
+## §9.11 Command opcode payloads v0.1
+
+Opcodes belong to the ADR-0002 D4 ranges (`0x0000` core, `0x1000` Vulkan, `0xF000`
+controlled-extension). Payload offsets below are relative to the end of the 8-byte
+command header; `byteSize` is the whole command including the header. Reserved fields
+are zero. Slot fields index the corresponding module table.
+
+```text
+Draw                     0x0010  byteSize 24  {vertexCount u32, instanceCount u32, firstVertex u32, firstInstance u32}
+Dispatch                 0x0020  byteSize 24  {groupCountX u32, groupCountY u32, groupCountZ u32, reserved u32}
+DispatchIndirect         0x0021  byteSize 24  {bufferSlot u32, reserved u32, bufferOffset u64}
+BindComputePipeline      0x0002  byteSize 16  {pipelineSlot u32, reserved u32}
+PushBufferDeviceAddress  0x0008  byteSize 16  {bufferSlot u32, pushConstantByteOffset u32}
+ExecuteBarrierBatch      0x0032  byteSize 16  {barrierBatchSlot u32, reserved u32}
+CopyBuffer               0x0040  byteSize 40  {sourceBufferSlot u32, destinationBufferSlot u32,
+                                               sourceByteOffset u64, destinationByteOffset u64, copyByteCount u64}
+ClearColorImage          0x0043  byteSize 56  {imageSlot u32, imageLayoutValue u32, clearColor[4] f32,
+                                               aspectMaskValue u32, baseMipLevel u32, mipLevelCount u32,
+                                               baseArrayLayer u32, arrayLayerCount u32, reserved u32}
+CopyImageToBuffer        0x0047  byteSize 64  {imageSlot u32, bufferSlot u32, imageLayoutValue u32,
+                                               aspectMaskValue u32, mipLevel u32, baseArrayLayer u32,
+                                               arrayLayerCount u32, reserved u32, bufferByteOffset u64,
+                                               copyWidth u32, copyHeight u32, copyDepth u32, reserved u32}
+BeginRendering           0x0030  byteSize 16  {renderingTemplateSlot u32, reserved u32}   // recording: later increment
+EndRendering             0x0031  byteSize 8   {}                                          // recording: later increment
+```
+
+Payload decoding is the load-time point where slot ranges, bind state, usage bits and
+copy/subresource ranges are validated against the materialized tables (ADR-0002 D5);
+device addresses are resolved and baked at record time. Assigned opcodes that a recorder
+does not yet implement fail loudly rather than being skipped. Opcodes present in the
+ADR-0002 catalog but absent above are reserved for later increments.
+
+---
+
+## §9.12 Neutral encodings v0.1
+
+All resource attributes are backend-neutral; each backend maps them at load time (Vulkan
+mappings are the reference). Unassigned values are rejected at load.
+
+```text
+BufferUsage (bit flags):   TransferSource 0x1, TransferDestination 0x2, Vertex 0x4,
+                           Index 0x8, Uniform 0x10, Storage 0x20, Indirect 0x40,
+                           DeviceAddress 0x80
+BufferMemoryKind:          None 0, DeviceLocal 1, HostVisiblePersistentMapped 2,
+                           HostVisibleReadback 3
+ImageKind:                 OneDimensional 1, TwoDimensional 2, ThreeDimensional 3
+ImageFormat:               R8G8B8A8Unorm 1, B8G8R8A8Unorm 2, R16G16B16A16Float 3,
+                           R32Uint 4, D32Float 5, D24UnormS8Uint 6
+ImageUsage (bit flags):    TransferSource 0x1, TransferDestination 0x2, Sampled 0x4,
+                           Storage 0x8, ColorAttachment 0x10, DepthStencilAttachment 0x20
+ImageLayout:               Undefined 0, General 1, ColorAttachment 2,
+                           DepthStencilAttachment 3, ShaderReadOnly 4, TransferSource 5,
+                           TransferDestination 6, Present 7
+ImageAspect (bit flags):   Color 0x1, Depth 0x2, Stencil 0x4
+ImageViewKind:             OneDimensional 1, TwoDimensional 2, ThreeDimensional 3
+PipelineKind:              Compute 1
+AttachmentLoadOp:          Load 0, Clear 1, DontCare 2
+AttachmentStoreOp:         Store 0, DontCare 1
+```
+
+---
+
+## §9.13 版本策略
+
+`versionMajor` gates breaking changes; replayers accept exactly the supported major.
+`versionMinor` is additive only: new opcodes, section types, neutral encoding values or
+appended (never reordered or resized) trailing fields. Every layout, size, offset and
+enumeration value above is stable v0.1 ABI. Each cross-language format fixture under
+`TestData/CommandStream/` is the byte-exact arbiter that the Java writers and the C++
+validators agree (§4 staged integration gate).

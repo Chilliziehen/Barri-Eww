@@ -16,6 +16,15 @@
   Vulkan materialization 的 staged integration gate；FFM load path 落地后必须替换为完整
   end-to-end integration（所有者裁决 P14）。
 - [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P14 已裁决并迁入 §9 / §4.2.1。
+- [修改] §9 [CommandStreamFormat.md](CommandStreamFormat.md) —— 扩充为完整 BECS ABI 规范
+  （所有者裁决 P15）：新增 §9.3 lane stream 与命令头、§9.4 模块容器 (BECM)、
+  §9.5 BufferHandleTable、§9.6 ImageHandleTable、§9.7 ShaderModuleTable、
+  §9.8 PipelineHandleTable、§9.9 BarrierBatchTable (global/buffer/image 记录)、
+  §9.10 RenderingTemplateTable、§9.11 命令 opcode 载荷、§9.12 中立编码枚举值、
+  §9.13 版本策略。各布局逐字段对齐代码 offsetof 断言；先前只在代码/ADR 中的设计决策
+  自此固化为规范性 v0.1 ABI。
+- [新增] RenderingTemplateTable v0.1 + AttachmentLoadOp/StoreOp 中立编码（随 §9.10/§9.12
+  固化，双侧写读 + golden RenderingTemplateTable.becs）。
 
 ---
 
