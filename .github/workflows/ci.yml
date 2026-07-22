@@ -71,39 +71,18 @@ jobs:
           VK_DRIVER_FILES="$lavapipeManifest" VK_ICD_FILENAMES="$lavapipeManifest" \
             vulkaninfo --summary
 
-      - name: Install Vulkan SDK (Windows)
-        if: steps.detect.outputs.ready == 'true' && runner.os == 'Windows'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.309.0
-          cache: true
-
-      - name: Build SwiftShader Vulkan software implementation (Windows)
-        if: steps.detect.outputs.ready == 'true' && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          git clone --filter=blob:none --no-checkout https://github.com/google/swiftshader.git Native/swiftshader-source
-          git -C Native/swiftshader-source checkout a7c547b55474c3d8bde53711eae24ae0e28bbc0a
-          cmake -S Native/swiftshader-source -B Native/swiftshader-build `
-            -DSWIFTSHADER_BUILD_TESTS=OFF `
-            -DSWIFTSHADER_BUILD_BENCHMARKS=OFF
-          cmake --build Native/swiftshader-build --config Release `
-            --target vk_swiftshader --parallel
-          $imageConfigurationFile = Get-ChildItem Native/swiftshader-build `
-            -Filter vk_swiftshader_icd.json -Recurse | Select-Object -First 1
-          if ($null -eq $imageConfigurationFile) {
-            throw "SwiftShader build did not produce vk_swiftshader_icd.json"
-          }
-          "VK_ICD_FILENAMES=$($imageConfigurationFile.FullName)" | Out-File `
-            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
+      # Windows runners have no Vulkan SDK/driver, so the Vulkan backend builds on Linux
+      # only (lavapipe executes the GPU tests there); Windows still covers the
+      # backend-neutral format layer across the THREADED_RECORDING variants. Software
+      # rasterization on Windows is deliberately not built from source in CI — it would
+      # cost a full SwiftShader compile per run for coverage lavapipe already provides.
       - name: Configure
         if: steps.detect.outputs.ready == 'true'
         run: >
           cmake -S Native -B Native/build
           -DCMAKE_BUILD_TYPE=Release
           -DTHREADED_RECORDING=${{ matrix.threadedRecording }}
-          -DBARRIEWW_BACKEND_VULKAN=ON
+          -DBARRIEWW_BACKEND_VULKAN=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
 
       - name: Build
         if: steps.detect.outputs.ready == 'true'

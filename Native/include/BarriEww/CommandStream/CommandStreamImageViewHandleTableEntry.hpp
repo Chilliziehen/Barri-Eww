@@ -14,6 +14,11 @@ namespace barrieww {
  *        static_asserts below (ADR-0002 D1).
  */
 struct CommandStreamImageViewHandleTableEntry {
+    /** Count sentinel meaning "all remaining mip levels/array layers from the base"
+     *  (mirrors Vulkan's VK_REMAINING_*); a view must resolve mip counts explicitly, so
+     *  the validator rejects this value for mipLevelCount. */
+    static constexpr std::uint32_t s_remainingCount = 0xFFFFFFFFu;
+
     std::uint32_t imageSlot;
     std::uint32_t imageViewKindValue;
     std::uint32_t formatValue;

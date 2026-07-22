@@ -86,9 +86,8 @@ CommandStreamImageViewHandleTableValidator::validate(
         const bool isThreeDimensional =
             entry.imageViewKindValue
             == static_cast<std::uint32_t>(CommandStreamImageViewKind::ThreeDimensional);
-        constexpr std::uint32_t remainingRangeSentinel = 0xFFFFFFFFu;
         if (entry.mipLevelCount == 0u
-            || entry.mipLevelCount == remainingRangeSentinel
+            || entry.mipLevelCount == CommandStreamImageViewHandleTableEntry::s_remainingCount
             || entry.arrayLayerCount != 1u
             || (isThreeDimensional && entry.baseArrayLayer != 0u)) {
             return fail(InvalidImageViewSubresourceCounts, entryOffset);
