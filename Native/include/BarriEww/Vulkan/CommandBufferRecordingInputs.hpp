@@ -4,8 +4,10 @@ namespace barrieww {
 
 class VulkanBufferTable;
 class VulkanImageTable;
+class VulkanImageViewTable;
 class VulkanPipelineTable;
 class CommandStreamBarrierBatchTableView;
+class CommandStreamRenderingTemplateTableView;
 
 /**
  * @note ThreadSafety: Plain value type of borrowed pointers; no synchronization. Safe
@@ -25,6 +27,8 @@ struct CommandBufferRecordingInputs {
     const CommandStreamBarrierBatchTableView* barrierBatchTableView = nullptr;
     const VulkanPipelineTable* pipelineTable = nullptr;
     const VulkanImageTable* imageTable = nullptr;
+    const VulkanImageViewTable* imageViewTable = nullptr;
+    const CommandStreamRenderingTemplateTableView* renderingTemplateTableView = nullptr;
 };
 
 } // namespace barrieww

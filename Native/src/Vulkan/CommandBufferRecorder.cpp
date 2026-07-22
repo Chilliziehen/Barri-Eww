@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
@@ -15,7 +16,9 @@
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/Vulkan/VulkanBufferTable.hpp"
 #include "BarriEww/Vulkan/VulkanFormatMapping.hpp"
+#include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableView.hpp"
 #include "BarriEww/Vulkan/VulkanImageTable.hpp"
+#include "BarriEww/Vulkan/VulkanImageViewTable.hpp"
 #include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
 
 namespace barrieww {
@@ -132,6 +135,9 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
         recordingInputs.barrierBatchTableView;
     const VulkanPipelineTable* pipelineTable = recordingInputs.pipelineTable;
     const VulkanImageTable* imageTable = recordingInputs.imageTable;
+    const VulkanImageViewTable* imageViewTable = recordingInputs.imageViewTable;
+    const CommandStreamRenderingTemplateTableView* renderingTemplateTableView =
+        recordingInputs.renderingTemplateTableView;
 
     VkCommandBufferBeginInfo commandBufferBeginInfo{};
     commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -143,6 +149,7 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
     // Recording-walk pipeline state: which compute pipeline is currently bound and the
     // push range it declared (needed by push constant emission).
     bool hasBoundComputePipeline = false;
+    bool hasOpenRenderingScope = false;
     VkPipelineLayout boundComputePipelineLayout = VK_NULL_HANDLE;
     std::uint32_t boundPushConstantByteSize = 0;
 
@@ -596,6 +603,106 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     mapCommandStreamImageLayout(
                         static_cast<CommandStreamImageLayout>(imageLayoutValue)),
                     copyTargetSlot.buffer, 1u, &copyRegion);
+                break;
+            }
+            case CommandStreamOpcode::BeginRendering: {
+                // Pinned payload: +0 renderingTemplateSlot u32, +4 reserved.
+                const auto renderingTemplateSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                if (hasOpenRenderingScope) {
+                    return fail(NestedRenderingScope, commandIndex, VK_SUCCESS);
+                }
+                if (renderingTemplateTableView == nullptr) {
+                    return fail(MissingRenderingTemplateTable, commandIndex, VK_SUCCESS);
+                }
+                if (renderingTemplateSlot >= renderingTemplateTableView->templateCount()) {
+                    return fail(RenderingTemplateSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const CommandStreamRenderingTemplateRecord templateRecord =
+                    renderingTemplateTableView->templateRecord(renderingTemplateSlot);
+
+                // Resolve one attachment record into a VkRenderingAttachmentInfo, minus
+                // its clear value (the caller fills color vs depth/stencil clears).
+                const auto resolveAttachment =
+                    [&](std::uint32_t attachmentIndex, VkRenderingAttachmentInfo& outInfo,
+                        CommandStreamRenderingAttachmentRecord& outRecord)
+                    -> std::optional<CommandBufferRecordingError> {
+                    outRecord = renderingTemplateTableView->attachmentRecord(
+                        renderingTemplateSlot, attachmentIndex);
+                    if (imageViewTable == nullptr) {
+                        return MissingImageViewTable;
+                    }
+                    if (outRecord.imageViewSlot >= imageViewTable->slotCount()) {
+                        return ImageViewSlotOutOfRange;
+                    }
+                    outInfo = VkRenderingAttachmentInfo{};
+                    outInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    outInfo.imageView = imageViewTable->imageView(outRecord.imageViewSlot);
+                    outInfo.imageLayout = mapCommandStreamImageLayout(
+                        static_cast<CommandStreamImageLayout>(outRecord.imageLayoutValue));
+                    outInfo.loadOp = mapCommandStreamAttachmentLoadOp(
+                        static_cast<CommandStreamAttachmentLoadOp>(outRecord.loadOpValue));
+                    outInfo.storeOp = mapCommandStreamAttachmentStoreOp(
+                        static_cast<CommandStreamAttachmentStoreOp>(outRecord.storeOpValue));
+                    return std::nullopt;
+                };
+
+                std::vector<VkRenderingAttachmentInfo> colorAttachmentInfos;
+                colorAttachmentInfos.reserve(templateRecord.colorAttachmentCount);
+                for (std::uint32_t colorIndex = 0;
+                     colorIndex < templateRecord.colorAttachmentCount; ++colorIndex) {
+                    VkRenderingAttachmentInfo colorInfo{};
+                    CommandStreamRenderingAttachmentRecord colorRecord{};
+                    if (const auto attachmentError =
+                            resolveAttachment(colorIndex, colorInfo, colorRecord)) {
+                        return fail(*attachmentError, commandIndex, VK_SUCCESS);
+                    }
+                    std::memcpy(&colorInfo.clearValue.color.float32, colorRecord.clearValue,
+                                sizeof colorRecord.clearValue);
+                    colorAttachmentInfos.push_back(colorInfo);
+                }
+
+                VkRenderingAttachmentInfo depthAttachmentInfo{};
+                const bool hasDepthAttachment = templateRecord.depthAttachmentPresent != 0u;
+                if (hasDepthAttachment) {
+                    CommandStreamRenderingAttachmentRecord depthRecord{};
+                    if (const auto attachmentError = resolveAttachment(
+                            templateRecord.colorAttachmentCount, depthAttachmentInfo,
+                            depthRecord)) {
+                        return fail(*attachmentError, commandIndex, VK_SUCCESS);
+                    }
+                    // Depth clear: clearValue[0] = depth (float), clearValue[1] bits = stencil.
+                    depthAttachmentInfo.clearValue.depthStencil.depth = depthRecord.clearValue[0];
+                    std::memcpy(&depthAttachmentInfo.clearValue.depthStencil.stencil,
+                                &depthRecord.clearValue[1],
+                                sizeof depthAttachmentInfo.clearValue.depthStencil.stencil);
+                }
+
+                VkRenderingInfo renderingInfo{};
+                renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                renderingInfo.renderArea.offset =
+                    VkOffset2D{templateRecord.renderAreaOffsetX,
+                               templateRecord.renderAreaOffsetY};
+                renderingInfo.renderArea.extent =
+                    VkExtent2D{templateRecord.renderAreaWidth,
+                               templateRecord.renderAreaHeight};
+                renderingInfo.layerCount = templateRecord.layerCount;
+                renderingInfo.viewMask = templateRecord.viewMask;
+                renderingInfo.colorAttachmentCount =
+                    static_cast<std::uint32_t>(colorAttachmentInfos.size());
+                renderingInfo.pColorAttachments = colorAttachmentInfos.data();
+                renderingInfo.pDepthAttachment =
+                    hasDepthAttachment ? &depthAttachmentInfo : nullptr;
+                vkCmdBeginRendering(commandBuffer, &renderingInfo);
+                hasOpenRenderingScope = true;
+                break;
+            }
+            case CommandStreamOpcode::EndRendering: {
+                if (!hasOpenRenderingScope) {
+                    return fail(RenderingScopeNotOpen, commandIndex, VK_SUCCESS);
+                }
+                vkCmdEndRendering(commandBuffer);
+                hasOpenRenderingScope = false;
                 break;
             }
             default:
