@@ -1,33 +1,46 @@
 # §6 Panama / FFM 绑定层规约
 
-> 适用范围：`Mod/` 中一切经 Java Panama (FFM API, JEP 454) 调用 `Native/` 的代码，
-> 及 IR 中对 native 调用的标注。这是 Java↔Native 边界，**项目风险最高处**。
-> 服务 T0[1] (性能) 与 T0[2] (可维护)。本规约与 §2.3 (`@note ThreadSafety` /
-> `@warning MemoryOwnership`) 互为落地。
+> 适用范围：`Core/` 中一切经 Java Panama (FFM API, JEP 454) 调用 `Native/` 的代码，
+> 及 IR 中对 native 调用的标注；`Mod/` 只负责加载 Core 产物和挂接游戏生命周期。
+> 这是 Java↔Native 边界，**项目风险最高处**。服务 T0[1] (性能) 与 T0[2] (可维护)。
+> 本规约与 §2.3 (`@note ThreadSafety` / `@warning MemoryOwnership`) 互为落地。
 
 ---
 
-## §6.1 downcall handle 的编译期解析与常量嵌入 (服务 T0[1])
+## §6.1 downcall handle 的解析与常量嵌入 (服务 T0[1])
 
-- **downcall `MethodHandle` 在图编译期 (JIT codegen) 解析完成**，不在运行时解析。
+### §6.1.1 生成热路径
+
+- 生成热路径的 downcall `MethodHandle` 在图编译期 (JIT codegen) 解析完成，不在执行期解析。
 - 解析结果**以常量方式嵌入生成字节码**：通过 `invokedynamic` + 常量 bootstrap
   (`ConstantBootstraps` / `condy`) 绑定，**保证调用点单态 (monomorphic)**，便于
   HotSpot C2 内联。
-- 运行时热路径**禁止**出现 handle 查表、反射、`Linker` 二次解析。
+- 执行期热路径**禁止**出现 handle 查表、反射、`Linker` 二次解析。
 - 生成代码对 native 函数的每个调用点，其 `FunctionDescriptor` 在编译期确定并作为常量。
 
-## §6.2 trivial / critical 标注 (IR 层显式区分，强制)
+### §6.1.2 手写 load/init 慢路径
 
-每个 native 调用**必须在 IR 层显式标注**其调用属性，codegen 据此选择 `Linker.Option`：
+在 IR/codegen 尚未参与的手写 load/init binding 中，允许在 binding 实例创建时解析一次
+native symbol 并创建一次 `MethodHandle`，随后以该实例的不可变成员保存。每次业务调用中
+禁止重复 symbol lookup、`Linker` 解析或 `FunctionDescriptor` 构造；handle 不得放入全局
+static cache，且生命周期不得超过持有 lookup 的有界 `Arena`。
 
-| 类别         | 判据                                   | 处理                                        | 示例                                  |
-| ------------ | -------------------------------------- | ------------------------------------------- | ------------------------------------- |
-| trivial      | 高频、非阻塞、不涉及 driver 同步       | 标 `Linker.Option.isTrivial` (critical 路径) | `vkCmdBindPipeline`, `vkCmdDraw`      |
-| non-trivial  | 会阻塞 / 涉及 driver 同步 / 长耗时     | **禁止**标 trivial/critical                 | `vkQueueSubmit`, `vkWaitForFences`    |
+## §6.2 non-critical / critical 标注 (编译期显式区分，强制)
 
-- **误标 non-trivial 为 trivial 会导致 JVM 安全点/GC 交互异常**，属严重缺陷。
+每个 native 调用**必须在 IR 或手写 binding 声明处显式标注**其调用属性；codegen/binding
+据此在构造 handle 时选择固定的 `Linker.Option`：
+
+| 类别         | 判据                                   | JDK 25 处理                                        | 示例                                  |
+| ------------ | -------------------------------------- | -------------------------------------------------- | ------------------------------------- |
+| critical     | 高频、非阻塞、不涉及 driver 同步       | `Linker.Option.critical(boolean allowHeapAccess)`  | `vkCmdBindPipeline`, `vkCmdDraw`      |
+| non-critical | 会阻塞、涉及 driver 同步、分配或长耗时 | **省略** `Linker.Option.critical(...)`             | module validation, `vkQueueSubmit`    |
+
+- **误标 non-critical 为 critical 会导致 JVM 安全点/GC 交互异常**，属严重缺陷。
 - IR 节点定义处必须携带该属性字段；codegen 不得对未标注的 native 调用生成代码。
-- 该属性是**编译期决定**，禁止运行时判断。
+- 手写 binding 须在类型/方法文档中固定分类，不得因调用参数在运行时切换。
+- 该属性是**编译期或 binding 创建期决定**，禁止业务调用时判断。
+- P19 的 module-validation 调用会遍历不定长模块、排序并分配临时容器，固定为
+  **non-critical**，不得传 `Linker.Option.critical(...)`。
 
 ## §6.3 跨边界内存所有权矩阵 (强制，落地 §2.3 @warning MemoryOwnership)
 
@@ -42,11 +55,15 @@
 - `Arena` 生命周期必须显式且可推理：优先 `Arena.ofConfined` (单线程) 或有界作用域，
   避免 `Arena.global` 泄漏。跨线程共享须用 `Arena.ofShared` 并在注释标明。
 - **禁止将短生命周期 Arena 关联的 `MemorySegment`/`MethodHandle` 逃逸到更长生命周期。**
+- P19 module validation 是同步借用：Java 拥有 module 与 status segment；Native 仅在调用期间
+  读取/写入，不保留 pointer/view。lookup Arena 由 binding 实例拥有，status Arena 每次调用
+  单独创建并在返回后关闭。
 
 ## §6.4 异常与错误跨边界 (对齐 §7)
 
 - **禁止 Java 异常穿越 FFM 边界**；upcall (若有) 内部必须捕获所有异常并转为错误码/状态。
 - **Native 以错误码 / 状态返回**表达失败，Java 侧在慢路径转译为受检异常 (见 §7)。
+- Native C ABI wrapper 必须捕获全部 C++ 异常并转为固定的 internal-failure 状态。
 - 热路径的 native 调用不做异常控制流。
 
 ## §6.5 线程安全标注 (落地 §2.3 @note ThreadSafety)
@@ -54,3 +71,48 @@
 - 每个 Panama 调用点/包装方法的注释**首行**必须标出所调 Native 侧的并发安全性
   (是否可并发录制、是否需外部同步)，与 `Native/` 侧对应函数的 `@note ThreadSafety` 一致。
 - 多线程指令录制 (见 `THREADED_RECORDING`) 的 lane 划分假设必须在两侧注释对齐。
+
+## §6.6 P19 CommandStream module validation Version 1 ABI
+
+P19 只建立 BECM container 与内嵌 BECS lane 的真实 FFM 校验边界，不包含 resource-table
+schema validation、Vulkan materialization、command-buffer recording、opaque native owner、
+`CompiledRenderPipeline` 或 ClassLoader。接口名必须使用 validation 语义，不得宣称完整 load。
+
+Native shared library target 固定为 `BarriEwwNativeFfm`，唯一 Version 1 entry point 为：
+
+```cpp
+enum class NativeCommandStreamModuleValidationOperationResult : std::uint32_t {
+    Success = 0,
+    InvalidArgument = 1,
+    ValidationFailure = 2,
+    InternalFailure = 3,
+};
+
+struct NativeCommandStreamModuleValidationStatus {
+    std::uint32_t moduleValidationErrorCode;      // offset 0
+    std::uint32_t laneStreamValidationErrorCode; // offset 4
+    std::uint64_t moduleByteOffset;               // offset 8
+    std::uint64_t laneStreamByteOffset;           // offset 16
+}; // sizeof == 24, alignof == 8
+
+extern "C" NativeCommandStreamModuleValidationOperationResult
+barriEwwValidateCommandStreamModuleVersion1(
+    const void* moduleBytes,
+    std::uint64_t moduleByteSize,
+    NativeCommandStreamModuleValidationStatus* validationStatus) noexcept;
+```
+
+固定语义：
+
+1. `validationStatus` 非空时，边界在执行其他工作前将全部字段清零；成功时保持全零。
+2. `ValidationFailure` 原样承载 `CommandStreamModuleValidationError` 与可选的嵌套
+   `CommandStreamValidationError` 稳定数值；`LaneStreamInvalid` 同时携带 module-relative
+   lane-section offset 与 lane-relative nested offset。
+3. 空 pointer、无法表示为 host `std::size_t` 的长度返回 `InvalidArgument`；意外 C++ 异常
+   返回 `InternalFailure`。任何异常均不得穿越 ABI。
+4. ABI 仅使用固定宽度标量与 pointer；`std::expected`/`std::span`/`std::optional`/class
+   不得跨边界。布局须由 `sizeof`/`alignof`/`offsetof`/standard-layout/trivially-copyable
+   compile-time assertions 钉死。
+5. Version 1 symbol/layout 一经发布不得原位 breaking 修改；不兼容版本增加新 Version symbol。
+6. Java binding 接受明确的 absolute library `Path`，不使用全局 symbol cache、
+   `System.loadLibrary` 搜索或 Mod 资源解压。对应生产打包规则留待 Mod feature 固化。
