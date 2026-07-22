@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-07-22
+
+- [新增] §9.14 [CommandStreamFormat.md](CommandStreamFormat.md) —— GraphicsPipelineTable
+  v0.1（所有者裁决 P16）：section type `0x0007`，80-byte 定长记录（双着色器槽/推送常量/
+  拓扑/深度状态/剔除绕向/内联 8 槽颜色附件格式），面向动态渲染
+  (`VkPipelineRenderingCreateInfo`) 材质化。图形管线不复用 §9.8 PipelineHandleTable——
+  改 16-byte entry 属 §9.13 breaking change，新增 section type 为 additive minor。
+  v0.1 固定态：无 vertex input（BDA 顶点拉取）、无混合、单采样、viewport/scissor 恒动态。
+- [修改] §9.11 [CommandStreamFormat.md](CommandStreamFormat.md) —— 固化
+  BindGraphicsPipeline/SetViewport/SetScissor 载荷；补录制期规则（Draw 需开放渲染作用域 +
+  已绑图形管线 + 已设 viewport/scissor；绑管线时校验附件格式与作用域模板匹配，ADR-0002 D5）。
+- [修改] §9.12 [CommandStreamFormat.md](CommandStreamFormat.md) —— 新增
+  PrimitiveTopology/CompareOperation/CullMode/FrontFace 四组中立编码。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P16 已裁决并迁入 §9.14/§9.11/§9.12。
+
+---
+
 ## 2026-07-21
 
 - [新增] §9 [CommandStreamFormat.md](CommandStreamFormat.md) —— 将 BECS typed handle-table ABI
