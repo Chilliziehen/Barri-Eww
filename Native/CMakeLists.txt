@@ -57,7 +57,8 @@ target_sources(BarriEwwNative
         src/CommandStream/CommandStreamShaderModuleTableValidator.cpp
         src/CommandStream/CommandStreamPipelineHandleTableValidator.cpp
         src/CommandStream/CommandStreamImageHandleTableValidator.cpp
-        src/CommandStream/CommandStreamImageViewHandleTableValidator.cpp)
+        src/CommandStream/CommandStreamImageViewHandleTableValidator.cpp
+        src/CommandStream/CommandStreamRenderingTemplateTableValidator.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC

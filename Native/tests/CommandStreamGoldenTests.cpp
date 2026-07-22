@@ -15,9 +15,11 @@
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
+#include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
 using barrieww::CommandStreamBarrierBatchTableValidator;
+using barrieww::CommandStreamRenderingTemplateTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
 using barrieww::CommandStreamBufferUsage;
@@ -120,6 +122,35 @@ TEST_CASE("Committed ImageView table golden validates and decodes as authored",
     REQUIRE(secondEntry.mipLevelCount == 1u);
     REQUIRE(secondEntry.baseArrayLayer == 0u);
     REQUIRE(secondEntry.arrayLayerCount == 1u);
+}
+
+// RenderingTemplateTable ABI arbiter: Java emits the committed table byte-exactly, and
+// this Native test validates and decodes the same fixture. The source image-view slot is
+// deliberately not resolved here; that is the recorder's cross-table responsibility.
+TEST_CASE("Committed rendering template table golden validates and decodes as authored",
+          "[commandStream][golden][renderingTemplateTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/RenderingTemplateTable.becs");
+    REQUIRE(goldenBytes.size() == 80u);
+
+    const auto validationResult =
+        CommandStreamRenderingTemplateTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->templateCount() == 1u);
+
+    const auto record = validationResult->templateRecord(0u);
+    REQUIRE(record.colorAttachmentCount == 1u);
+    REQUIRE(record.depthAttachmentPresent == 0u);
+    REQUIRE(record.renderAreaWidth == 8u);
+    REQUIRE(record.renderAreaHeight == 8u);
+    REQUIRE(record.layerCount == 1u);
+
+    const auto attachment = validationResult->attachmentRecord(0u, 0u);
+    REQUIRE(attachment.imageViewSlot == 0u);
+    REQUIRE(attachment.imageLayoutValue == 2u); // ColorAttachment
+    REQUIRE(attachment.loadOpValue == 1u);      // Clear
+    REQUIRE(attachment.storeOpValue == 0u);     // Store
+    REQUIRE(attachment.clearValue[3] == 1.0f);
 }
 
 // Module-level arbiter: the same committed golden module must be produced byte-exactly
