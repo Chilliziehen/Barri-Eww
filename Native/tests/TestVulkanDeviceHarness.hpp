@@ -53,6 +53,11 @@ public:
         return m_supportsBufferDeviceAddress;
     }
 
+    /** Whether dynamic rendering (core Vulkan 1.3) was enabled on the device. */
+    [[nodiscard]] bool supportsDynamicRendering() const noexcept {
+        return m_supportsDynamicRendering;
+    }
+
     /** Borrowed-handle create info for constructing a VulkanContext (see class notes). */
     [[nodiscard]] VulkanContextCreateInfo makeContextCreateInfo() const {
         VulkanContextCreateInfo contextCreateInfo{};
@@ -98,7 +103,7 @@ private:
         VkApplicationInfo applicationInfo{};
         applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         applicationInfo.pApplicationName = "BarriEwwNativeTests";
-        applicationInfo.apiVersion = VK_API_VERSION_1_2;
+        applicationInfo.apiVersion = VK_API_VERSION_1_3;
         VkInstanceCreateInfo instanceCreateInfo{};
         instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         instanceCreateInfo.pApplicationInfo = &applicationInfo;
@@ -140,23 +145,43 @@ private:
             return false;
         }
 
-        // Query and, when available, enable bufferDeviceAddress (core 1.2 feature) so
-        // BDA-using tests can run; tests SKIP via supportsBufferDeviceAddress() otherwise.
+        // Query and, when available, enable bufferDeviceAddress (core 1.2) and
+        // dynamicRendering (core 1.3); tests SKIP via the corresponding accessor when a
+        // feature is unavailable.
+        VkPhysicalDeviceProperties deviceProperties{};
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &deviceProperties);
+        const bool deviceSupportsVulkan13 =
+            deviceProperties.apiVersion >= VK_API_VERSION_1_3;
+
+        VkPhysicalDeviceVulkan13Features supportedVulkan13Features{};
+        supportedVulkan13Features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         VkPhysicalDeviceVulkan12Features supportedVulkan12Features{};
         supportedVulkan12Features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        supportedVulkan12Features.pNext =
+            deviceSupportsVulkan13 ? &supportedVulkan13Features : nullptr;
         VkPhysicalDeviceFeatures2 supportedFeatures{};
         supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supportedFeatures.pNext = &supportedVulkan12Features;
         vkGetPhysicalDeviceFeatures2(m_physicalDevice, &supportedFeatures);
         m_supportsBufferDeviceAddress =
             supportedVulkan12Features.bufferDeviceAddress == VK_TRUE;
+        m_supportsDynamicRendering =
+            deviceSupportsVulkan13 && supportedVulkan13Features.dynamicRendering == VK_TRUE;
 
+        VkPhysicalDeviceVulkan13Features enabledVulkan13Features{};
+        enabledVulkan13Features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        enabledVulkan13Features.dynamicRendering =
+            m_supportsDynamicRendering ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceVulkan12Features enabledVulkan12Features{};
         enabledVulkan12Features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         enabledVulkan12Features.bufferDeviceAddress =
             m_supportsBufferDeviceAddress ? VK_TRUE : VK_FALSE;
+        enabledVulkan12Features.pNext =
+            m_supportsDynamicRendering ? &enabledVulkan13Features : nullptr;
 
         const float queuePriority = 1.0f;
         VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -190,6 +215,7 @@ private:
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     bool m_supportsBufferDeviceAddress = false;
+    bool m_supportsDynamicRendering = false;
 };
 
 } // namespace barrieww::testing

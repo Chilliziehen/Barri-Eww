@@ -4,6 +4,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include "BarriEww/CommandStream/CommandStreamAttachmentLoadOp.hpp"
+#include "BarriEww/CommandStream/CommandStreamAttachmentStoreOp.hpp"
 #include "BarriEww/CommandStream/CommandStreamImageAspect.hpp"
 #include "BarriEww/CommandStream/CommandStreamImageFormat.hpp"
 #include "BarriEww/CommandStream/CommandStreamImageLayout.hpp"
@@ -76,6 +78,37 @@ mapCommandStreamImageAspectMask(std::uint32_t neutralAspectMask) noexcept {
         vulkanAspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
     }
     return vulkanAspectMask;
+}
+
+/**
+ * @note ThreadSafety: Pure function; fully thread-safe.
+ * @brief Maps a backend-neutral attachment load operation onto VkAttachmentLoadOp.
+ * @param loadOp The assigned neutral load operation.
+ * @return VkAttachmentLoadOp The concrete Vulkan load operation.
+ */
+[[nodiscard]] constexpr VkAttachmentLoadOp
+mapCommandStreamAttachmentLoadOp(CommandStreamAttachmentLoadOp loadOp) noexcept {
+    switch (loadOp) {
+        case CommandStreamAttachmentLoadOp::Load: return VK_ATTACHMENT_LOAD_OP_LOAD;
+        case CommandStreamAttachmentLoadOp::Clear: return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        case CommandStreamAttachmentLoadOp::DontCare: return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    }
+    return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+}
+
+/**
+ * @note ThreadSafety: Pure function; fully thread-safe.
+ * @brief Maps a backend-neutral attachment store operation onto VkAttachmentStoreOp.
+ * @param storeOp The assigned neutral store operation.
+ * @return VkAttachmentStoreOp The concrete Vulkan store operation.
+ */
+[[nodiscard]] constexpr VkAttachmentStoreOp
+mapCommandStreamAttachmentStoreOp(CommandStreamAttachmentStoreOp storeOp) noexcept {
+    switch (storeOp) {
+        case CommandStreamAttachmentStoreOp::Store: return VK_ATTACHMENT_STORE_OP_STORE;
+        case CommandStreamAttachmentStoreOp::DontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    }
+    return VK_ATTACHMENT_STORE_OP_DONT_CARE;
 }
 
 } // namespace barrieww

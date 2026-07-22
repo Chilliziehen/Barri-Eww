@@ -54,6 +54,18 @@ enum class CommandBufferRecordingError : std::uint32_t {
     ImageSubresourceOutOfRange = 24,
     /** No buffer table was supplied (bufferTable is required, see recording inputs). */
     MissingBufferTable = 25,
+    /** BeginRendering was recorded but no rendering template table was provided. */
+    MissingRenderingTemplateTable = 26,
+    /** A command references a rendering template slot outside the table. */
+    RenderingTemplateSlotOutOfRange = 27,
+    /** An attachment references an image view but no image view table was provided. */
+    MissingImageViewTable = 28,
+    /** An attachment references an image-view slot outside the table. */
+    ImageViewSlotOutOfRange = 29,
+    /** BeginRendering was recorded while a rendering scope is already open. */
+    NestedRenderingScope = 30,
+    /** EndRendering was recorded without an open rendering scope. */
+    RenderingScopeNotOpen = 31,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */
