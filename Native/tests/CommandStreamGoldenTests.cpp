@@ -15,8 +15,10 @@
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamGraphicsPipelineTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamImageHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamShaderModuleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
 using barrieww::CommandStreamBarrierBatchTableValidator;
@@ -25,7 +27,9 @@ using barrieww::CommandStreamRenderingTemplateTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
 using barrieww::CommandStreamBufferUsage;
+using barrieww::CommandStreamImageHandleTableValidator;
 using barrieww::CommandStreamImageViewHandleTableValidator;
+using barrieww::CommandStreamShaderModuleTableValidator;
 using barrieww::CommandStreamModuleSectionType;
 using barrieww::CommandStreamModuleValidator;
 using barrieww::CommandStreamOpcode;
@@ -255,4 +259,77 @@ TEST_CASE("Committed golden module validates and decodes as authored",
     const auto laneOneDrawRecord = *laneOneView.begin();
     REQUIRE(laneOneDrawRecord.opcode == CommandStreamOpcode::Draw);
     REQUIRE(readUnsignedInteger(laneOneDrawRecord.payloadBytes, 0u) == 6u); // vertexCount
+}
+
+// Full-frame module arbiter (structure side): the committed FirstTriangleModule must
+// be produced byte-exactly by the Java write-side composition (Core test) and must
+// validate and decode here — module container, every table section and the lane-0
+// stream. GPU replay of the same fixture lives in GraphicsModuleExecutionTests.
+TEST_CASE("Committed first triangle module golden validates and decodes as authored",
+          "[commandStream][golden][graphicsModule]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/FirstTriangleModule.becs");
+    REQUIRE(goldenBytes.size() == 2280u);
+
+    const auto moduleView = CommandStreamModuleValidator::validate(goldenBytes);
+    REQUIRE(moduleView.has_value());
+    REQUIRE(moduleView->graphHash() == 0x1122334455667788ull);
+    REQUIRE(moduleView->laneStreamCount() == 1u);
+    REQUIRE(moduleView->sectionEntries().size() == 8u);
+
+    const auto bufferSection =
+        moduleView->findSection(CommandStreamModuleSectionType::BufferHandleTable);
+    const auto imageSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ImageHandleTable);
+    const auto imageViewSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ImageViewHandleTable);
+    const auto shaderSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ShaderModuleTable);
+    const auto graphicsPipelineSection =
+        moduleView->findSection(CommandStreamModuleSectionType::GraphicsPipelineTable);
+    const auto barrierSection =
+        moduleView->findSection(CommandStreamModuleSectionType::BarrierBatchTable);
+    const auto renderingTemplateSection =
+        moduleView->findSection(CommandStreamModuleSectionType::RenderingTemplateTable);
+    REQUIRE(bufferSection.has_value());
+    REQUIRE(imageSection.has_value());
+    REQUIRE(imageViewSection.has_value());
+    REQUIRE(shaderSection.has_value());
+    REQUIRE(graphicsPipelineSection.has_value());
+    REQUIRE(barrierSection.has_value());
+    REQUIRE(renderingTemplateSection.has_value());
+
+    // Every table section independently passes its own schema validator.
+    REQUIRE(CommandStreamBufferHandleTableValidator::validate(*bufferSection).has_value());
+    REQUIRE(CommandStreamImageHandleTableValidator::validate(*imageSection).has_value());
+    REQUIRE(CommandStreamImageViewHandleTableValidator::validate(*imageViewSection)
+                .has_value());
+    REQUIRE(CommandStreamShaderModuleTableValidator::validate(*shaderSection).has_value());
+    REQUIRE(CommandStreamBarrierBatchTableValidator::validate(*barrierSection).has_value());
+    REQUIRE(CommandStreamRenderingTemplateTableValidator::validate(*renderingTemplateSection)
+                .has_value());
+    const auto graphicsPipelineTableView =
+        CommandStreamGraphicsPipelineTableValidator::validate(*graphicsPipelineSection);
+    REQUIRE(graphicsPipelineTableView.has_value());
+    const auto pipelineRecord = graphicsPipelineTableView->pipelineRecord(0u);
+    REQUIRE(pipelineRecord.pushConstantByteSize == 8u);
+    REQUIRE(pipelineRecord.topologyValue == 4u); // TriangleList
+    REQUIRE(pipelineRecord.colorAttachmentFormatValues[0] == 1u); // R8G8B8A8Unorm
+
+    // The lane-0 stream decodes as the exact first-triangle command sequence.
+    const auto& laneView = moduleView->laneStream(0u);
+    REQUIRE(laneView.commandCount() == 10u);
+    constexpr CommandStreamOpcode expectedOpcodes[] = {
+        CommandStreamOpcode::ExecuteBarrierBatch, CommandStreamOpcode::BeginRendering,
+        CommandStreamOpcode::BindGraphicsPipeline,
+        CommandStreamOpcode::PushBufferDeviceAddress, CommandStreamOpcode::SetViewport,
+        CommandStreamOpcode::SetScissor, CommandStreamOpcode::Draw,
+        CommandStreamOpcode::EndRendering, CommandStreamOpcode::ExecuteBarrierBatch,
+        CommandStreamOpcode::CopyImageToBuffer};
+    std::size_t expectedOpcodeIndex = 0;
+    for (const auto commandRecord : laneView) {
+        REQUIRE(commandRecord.opcode == expectedOpcodes[expectedOpcodeIndex]);
+        ++expectedOpcodeIndex;
+    }
+    REQUIRE(expectedOpcodeIndex == 10u);
 }

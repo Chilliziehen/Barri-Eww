@@ -9,7 +9,9 @@ package barrieww.core.commandstream;
  */
 public final class CommandStreamPipelineStage {
 
+    public static final long s_topOfPipe = 0x1L;
     public static final long s_drawIndirect = 0x2L;
+    public static final long s_colorAttachmentOutput = 0x400L;
     public static final long s_computeShader = 0x800L;
     public static final long s_transfer = 0x1000L;
     public static final long s_allCommands = 0x10000L;
