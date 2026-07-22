@@ -135,6 +135,17 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *           requires a bound graphics pipeline             -> NoBoundGraphicsPipeline
  *           requires viewport and scissor both set         -> ViewportOrScissorNotSet
  *           vkCmdDraw(vertexCount, instanceCount, firstVertex, firstInstance)
+ *         case DrawIndirect:
+ *           same scope/pipeline/viewport preconditions as Draw
+ *           v0.1: drawCount == 1                           -> UnsupportedIndirectDrawCount
+ *           v0.1: strideByteCount == 16                    -> InvalidIndirectDrawStride
+ *           buffer slot checks (bounds/bound as above)
+ *           buffer must carry the Indirect usage bit       -> MissingIndirectUsage
+ *           offset % 4 == 0                                -> MisalignedIndirectOffset
+ *           offset + drawCount * 16 within the buffer      -> IndirectArgumentsOutOfBounds
+ *           vkCmdDrawIndirect(buffer, offset, drawCount, stride)
+ *           // The GPU decides the workload at execution time; the CPU prerecorded
+ *           // everything (the GPU-driven shape of ADR-0001).
  *         default                                          -> UnsupportedOpcode
  *     vkEndCommandBuffer(commandBuffer)
  */
@@ -866,6 +877,60 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                           readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u),
                           readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u),
                           readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u));
+                break;
+            }
+            case CommandStreamOpcode::DrawIndirect: {
+                // Pinned payload: +0 bufferSlot u32, +4 drawCount u32,
+                // +8 bufferOffset u64, +16 strideByteCount u32, +20 reserved.
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto drawCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                const auto bufferOffset =
+                    readPayloadValue<std::uint64_t>(commandRecord.payloadBytes, 8u);
+                const auto strideByteCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 16u);
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (!hasBoundGraphicsPipeline) {
+                    return fail(NoBoundGraphicsPipeline, commandIndex, VK_SUCCESS);
+                }
+                if (!hasSetViewport || !hasSetScissor) {
+                    return fail(ViewportOrScissorNotSet, commandIndex, VK_SUCCESS);
+                }
+                if (drawCount != 1u) {
+                    return fail(UnsupportedIndirectDrawCount, commandIndex, VK_SUCCESS);
+                }
+                if (strideByteCount != sizeof(VkDrawIndirectCommand)) {
+                    return fail(InvalidIndirectDrawStride, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& drawArgumentsSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!drawArgumentsSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if ((drawArgumentsSlot.neutralUsageFlags
+                     & static_cast<std::uint32_t>(CommandStreamBufferUsage::Indirect))
+                    == 0u) {
+                    return fail(MissingIndirectUsage, commandIndex, VK_SUCCESS);
+                }
+                if (bufferOffset % 4u != 0u) {
+                    return fail(MisalignedIndirectOffset, commandIndex, VK_SUCCESS);
+                }
+                if (bufferOffset + static_cast<std::uint64_t>(drawCount)
+                        * sizeof(VkDrawIndirectCommand)
+                    > drawArgumentsSlot.byteSize) {
+                    return fail(IndirectArgumentsOutOfBounds, commandIndex, VK_SUCCESS);
+                }
+                // The GPU decides the workload at execution time; the CPU prerecorded
+                // everything (the GPU-driven shape of ADR-0001).
+                vkCmdDrawIndirect(commandBuffer, drawArgumentsSlot.buffer, bufferOffset,
+                                  drawCount, strideByteCount);
                 break;
             }
             default:

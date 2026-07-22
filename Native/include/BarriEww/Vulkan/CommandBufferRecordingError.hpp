@@ -79,6 +79,10 @@ enum class CommandBufferRecordingError : std::uint32_t {
     ViewportOrScissorNotSet = 36,
     /** A bound pipeline's attachment formats do not match the open scope's template. */
     AttachmentFormatMismatch = 37,
+    /** A DrawIndirect drawCount other than 1 (v0.1; multi-draw is a later increment). */
+    UnsupportedIndirectDrawCount = 38,
+    /** A DrawIndirect strideByteCount other than 16 (v0.1 pinned argument stride). */
+    InvalidIndirectDrawStride = 39,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */
