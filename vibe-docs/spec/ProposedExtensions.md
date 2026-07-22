@@ -27,6 +27,7 @@
 | P14  | ImageViewHandleTable v0.1 ABI + BECS staged integration gate | CommandStreamFormat §9.2 / Testing §4.2.1 |
 | P15  | 全量 BECS ABI 规范固化 (流头/命令头/模块容器/全部 handle·barrier·template 表/命令 opcode 载荷/中立编码枚举) | CommandStreamFormat §9.3–§9.13 |
 | P16  | GraphicsPipelineTable v0.1 (section type 0x0007, 80B 定长记录, 动态渲染管线; BindGraphicsPipeline/SetViewport/SetScissor 载荷; 拓扑/比较/剔除/绕向中立编码) | CommandStreamFormat §9.14 / §9.11 / §9.12 |
+| P17  | DrawIndirect 载荷固化 (GPU-driven 绘制; v0.1 限 drawCount==1/stride==16, 多重间接绘制留待 additive 增量) | CommandStreamFormat §9.11 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
 | —    | 新增开关 `BARRIEWW_CRITICAL_HOTPATH_LOG`          | BuildSystem §3.3 / §7.2.1 (所有者补充)      |

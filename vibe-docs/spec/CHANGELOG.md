@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-07-22 (第二批)
+
+- [修改] §9.11 [CommandStreamFormat.md](CommandStreamFormat.md) —— 固化 DrawIndirect
+  载荷 (byteSize 32: bufferSlot/drawCount/bufferOffset/strideByteCount) 与录制期规则
+  (所有者裁决 P17)：继承 Draw 全部前置条件,另需 Indirect usage、4 对齐偏移、参数
+  区间在缓冲内;v0.1 仅接受 drawCount==1 且 stride==16,多重间接绘制留待 additive
+  增量(设备能力门控)。GPU-driven 形态:参数由同流 compute 阶段产出,CPU 预录时
+  不知晓工作量 (ADR-0001)。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P17 已裁决并迁入 §9.11。
+
+---
+
 ## 2026-07-22
 
 - [新增] §9.14 [CommandStreamFormat.md](CommandStreamFormat.md) —— GraphicsPipelineTable
