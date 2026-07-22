@@ -146,9 +146,9 @@ SectionDirectoryEntry (24 bytes):
 
 Section types: `0x0001 PipelineHandleTable`, `0x0002 BufferHandleTable`,
 `0x0003 ImageHandleTable`, `0x0004 ImageViewHandleTable`, `0x0005 SamplerHandleTable`
-(reserved), `0x0006 ShaderModuleTable`, `0x0010 BarrierBatchTable`,
-`0x0011 RenderingTemplateTable`, `0x0012 PushDescriptorTemplateTable` (reserved),
-`0x0020 LaneStream`.
+(reserved), `0x0006 ShaderModuleTable`, `0x0007 GraphicsPipelineTable` (§9.14),
+`0x0010 BarrierBatchTable`, `0x0011 RenderingTemplateTable`,
+`0x0012 PushDescriptorTemplateTable` (reserved), `0x0020 LaneStream`.
 
 Rules: sections lie inside the module and outside the directory, are 8-byte aligned, and
 do not overlap; no two directory entries share a `(sectionTypeValue, sectionIndex)`
