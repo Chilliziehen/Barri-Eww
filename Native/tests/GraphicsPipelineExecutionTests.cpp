@@ -97,10 +97,13 @@ std::vector<std::byte> makeShaderTableBytes(const std::vector<std::byte>& vertex
 
 /**
  * One graphics pipeline record: vertex slot 0 + fragment slot 1, TriangleList, no
- * culling, counter-clockwise, one R8G8B8A8Unorm color attachment, no depth, no push
- * constants. colorFormatValue is parameterized for the format-mismatch rejection test.
+ * culling, counter-clockwise, colorAttachmentCount attachments of colorFormatValue, no
+ * push constants. The parameters shape the format/count/depth-mismatch rejection tests
+ * and the depth materialization test (depth testing stays disabled throughout).
  */
-std::vector<std::byte> makeGraphicsPipelineTableBytes(std::uint32_t colorFormatValue = 1u) {
+std::vector<std::byte> makeGraphicsPipelineTableBytes(std::uint32_t colorFormatValue = 1u,
+                                                      std::uint32_t colorAttachmentCount = 1u,
+                                                      std::uint32_t depthFormatValue = 0u) {
     std::vector<std::byte> tableBytes;
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0});
@@ -108,17 +111,18 @@ std::vector<std::byte> makeGraphicsPipelineTableBytes(std::uint32_t colorFormatV
     appendValue(tableBytes, std::uint32_t{1}); // fragmentShaderModuleSlot
     appendValue(tableBytes, std::uint32_t{0}); // pushConstantByteSize
     appendValue(tableBytes, std::uint32_t{4}); // TriangleList
-    appendValue(tableBytes, std::uint32_t{1}); // colorAttachmentCount
-    appendValue(tableBytes, std::uint32_t{0}); // no depth attachment
+    appendValue(tableBytes, colorAttachmentCount);
+    appendValue(tableBytes, depthFormatValue);
     appendValue(tableBytes, std::uint32_t{0}); // depthTestEnable
     appendValue(tableBytes, std::uint32_t{0}); // depthWriteEnable
     appendValue(tableBytes, std::uint32_t{0}); // depthCompareOperationValue
     appendValue(tableBytes, std::uint32_t{1}); // CullMode::None
     appendValue(tableBytes, std::uint32_t{1}); // FrontFace::CounterClockwise
     appendValue(tableBytes, std::uint32_t{0}); // reservedFlags
-    appendValue(tableBytes, colorFormatValue);
-    for (std::uint32_t unusedIndex = 1; unusedIndex < 8u; ++unusedIndex) {
-        appendValue(tableBytes, std::uint32_t{0});
+    for (std::uint32_t formatIndex = 0; formatIndex < 8u; ++formatIndex) {
+        appendValue(tableBytes,
+                    formatIndex < colorAttachmentCount ? colorFormatValue
+                                                       : std::uint32_t{0});
     }
     return tableBytes;
 }
@@ -439,6 +443,67 @@ TEST_CASE("Recorded graphics pipeline draw round-trips rasterized texels",
     }
 }
 
+// Depth-carrying records exercise the materialization branches the color-only E2E
+// never reaches: VkPipelineRenderingCreateInfo depth (and stencil, for D24S8) formats,
+// the depth-stencil state block and the compare-operation mapping.
+TEST_CASE("Graphics pipeline materialization creates depth-carrying pipelines",
+          "[graphicsPipeline][gpu]") {
+    const auto harness = TestVulkanDeviceHarness::create();
+    if (harness == nullptr) {
+        SKIP("no usable Vulkan driver on this machine");
+    }
+    if (!harness->supportsDynamicRendering()) {
+        SKIP("driver does not support dynamic rendering (core Vulkan 1.3)");
+    }
+    const VulkanContext vulkanContext{harness->makeContextCreateInfo()};
+    const GraphicsExecutionFixture fixture{};
+    const auto shaderTableView =
+        CommandStreamShaderModuleTableValidator::validate(fixture.shaderTableBytes);
+    REQUIRE(shaderTableView.has_value());
+
+    SECTION("depth-tested D32Float pipeline") {
+        std::vector<std::byte> tableBytes;
+        appendValue(tableBytes, std::uint32_t{1});
+        appendValue(tableBytes, std::uint32_t{0});
+        appendValue(tableBytes, std::uint32_t{0}); // vertexShaderModuleSlot
+        appendValue(tableBytes, std::uint32_t{1}); // fragmentShaderModuleSlot
+        appendValue(tableBytes, std::uint32_t{0}); // pushConstantByteSize
+        appendValue(tableBytes, std::uint32_t{4}); // TriangleList
+        appendValue(tableBytes, std::uint32_t{1}); // colorAttachmentCount
+        appendValue(tableBytes, std::uint32_t{5}); // D32Float depth attachment
+        appendValue(tableBytes, std::uint32_t{1}); // depthTestEnable
+        appendValue(tableBytes, std::uint32_t{1}); // depthWriteEnable
+        appendValue(tableBytes, std::uint32_t{4}); // LessOrEqual
+        appendValue(tableBytes, std::uint32_t{3}); // CullMode::Back
+        appendValue(tableBytes, std::uint32_t{1}); // FrontFace::CounterClockwise
+        appendValue(tableBytes, std::uint32_t{0}); // reservedFlags
+        appendValue(tableBytes, std::uint32_t{1}); // R8G8B8A8Unorm
+        for (std::uint32_t unusedIndex = 1; unusedIndex < 8u; ++unusedIndex) {
+            appendValue(tableBytes, std::uint32_t{0});
+        }
+        const auto tableView =
+            CommandStreamGraphicsPipelineTableValidator::validate(tableBytes);
+        REQUIRE(tableView.has_value());
+        const auto creationResult = VulkanGraphicsPipelineTable::createFromTables(
+            vulkanContext, *tableView, *shaderTableView);
+        REQUIRE(creationResult.has_value());
+        REQUIRE(creationResult->slot(0u).pipeline != VK_NULL_HANDLE);
+    }
+
+    SECTION("D24UnormS8Uint pipeline chains the stencil attachment format") {
+        const std::vector<std::byte> tableBytes =
+            makeGraphicsPipelineTableBytes(1u, 1u, /*depthFormatValue=*/6u);
+        const auto tableView =
+            CommandStreamGraphicsPipelineTableValidator::validate(tableBytes);
+        REQUIRE(tableView.has_value());
+        const auto creationResult = VulkanGraphicsPipelineTable::createFromTables(
+            vulkanContext, *tableView, *shaderTableView);
+        REQUIRE(creationResult.has_value());
+        REQUIRE(creationResult->slot(0u).pipeline != VK_NULL_HANDLE);
+        REQUIRE(creationResult->pipelineRecord(0u).depthAttachmentFormatValue == 6u);
+    }
+}
+
 TEST_CASE("Graphics pipeline materialization rejects a shader slot outside the table",
           "[graphicsPipeline][gpu]") {
     const auto harness = TestVulkanDeviceHarness::create();
@@ -589,16 +654,16 @@ TEST_CASE("Graphics recording rejects invalid streams with the precise failure",
                 == CommandBufferRecordingError::ViewportOrScissorNotSet);
     }
 
-    SECTION("pipeline attachment format not matching the scope's template") {
-        // Same pipeline shape but declaring B8G8R8A8Unorm against the R8G8B8A8Unorm view.
-        const std::vector<std::byte> mismatchedTableBytes =
-            makeGraphicsPipelineTableBytes(/*colorFormatValue=*/2u);
-        const auto mismatchedTableView =
-            CommandStreamGraphicsPipelineTableValidator::validate(mismatchedTableBytes);
-        REQUIRE(mismatchedTableView.has_value());
-        auto mismatchedPipelineTable = VulkanGraphicsPipelineTable::createFromTables(
-            vulkanContext, *mismatchedTableView, *shaderTableView);
-        REQUIRE(mismatchedPipelineTable.has_value());
+    // Materializes the given pipeline table and records BeginRendering(template 0) +
+    // BindGraphicsPipeline(0) against it, returning the recording result. Exercises
+    // one branch of the bind-time template-compatibility check per call.
+    const auto recordBindAgainstScope = [&](std::vector<std::byte> pipelineTableBytes) {
+        const auto pipelineTableViewResult =
+            CommandStreamGraphicsPipelineTableValidator::validate(pipelineTableBytes);
+        REQUIRE(pipelineTableViewResult.has_value());
+        auto boundPipelineTable = VulkanGraphicsPipelineTable::createFromTables(
+            vulkanContext, *pipelineTableViewResult, *shaderTableView);
+        REQUIRE(boundPipelineTable.has_value());
 
         TestCommandStreamBuilder streamBuilder{0u};
         appendBeginRendering(streamBuilder);
@@ -606,13 +671,37 @@ TEST_CASE("Graphics recording rejects invalid streams with the precise failure",
         const std::vector<std::byte> streamBytes = streamBuilder.build();
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());
-        const auto recordingResult = CommandBufferRecorder::record(
+        return CommandBufferRecorder::record(
             harness->allocateCommandBuffer(), *streamView,
             {.bufferTable = &*bufferTable,
              .imageTable = sharedImageTable.get(),
              .imageViewTable = &*imageViewTable,
              .renderingTemplateTableView = &*renderingTemplateTableView,
-             .graphicsPipelineTable = &*mismatchedPipelineTable});
+             .graphicsPipelineTable = &*boundPipelineTable});
+    };
+
+    SECTION("pipeline attachment format not matching the scope's template") {
+        // Same pipeline shape but declaring B8G8R8A8Unorm against the R8G8B8A8Unorm view.
+        const auto recordingResult =
+            recordBindAgainstScope(makeGraphicsPipelineTableBytes(/*colorFormatValue=*/2u));
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::AttachmentFormatMismatch);
+    }
+
+    SECTION("pipeline color attachment count not matching the scope's template") {
+        // Two declared color attachments against the template's single one.
+        const auto recordingResult = recordBindAgainstScope(
+            makeGraphicsPipelineTableBytes(1u, /*colorAttachmentCount=*/2u));
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::AttachmentFormatMismatch);
+    }
+
+    SECTION("pipeline depth attachment against a depth-less template") {
+        // A declared D32Float depth attachment against the color-only template.
+        const auto recordingResult = recordBindAgainstScope(
+            makeGraphicsPipelineTableBytes(1u, 1u, /*depthFormatValue=*/5u));
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::AttachmentFormatMismatch);
