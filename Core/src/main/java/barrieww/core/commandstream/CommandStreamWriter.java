@@ -162,6 +162,31 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a DrawIndirect command (opcode 0x0012, §9.11) — the GPU-driven draw
+     * whose arguments live in the referenced buffer at record-unknown values. Pinned
+     * payload layout (mirrored by the native CommandBufferRecorder): +0 bufferSlot u32,
+     * +4 drawCount u32, +8 bufferOffset u64, +16 strideByteCount u32, +20 reserved.
+     * v0.1 recorders accept only drawCount 1 with strideByteCount 16.
+     *
+     * @param int bufferSlot Buffer table slot holding the draw arguments
+     * @param int drawCount Number of consecutive argument structures (v0.1: 1)
+     * @param long bufferOffset Byte offset of the first argument structure
+     * @param int strideByteCount Byte stride between argument structures (v0.1: 16)
+     */
+    public void appendDrawIndirect(int bufferSlot, int drawCount, long bufferOffset,
+                                   int strideByteCount) {
+        writeCommandHeader(CommandStreamOpcode.DRAW_INDIRECT, 32);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, drawCount);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 16, bufferOffset);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 24,
+                strideByteCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 28, 0);
+        m_currentByteOffset += 32;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Appends a Dispatch command (opcode 0x0020, ADR-0002 appendix A). The trailing
      * 4 padding bytes are written as zero explicitly so the output does not depend on
      * the allocator's zero-initialization.

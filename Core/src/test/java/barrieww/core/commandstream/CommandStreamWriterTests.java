@@ -119,6 +119,30 @@ class CommandStreamWriterTests {
     }
 
     @Test
+    void drawIndirectCommandUsesThePinnedPayloadLayout() {
+        ByteBuffer expectedBytes = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
+        expectedBytes.put(new byte[] {0x42, 0x45, 0x43, 0x53});
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMajor);
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMinor);
+        expectedBytes.putInt(0);
+        expectedBytes.putInt(1);
+        expectedBytes.putLong(64);
+        expectedBytes.putLong(s_goldenGraphHash);
+        expectedBytes.putShort((short) 0x0012).putShort((short) 0).putInt(32);
+        expectedBytes.putInt(2).putInt(1).putLong(48).putInt(16).putInt(0);
+
+        try (Arena testArena = Arena.ofConfined()) {
+            MemorySegment streamSegment = testArena.allocate(64, 8);
+            CommandStreamWriter streamWriter =
+                    new CommandStreamWriter(streamSegment, 0, s_goldenGraphHash);
+            streamWriter.appendDrawIndirect(2, 1, 48, 16);
+            assertEquals(64, streamWriter.finish());
+            assertArrayEquals(expectedBytes.array(),
+                    streamSegment.toArray(ValueLayout.JAVA_BYTE));
+        }
+    }
+
+    @Test
     void dispatchIndirectCommandUsesThePinnedPayloadLayout() {
         ByteBuffer expectedBytes = ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN);
         expectedBytes.put(new byte[] {0x42, 0x45, 0x43, 0x53});

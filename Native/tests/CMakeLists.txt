@@ -33,7 +33,8 @@ if(BARRIEWW_BACKEND_VULKAN)
         DynamicRenderingTests.cpp
         GraphicsPipelineExecutionTests.cpp
         GraphicsVertexPullingTests.cpp
-        GraphicsModuleExecutionTests.cpp)
+        GraphicsModuleExecutionTests.cpp
+        GpuDrivenDrawTests.cpp)
 endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})

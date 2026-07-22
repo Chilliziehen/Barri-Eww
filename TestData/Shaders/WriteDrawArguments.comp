@@ -1,0 +1,25 @@
+#version 450
+// Test fixture: the GPU-driven draw-argument producer — writes one
+// VkDrawIndirectCommand {vertexCount 3, instanceCount 1, firstVertex 0,
+// firstInstance 0} through a buffer device address handed in via push constants.
+// The CPU that prerecorded the consuming DrawIndirect never knows these values.
+// Compiled into WriteDrawArguments.comp.spv with:
+//   glslc --target-env=vulkan1.3 -O WriteDrawArguments.comp -o WriteDrawArguments.comp.spv
+#extension GL_EXT_buffer_reference : require
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer DrawArguments {
+    uint values[];
+};
+
+layout(push_constant) uniform PushData {
+    DrawArguments drawArguments;
+} pushData;
+
+void main() {
+    pushData.drawArguments.values[0] = 3u; // vertexCount
+    pushData.drawArguments.values[1] = 1u; // instanceCount
+    pushData.drawArguments.values[2] = 0u; // firstVertex
+    pushData.drawArguments.values[3] = 0u; // firstInstance
+}
