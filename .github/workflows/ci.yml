@@ -151,13 +151,15 @@ jobs:
           ctest --test-dir Native/build-coverage -C Debug --output-on-failure
 
       - name: Enforce Native line coverage
+        working-directory: Native
         run: >
-          gcovr --root Native
+          gcovr --root .
           --filter 'src/'
           --filter 'include/'
           --exclude 'build-coverage/'
           --fail-under-line 90
           --print-summary
+          build-coverage
 
   # ── Core (Java SE 25 / Gradle) — RDG compiler + BECS writer + FFM ──
   core:
