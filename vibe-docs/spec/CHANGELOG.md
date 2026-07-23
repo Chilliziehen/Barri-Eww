@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-07-23
+
+- [修改] §3.5 [BuildSystem.md](BuildSystem.md) —— 固化根 `build.sh`/`build.bat` 同构 CLI
+  （所有者裁决 P20）：module/configuration/backend/threaded/tests/coverage 参数、默认值、固定模块
+  顺序、变体透传、缺 manifest/非法参数 fail-fast、路径与退出码传播；根目录仍禁止模块 build system。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P20 已裁决并迁入 §3.5。
+
+---
+
 ## 2026-07-22 (第三批)
 
 - [新增] §6.6 [FfmBinding.md](FfmBinding.md) —— 固化首个真实 Java→Native FFM
