@@ -8,13 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
  * @note ThreadSafety: JUnit creates a fresh instance per test method; no shared state.
- * Covers presentation frame-status decoding, metrics record decoding and library-path
- * validation without loading the Native library.
+ * Covers presentation frame-status decoding and metrics record decoding of the pure value
+ * types without loading the Native library or the demo binding.
  */
 class PresentationRuntimeUnitTests {
 
@@ -73,17 +72,5 @@ class PresentationRuntimeUnitTests {
             assertTrue(metrics.cpuMetricsValid());
             assertFalse(metrics.gpuMetricsValid());
         }
-    }
-
-    @Test
-    void createRejectsARelativeLibraryPath() {
-        PresentationBootstrapHandles handles = new PresentationBootstrapHandles(
-                1L, 2L, 3L, 4L, 5L, 5L, 0, 0);
-        NativeLibraryLoadingException loadingException = assertThrows(
-                NativeLibraryLoadingException.class,
-                () -> NativePresentationRuntime.create(Path.of("BarriEwwNativeFfm"), handles,
-                        1280, 720, 2));
-        assertEquals(NativePresentationRuntime.s_createSymbolName,
-                loadingException.nativeSymbolName());
     }
 }

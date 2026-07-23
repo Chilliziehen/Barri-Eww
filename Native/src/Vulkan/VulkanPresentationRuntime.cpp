@@ -208,29 +208,58 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
         }
     }
 
+    VkCommandPoolCreateInfo commandPoolCreateInfo{};
+    commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    commandPoolCreateInfo.queueFamilyIndex = createInfo.graphicsQueueFamilyIndex;
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    if (vkCreateCommandPool(createInfo.logicalDevice, &commandPoolCreateInfo, nullptr,
+                            &commandPool) != VK_SUCCESS) {
+        return failAfterSwapchain(imageViews, frameSlots, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                                  false);
+    }
+    std::vector<VkCommandBuffer> frameCommandBuffers(createInfo.framesInFlightCount,
+                                                     VK_NULL_HANDLE);
+    VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
+    commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    commandBufferAllocateInfo.commandPool = commandPool;
+    commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    commandBufferAllocateInfo.commandBufferCount = createInfo.framesInFlightCount;
+    if (vkAllocateCommandBuffers(createInfo.logicalDevice, &commandBufferAllocateInfo,
+                                 frameCommandBuffers.data()) != VK_SUCCESS) {
+        vkDestroyCommandPool(createInfo.logicalDevice, commandPool, nullptr);
+        return failAfterSwapchain(imageViews, frameSlots, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                                  false);
+    }
+
     return VulkanPresentationRuntime{
         createInfo.logicalDevice, createInfo.graphicsQueue, createInfo.presentQueue,
-        createInfo.surface, swapchain, surfaceFormat, presentMode, sharingMode,
-        std::move(images), std::move(imageViews), std::move(frameSlots)};
+        createInfo.surface, swapchain, commandPool, surfaceFormat, presentMode, sharingMode,
+        std::move(images), std::move(imageViews), std::move(frameCommandBuffers),
+        std::move(frameSlots)};
 }
 
 VulkanPresentationRuntime::VulkanPresentationRuntime(
     VkDevice logicalDevice, VkQueue graphicsQueue, VkQueue presentQueue,
-    VkSurfaceKHR surface, VkSwapchainKHR swapchain, VkSurfaceFormatKHR surfaceFormat,
-    VkPresentModeKHR presentMode, VkSharingMode sharingMode,
-    std::vector<VkImage> images, std::vector<VkImageView> imageViews,
+    VkSurfaceKHR surface, VkSwapchainKHR swapchain, VkCommandPool commandPool,
+    VkSurfaceFormatKHR surfaceFormat, VkPresentModeKHR presentMode,
+    VkSharingMode sharingMode, std::vector<VkImage> images,
+    std::vector<VkImageView> imageViews,
+    std::vector<VkCommandBuffer> frameCommandBuffers,
     std::vector<FrameSlot> frameSlots) noexcept
     : m_logicalDevice(logicalDevice)
     , m_graphicsQueue(graphicsQueue)
     , m_presentQueue(presentQueue)
     , m_surface(surface)
     , m_swapchain(swapchain)
+    , m_commandPool(commandPool)
     , m_surfaceFormat(surfaceFormat)
     , m_presentMode(presentMode)
     , m_sharingMode(sharingMode)
     , m_images(std::move(images))
     , m_imageViews(std::move(imageViews))
     , m_imageInFlightFences(m_images.size(), VK_NULL_HANDLE)
+    , m_frameCommandBuffers(std::move(frameCommandBuffers))
     , m_frameSlots(std::move(frameSlots)) {}
 
 VulkanPresentationRuntime::VulkanPresentationRuntime(
@@ -240,12 +269,14 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     , m_presentQueue(movedFrom.m_presentQueue)
     , m_surface(movedFrom.m_surface)
     , m_swapchain(movedFrom.m_swapchain)
+    , m_commandPool(movedFrom.m_commandPool)
     , m_surfaceFormat(movedFrom.m_surfaceFormat)
     , m_presentMode(movedFrom.m_presentMode)
     , m_sharingMode(movedFrom.m_sharingMode)
     , m_images(std::move(movedFrom.m_images))
     , m_imageViews(std::move(movedFrom.m_imageViews))
     , m_imageInFlightFences(std::move(movedFrom.m_imageInFlightFences))
+    , m_frameCommandBuffers(std::move(movedFrom.m_frameCommandBuffers))
     , m_frameSlots(std::move(movedFrom.m_frameSlots))
     , m_swapchainGeneration(movedFrom.m_swapchainGeneration)
     , m_frameSequence(movedFrom.m_frameSequence)
@@ -253,10 +284,12 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     , m_acquiredImageIndex(movedFrom.m_acquiredImageIndex)
     , m_isFrameOpen(movedFrom.m_isFrameOpen) {
     movedFrom.m_swapchain = VK_NULL_HANDLE;
+    movedFrom.m_commandPool = VK_NULL_HANDLE;
     movedFrom.m_imageViews.clear();
     movedFrom.m_images.clear();
     movedFrom.m_frameSlots.clear();
     movedFrom.m_imageInFlightFences.clear();
+    movedFrom.m_frameCommandBuffers.clear();
 }
 
 void VulkanPresentationRuntime::destroyOwnedObjects() noexcept {
@@ -277,6 +310,10 @@ void VulkanPresentationRuntime::destroyOwnedObjects() noexcept {
         if (frameSlot.inFlightFence != VK_NULL_HANDLE) {
             vkDestroyFence(m_logicalDevice, frameSlot.inFlightFence, nullptr);
         }
+    }
+    if (m_commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_logicalDevice, m_commandPool, nullptr);
+        m_commandPool = VK_NULL_HANDLE;
     }
     for (VkImageView imageView : m_imageViews) {
         vkDestroyImageView(m_logicalDevice, imageView, nullptr);
@@ -422,6 +459,75 @@ VulkanPresentationRuntime::submitAndPresentFrame(VkCommandBuffer commandBuffer) 
     }
     submitResult.vulkanResult = presentResult;
     return submitResult;
+}
+
+void VulkanPresentationRuntime::recordClearCommandBuffer(VkCommandBuffer commandBuffer,
+                                                         VkImage swapchainImage,
+                                                         const float clearColor[3]) {
+    vkResetCommandBuffer(commandBuffer, 0);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    VkImageSubresourceRange colorRange{};
+    colorRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    colorRange.levelCount = 1u;
+    colorRange.layerCount = 1u;
+
+    VkImageMemoryBarrier toTransferDestination{};
+    toTransferDestination.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toTransferDestination.srcAccessMask = 0;
+    toTransferDestination.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toTransferDestination.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toTransferDestination.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toTransferDestination.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferDestination.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferDestination.image = swapchainImage;
+    toTransferDestination.subresourceRange = colorRange;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &toTransferDestination);
+
+    VkClearColorValue clearValue{};
+    clearValue.float32[0] = clearColor[0];
+    clearValue.float32[1] = clearColor[1];
+    clearValue.float32[2] = clearColor[2];
+    clearValue.float32[3] = 1.0f;
+    vkCmdClearColorImage(commandBuffer, swapchainImage,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &colorRange);
+
+    VkImageMemoryBarrier toPresent{};
+    toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toPresent.dstAccessMask = 0;
+    toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.image = swapchainImage;
+    toPresent.subresourceRange = colorRange;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &toPresent);
+
+    vkEndCommandBuffer(commandBuffer);
+}
+
+VulkanPresentationRuntime::SubmitFrameResult VulkanPresentationRuntime::presentClearFrame(
+    std::uint32_t framebufferWidth, std::uint32_t framebufferHeight,
+    const float clearColor[3], BeginFrameResult& outBeginResult) {
+    outBeginResult = beginFrame(framebufferWidth, framebufferHeight);
+    if (outBeginResult.status != FrameStatus::Success
+        && outBeginResult.status != FrameStatus::Suboptimal) {
+        SubmitFrameResult submitResult{};
+        submitResult.status = outBeginResult.status;
+        submitResult.vulkanResult = outBeginResult.vulkanResult;
+        return submitResult;
+    }
+    VkCommandBuffer commandBuffer = m_frameCommandBuffers[outBeginResult.frameSlotIndex];
+    recordClearCommandBuffer(commandBuffer, m_images[outBeginResult.imageIndex], clearColor);
+    return submitAndPresentFrame(commandBuffer);
 }
 
 } // namespace barrieww

@@ -106,3 +106,71 @@ tasks.jacocoTestCoverageVerification {
         }
     }
 }
+
+// ── Visible demo (ADR-0004): Java LWJGL/GLFW bootstrap + presentation FFM binding. ──
+// The window-dependent presentation runtime binding and the GLFW app live here, not in the
+// main library, so they are integration/orchestration glue outside the §4.5 main-library
+// coverage gate (jacoco reports over the main source set only).
+val lwjglVersion = "3.3.4"
+val lwjglNatives = when {
+    org.gradle.internal.os.OperatingSystem.current().isWindows -> "natives-windows"
+    org.gradle.internal.os.OperatingSystem.current().isLinux -> "natives-linux"
+    org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "natives-macos"
+    else -> throw GradleException("The visible demo supports Windows, Linux and macOS only")
+}
+
+val demo = sourceSets.create("demo") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+val demoTest = sourceSets.create("demoTest") {
+    compileClasspath += sourceSets.main.get().output + demo.output
+    runtimeClasspath += sourceSets.main.get().output + demo.output
+}
+
+configurations["demoImplementation"].extendsFrom(configurations.implementation.get())
+configurations["demoTestImplementation"].extendsFrom(
+    configurations["demoImplementation"], configurations.testImplementation.get())
+configurations["demoTestRuntimeOnly"].extendsFrom(configurations.testRuntimeOnly.get())
+
+dependencies {
+    "demoImplementation"(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
+    "demoImplementation"("org.lwjgl:lwjgl")
+    "demoImplementation"("org.lwjgl:lwjgl-glfw")
+    "demoImplementation"("org.lwjgl:lwjgl-vulkan")
+    "demoRuntimeOnly"("org.lwjgl:lwjgl::$lwjglNatives")
+    "demoRuntimeOnly"("org.lwjgl:lwjgl-glfw::$lwjglNatives")
+}
+
+val demoTestTask = tasks.register<Test>("demoTest") {
+    description = "Runs the demo presentation-runtime FFM binding tests."
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    testClassesDirs = demoTest.output.classesDirs
+    classpath = demoTest.runtimeClasspath
+    useJUnitPlatform()
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    inputs.property(
+        "nativeFfmSharedLibraryPath",
+        providers.gradleProperty("barriewwNativeLibraryPath"))
+    inputs.file(nativeLibraryFileProvider)
+        .withPropertyName("nativeFfmSharedLibrary")
+        .withPathSensitivity(PathSensitivity.NONE)
+    doFirst {
+        systemProperty(
+            "barrieww.nativeLibraryPath",
+            nativeLibraryFileProvider.get().absolutePath)
+    }
+}
+
+tasks.register<JavaExec>("runVisibleDemo") {
+    description = "Runs the visible cross-platform presentation demo (requires a display)."
+    group = ApplicationPlugin.APPLICATION_GROUP
+    mainClass = "barrieww.core.demo.VisibleClearDemo"
+    classpath = demo.runtimeClasspath
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    doFirst {
+        systemProperty(
+            "barrieww.nativeLibraryPath",
+            nativeLibraryFileProvider.get().absolutePath)
+    }
+}

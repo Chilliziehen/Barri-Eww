@@ -27,6 +27,8 @@ public final class NativePresentationRuntime implements AutoCloseable {
             "barriEwwBeginPresentationFrameVersion1";
     public static final String s_submitFrameSymbolName =
             "barriEwwSubmitPresentationFrameVersion1";
+    public static final String s_presentClearFrameSymbolName =
+            "barriEwwPresentClearFrameVersion1";
 
     private static final int s_operationSuccess = 0;
     private static final long s_createInfoByteSize = 72;
@@ -44,11 +46,17 @@ public final class NativePresentationRuntime implements AutoCloseable {
     private static final FunctionDescriptor s_submitDescriptor = FunctionDescriptor.of(
             ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
             ValueLayout.ADDRESS);
+    private static final FunctionDescriptor s_presentClearDescriptor = FunctionDescriptor.of(
+            ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+            ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+            ValueLayout.JAVA_FLOAT, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS);
 
     private final Arena m_libraryArena;
     private final MethodHandle m_destroyHandle;
     private final MethodHandle m_beginHandle;
     private final MethodHandle m_submitHandle;
+    private final MethodHandle m_presentClearHandle;
     private final long m_runtimeAddress;
     private final int m_selectedFormatValue;
     private final int m_selectedPresentModeValue;
@@ -58,14 +66,14 @@ public final class NativePresentationRuntime implements AutoCloseable {
 
     private NativePresentationRuntime(Arena libraryArena, MethodHandle destroyHandle,
                                       MethodHandle beginHandle, MethodHandle submitHandle,
-                                      long runtimeAddress, int selectedFormatValue,
-                                      int selectedPresentModeValue,
-                                      int selectedSharingModeValue,
-                                      int swapchainImageCount) {
+                                      MethodHandle presentClearHandle, long runtimeAddress,
+                                      int selectedFormatValue, int selectedPresentModeValue,
+                                      int selectedSharingModeValue, int swapchainImageCount) {
         m_libraryArena = libraryArena;
         m_destroyHandle = destroyHandle;
         m_beginHandle = beginHandle;
         m_submitHandle = submitHandle;
+        m_presentClearHandle = presentClearHandle;
         m_runtimeAddress = runtimeAddress;
         m_selectedFormatValue = selectedFormatValue;
         m_selectedPresentModeValue = selectedPresentModeValue;
@@ -106,6 +114,7 @@ public final class NativePresentationRuntime implements AutoCloseable {
         MethodHandle destroyHandle;
         MethodHandle beginHandle;
         MethodHandle submitHandle;
+        MethodHandle presentClearHandle;
         try {
             SymbolLookup symbolLookup =
                     SymbolLookup.libraryLookup(absoluteLibraryPath, libraryArena);
@@ -118,6 +127,9 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     findSymbol(symbolLookup, s_beginFrameSymbolName), s_beginDescriptor);
             submitHandle = linker.downcallHandle(
                     findSymbol(symbolLookup, s_submitFrameSymbolName), s_submitDescriptor);
+            presentClearHandle = linker.downcallHandle(
+                    findSymbol(symbolLookup, s_presentClearFrameSymbolName),
+                    s_presentClearDescriptor);
         } catch (Throwable loadingFailure) {
             libraryArena.close();
             throw new NativeLibraryLoadingException(
@@ -162,7 +174,7 @@ public final class NativePresentationRuntime implements AutoCloseable {
             }
             long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
             return new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
-                    submitHandle, runtimeAddress,
+                    submitHandle, presentClearHandle, runtimeAddress,
                     createResult.get(ValueLayout.JAVA_INT, 12),
                     createResult.get(ValueLayout.JAVA_INT, 16),
                     createResult.get(ValueLayout.JAVA_INT, 20),
@@ -245,6 +257,61 @@ public final class NativePresentationRuntime implements AutoCloseable {
             }
             return PresentationFrameStatus.fromCode(
                     submitResult.get(ValueLayout.JAVA_INT, 0));
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; call serially on the render thread.
+     * Begins a frame, clears the acquired swapchain image to the given color, submits and
+     * presents it, and reports the prior frame's completed metrics (baseline visible frame).
+     *
+     * @param int framebufferWidth Current framebuffer width; 0 signals an unavailable surface
+     * @param int framebufferHeight Current framebuffer height; 0 signals an unavailable surface
+     * @param float clearRed Clear color red channel in [0, 1]
+     * @param float clearGreen Clear color green channel in [0, 1]
+     * @param float clearBlue Clear color blue channel in [0, 1]
+     * @return PresentationClearFrame The begin/submit status, identity and prior-frame metrics
+     * @throws NativePresentationRuntimeException When the boundary reports an invalid operation
+     */
+    public PresentationClearFrame presentClearFrame(int framebufferWidth,
+                                                    int framebufferHeight, float clearRed,
+                                                    float clearGreen, float clearBlue)
+            throws NativePresentationRuntimeException {
+        requireOpen();
+        try (Arena frameArena = Arena.ofConfined()) {
+            MemorySegment beginResult = frameArena.allocate(s_beginResultByteSize, 8);
+            MemorySegment priorMetrics =
+                    frameArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
+            MemorySegment submitResult = frameArena.allocate(s_submitResultByteSize, 8);
+            int operationResult;
+            try {
+                operationResult = (int) m_presentClearHandle.invokeExact(m_runtimeAddress,
+                        framebufferWidth, framebufferHeight, clearRed, clearGreen, clearBlue,
+                        beginResult, priorMetrics, submitResult);
+            } catch (Throwable invocationFailure) {
+                throw new NativePresentationRuntimeException(
+                        "Native presentClearFrame invocation failed: " + invocationFailure,
+                        s_presentClearFrameSymbolName, -1, 0);
+            }
+            if (operationResult != s_operationSuccess) {
+                throw new NativePresentationRuntimeException(
+                        "Native presentClearFrame reported operation result " + operationResult,
+                        s_presentClearFrameSymbolName, operationResult, 0);
+            }
+            PresentationFrameStatus beginStatus = PresentationFrameStatus.fromCode(
+                    beginResult.get(ValueLayout.JAVA_INT, 0));
+            PresentationFrameStatus submitStatus = PresentationFrameStatus.fromCode(
+                    submitResult.get(ValueLayout.JAVA_INT, 0));
+            int priorMetricsValid = beginResult.get(ValueLayout.JAVA_INT, 12);
+            Optional<PresentationFrameMetrics> priorMetricsValue = priorMetricsValid != 0
+                    ? Optional.of(PresentationFrameMetrics.decode(priorMetrics))
+                    : Optional.empty();
+            return new PresentationClearFrame(beginStatus, submitStatus,
+                    beginResult.get(ValueLayout.JAVA_INT, 4),
+                    beginResult.get(ValueLayout.JAVA_INT, 8),
+                    beginResult.get(ValueLayout.JAVA_LONG, 16),
+                    beginResult.get(ValueLayout.JAVA_LONG, 24),
+                    priorMetricsValue);
         }
     }
 

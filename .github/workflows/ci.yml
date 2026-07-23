@@ -109,7 +109,7 @@ jobs:
             nativeLibraryPath="$PWD/Native/build/ffm/libBarriEwwNativeFfm.so"
           fi
           test -f "$nativeLibraryPath"
-          ./Core/gradlew -p Core clean test nativeIntegrationTest \
+          ./Core/gradlew -p Core clean test nativeIntegrationTest demoTest \
             jacocoTestReport jacocoTestCoverageVerification \
             -PbarriewwNativeLibraryPath="$nativeLibraryPath" --no-daemon
 

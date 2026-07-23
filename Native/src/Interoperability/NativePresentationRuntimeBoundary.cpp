@@ -180,3 +180,51 @@ barriEwwSubmitPresentationFrameVersion1(
         return NativePresentationRuntimeOperationResult::InternalFailure;
     }
 }
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwPresentClearFrameVersion1(
+    std::uint64_t runtimeAddress, std::uint32_t framebufferWidth,
+    std::uint32_t framebufferHeight, float clearRed, float clearGreen, float clearBlue,
+    barrieww::NativePresentationBeginFrameResultVersion1* beginResult,
+    barrieww::NativePresentationFrameMetricsVersion1* priorMetrics,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (beginResult == nullptr || priorMetrics == nullptr || submitResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *beginResult = {};
+    *priorMetrics = {};
+    *submitResult = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        const float clearColor[3] = {clearRed, clearGreen, clearBlue};
+        barrieww::VulkanPresentationRuntime::BeginFrameResult frameBeginResult{};
+        const auto frameSubmitResult = runtime->presentClearFrame(
+            framebufferWidth, framebufferHeight, clearColor, frameBeginResult);
+        beginResult->frameStatusValue =
+            static_cast<std::uint32_t>(frameBeginResult.status);
+        beginResult->frameSlotIndex = frameBeginResult.frameSlotIndex;
+        beginResult->imageIndex = frameBeginResult.imageIndex;
+        beginResult->frameSequence = frameBeginResult.frameSequence;
+        beginResult->swapchainGeneration = frameBeginResult.swapchainGeneration;
+        beginResult->vulkanResult = frameBeginResult.vulkanResult;
+        if (frameBeginResult.priorMetricsValid) {
+            beginResult->priorMetricsValid = 1u;
+            writeFrameMetrics(*runtime, frameBeginResult.priorMetrics, priorMetrics);
+        }
+        submitResult->frameStatusValue =
+            static_cast<std::uint32_t>(frameSubmitResult.status);
+        submitResult->vulkanResult = frameSubmitResult.vulkanResult;
+        return NativePresentationRuntimeOperationResult::Success;
+    } catch (...) {
+        *beginResult = {};
+        *priorMetrics = {};
+        *submitResult = {};
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}

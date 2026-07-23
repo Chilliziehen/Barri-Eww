@@ -115,6 +115,20 @@ public:
      */
     [[nodiscard]] SubmitFrameResult submitAndPresentFrame(VkCommandBuffer commandBuffer);
 
+    /**
+     * @brief Begins a frame, records a clear of the acquired swapchain image to the given
+     *        color (transition Undefined -> TransferDestination -> clear -> Present), submits
+     *        and presents it. This is the baseline visible milestone (ADR-0004 D5.1).
+     * @param framebufferWidth Current framebuffer width; 0 signals an unavailable surface
+     * @param framebufferHeight Current framebuffer height; 0 signals an unavailable surface
+     * @param clearColor The RGBA clear color (alpha is forced to 1)
+     * @param outBeginResult Receives the begin-frame identity, status and prior metrics
+     */
+    [[nodiscard]] SubmitFrameResult presentClearFrame(std::uint32_t framebufferWidth,
+                                                      std::uint32_t framebufferHeight,
+                                                      const float clearColor[3],
+                                                      BeginFrameResult& outBeginResult);
+
     /** The selected concrete surface format. */
     [[nodiscard]] VkFormat imageFormat() const noexcept { return m_surfaceFormat.format; }
 
@@ -153,11 +167,16 @@ private:
 
     VulkanPresentationRuntime(VkDevice logicalDevice, VkQueue graphicsQueue,
                               VkQueue presentQueue, VkSurfaceKHR surface,
-                              VkSwapchainKHR swapchain, VkSurfaceFormatKHR surfaceFormat,
+                              VkSwapchainKHR swapchain, VkCommandPool commandPool,
+                              VkSurfaceFormatKHR surfaceFormat,
                               VkPresentModeKHR presentMode, VkSharingMode sharingMode,
                               std::vector<VkImage> images,
                               std::vector<VkImageView> imageViews,
+                              std::vector<VkCommandBuffer> frameCommandBuffers,
                               std::vector<FrameSlot> frameSlots) noexcept;
+
+    void recordClearCommandBuffer(VkCommandBuffer commandBuffer, VkImage swapchainImage,
+                                  const float clearColor[3]);
 
     void destroyOwnedObjects() noexcept;
 
@@ -166,12 +185,14 @@ private:
     VkQueue m_presentQueue = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+    VkCommandPool m_commandPool = VK_NULL_HANDLE;
     VkSurfaceFormatKHR m_surfaceFormat{};
     VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
     VkSharingMode m_sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     std::vector<VkImage> m_images;
     std::vector<VkImageView> m_imageViews;
     std::vector<VkFence> m_imageInFlightFences;
+    std::vector<VkCommandBuffer> m_frameCommandBuffers;
     std::vector<FrameSlot> m_frameSlots;
     std::uint64_t m_swapchainGeneration = 1u;
     std::uint64_t m_frameSequence = 0u;

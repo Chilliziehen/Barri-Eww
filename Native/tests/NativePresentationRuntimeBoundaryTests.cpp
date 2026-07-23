@@ -30,6 +30,8 @@ VkResult g_presentResult = VK_SUCCESS;
 std::uint32_t g_acquiredImageIndex = 0u;
 std::uint32_t g_submitCallCount = 0u;
 std::uint32_t g_presentCallCount = 0u;
+std::uint32_t g_clearImageCallCount = 0u;
+std::uint32_t g_recordedCommandBufferCount = 0u;
 
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
@@ -49,6 +51,8 @@ void resetPresentationState() {
     g_acquiredImageIndex = 0u;
     g_submitCallCount = 0u;
     g_presentCallCount = 0u;
+    g_clearImageCallCount = 0u;
+    g_recordedCommandBufferCount = 0u;
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -274,6 +278,89 @@ extern "C" VkResult VKAPI_CALL vkQueuePresentKHR(
     return g_presentResult;
 }
 
+extern "C" VkResult VKAPI_CALL vkCreateCommandPool(
+    VkDevice device, const VkCommandPoolCreateInfo* createInfo,
+    const VkAllocationCallbacks* allocationCallbacks, VkCommandPool* commandPool) {
+    static_cast<void>(device);
+    static_cast<void>(createInfo);
+    static_cast<void>(allocationCallbacks);
+    *commandPool = reinterpret_cast<VkCommandPool>(0xA000u);
+    return VK_SUCCESS;
+}
+
+extern "C" void VKAPI_CALL vkDestroyCommandPool(
+    VkDevice device, VkCommandPool commandPool,
+    const VkAllocationCallbacks* allocationCallbacks) {
+    static_cast<void>(device);
+    static_cast<void>(commandPool);
+    static_cast<void>(allocationCallbacks);
+}
+
+extern "C" VkResult VKAPI_CALL vkAllocateCommandBuffers(
+    VkDevice device, const VkCommandBufferAllocateInfo* allocateInfo,
+    VkCommandBuffer* commandBuffers) {
+    static_cast<void>(device);
+    for (std::uint32_t bufferIndex = 0u; bufferIndex < allocateInfo->commandBufferCount;
+         ++bufferIndex) {
+        commandBuffers[bufferIndex] = reinterpret_cast<VkCommandBuffer>(
+            static_cast<std::uintptr_t>(0xB000u + bufferIndex));
+    }
+    return VK_SUCCESS;
+}
+
+extern "C" VkResult VKAPI_CALL vkResetCommandBuffer(
+    VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags) {
+    static_cast<void>(commandBuffer);
+    static_cast<void>(flags);
+    return VK_SUCCESS;
+}
+
+extern "C" VkResult VKAPI_CALL vkBeginCommandBuffer(
+    VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo* beginInfo) {
+    static_cast<void>(commandBuffer);
+    static_cast<void>(beginInfo);
+    return VK_SUCCESS;
+}
+
+extern "C" void VKAPI_CALL vkCmdPipelineBarrier(
+    VkCommandBuffer commandBuffer, VkPipelineStageFlags sourceStageMask,
+    VkPipelineStageFlags destinationStageMask, VkDependencyFlags dependencyFlags,
+    std::uint32_t memoryBarrierCount, const VkMemoryBarrier* memoryBarriers,
+    std::uint32_t bufferMemoryBarrierCount,
+    const VkBufferMemoryBarrier* bufferMemoryBarriers,
+    std::uint32_t imageMemoryBarrierCount,
+    const VkImageMemoryBarrier* imageMemoryBarriers) {
+    static_cast<void>(commandBuffer);
+    static_cast<void>(sourceStageMask);
+    static_cast<void>(destinationStageMask);
+    static_cast<void>(dependencyFlags);
+    static_cast<void>(memoryBarrierCount);
+    static_cast<void>(memoryBarriers);
+    static_cast<void>(bufferMemoryBarrierCount);
+    static_cast<void>(bufferMemoryBarriers);
+    static_cast<void>(imageMemoryBarrierCount);
+    static_cast<void>(imageMemoryBarriers);
+}
+
+extern "C" void VKAPI_CALL vkCmdClearColorImage(
+    VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout,
+    const VkClearColorValue* clearColor, std::uint32_t rangeCount,
+    const VkImageSubresourceRange* ranges) {
+    static_cast<void>(commandBuffer);
+    static_cast<void>(image);
+    static_cast<void>(imageLayout);
+    static_cast<void>(clearColor);
+    static_cast<void>(rangeCount);
+    static_cast<void>(ranges);
+    ++g_clearImageCallCount;
+}
+
+extern "C" VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
+    static_cast<void>(commandBuffer);
+    ++g_recordedCommandBufferCount;
+    return VK_SUCCESS;
+}
+
 TEST_CASE("Presentation runtime boundary rejects null arguments", "[presentationRuntime]") {
     NativePresentationRuntimeCreateResultVersion1 createResult{};
     REQUIRE(barriEwwCreatePresentationRuntimeVersion1(nullptr, &createResult)
@@ -465,6 +552,45 @@ TEST_CASE("Presentation frame cycles begin/submit and reuses a slot with prior m
     }
     REQUIRE(g_submitCallCount == 3u);
     REQUIRE(g_presentCallCount == 3u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear frame records a clear, submits and presents",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    REQUIRE(barriEwwPresentClearFrameVersion1(runtimeAddress, 1280u, 720u, 0.2f, 0.4f, 0.6f,
+                                              &beginResult, &priorMetrics, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    REQUIRE(submitResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    REQUIRE(g_clearImageCallCount == 1u);
+    REQUIRE(g_recordedCommandBufferCount == 1u);
+    REQUIRE(g_submitCallCount == 1u);
+    REQUIRE(g_presentCallCount == 1u);
+
+    // A zero framebuffer extent short-circuits before any recording or submit.
+    REQUIRE(barriEwwPresentClearFrameVersion1(runtimeAddress, 0u, 720u, 0.0f, 0.0f, 0.0f,
+                                              &beginResult, &priorMetrics, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(submitResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::SurfaceUnavailable));
+    REQUIRE(g_clearImageCallCount == 1u);
+
+    REQUIRE(barriEwwPresentClearFrameVersion1(0u, 8u, 8u, 0.0f, 0.0f, 0.0f, nullptr, nullptr,
+                                              nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
