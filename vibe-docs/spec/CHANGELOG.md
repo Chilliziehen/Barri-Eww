@@ -8,6 +8,9 @@
 
 ## 2026-07-23
 
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) / §3.3 / §6.7 / §9.11 / §9.15–§9.16
+  —— 所有者裁决并提升 P21–P24：presentation execution FFM、imported image binding、
+  completed-frame metrics/GPU compile-time switch、Pure Compute CopyBufferToImage 可视传输。
 - [新增] [ADR-0004](../adr/ADR-0004-JavaVulkanPresentationRuntime.md) —— 固化 Java-owned
   LWJGL/GLFW Vulkan bootstrap 与 Native-owned presentation runtime：MAILBOX→FIFO、分族
   CONCURRENT、预录 secondary/primary、recreation、Pure Compute 先行与 completed-frame metrics。

@@ -30,6 +30,10 @@
 | P17  | DrawIndirect 载荷固化 (GPU-driven 绘制; v0.1 限 drawCount==1/stride==16, 多重间接绘制留待 additive 增量) | CommandStreamFormat §9.11 |
 | P19  | 首个 FFM 校验边界（Core 归属、JDK 25 critical API、Version 1 C ABI、真实 Java→Native 校验门禁） | BuildSystem §3.6 / Testing §4.2.1 / §6 / §7.1.2 / §8 |
 | P20  | 根构建入口 CLI（跨平台同构参数、变体透传、模块顺序、fail-fast 语义） | BuildSystem §3.5 |
+| P21  | Java-owned Vulkan bootstrap / Native-owned presentation execution FFM Version 1：opaque runtime/module owners、frame status、lifetime | FfmBinding §6.7 / ADR-0004 |
+| P22  | ImportedImageBinding v0.1：按 importIdentifier 绑定 borrowed image、metadata compatibility 与 generation replacement | CommandStreamFormat §9.15 / ADR-0004 |
+| P23  | FrameMetricsVersion 1 与 `BARRIEWW_GPU_FRAME_METRICS`：completed-frame CPU/GPU 分段指标 | BuildSystem §3.3 / FfmBinding §6.7.3 / ADR-0004 |
+| P24  | Pure Compute visible CopyBufferToImage：64-byte payload、tight-packed range 与 swapchain TRANSFER_DST 规则 | CommandStreamFormat §9.11 / §9.16 / ADR-0004 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
 | —    | 新增开关 `BARRIEWW_CRITICAL_HOTPATH_LOG`          | BuildSystem §3.3 / §7.2.1 (所有者补充)      |
@@ -40,14 +44,6 @@ T0 三指标仲裁顺序 `性能 > 兼容性 > 可维护性` 已确认 (spec.md 
 
 ## 待裁决 (PROPOSED)
 
-| 编号 | 内容 | 预期落地位置 |
-| ---- | ---- | ------------ |
-| P21 | Java-owned Vulkan bootstrap / Native-owned presentation execution FFM Version 1：opaque runtime/module owners、begin/submit-present/recreate、stable status 与 lifetime | FfmBinding §6 / ErrorHandling §7 / ADR-0004 |
-| P22 | ImportedImageBinding Version 1：按 importIdentifier 绑定 borrowed VkImage、metadata compatibility、generation replacement 与 non-owning destruction | CommandStreamFormat §9 / FfmBinding §6 / ADR-0004 |
-| P23 | FrameMetricsVersion 1 与 `BARRIEWW_GPU_FRAME_METRICS`：completed-frame identity、CPU 分段、GPU timestamps、present/sharing telemetry | BuildSystem §3.3 / FfmBinding §6 / Testing §4 / ADR-0004 |
-| P24 | Pure Compute visible transfer：确认/补齐 CopyBufferToImage tight-packed full-frame payload 与 swapchain transfer-destination 规则 | CommandStreamFormat §9 / ADR-0004 |
-
-上述 proposal 须在对应实现开始前由所有者逐项批准并提升；ADR-0004 已固定 ownership、性能
-原则与 milestone 顺序，但不替代 wire ABI 的逐字段固化。
+_当前无待裁决项。_
 
 新的扩充建议在此登记，标 `PROPOSED`，经所有者确认后迁入对应正式文档并在 CHANGELOG 记录。
