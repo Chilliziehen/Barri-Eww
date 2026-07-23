@@ -83,9 +83,9 @@ val nativeIntegrationTest = tasks.register<Test>("nativeIntegrationTest") {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test, nativeIntegrationTest)
-    executionData(fileTree(layout.buildDirectory.dir("jacoco")) {
-        include("*.exec")
-    })
+    // Only the main-library test suites contribute to the §4.5 coverage report; the demo
+    // source set's demoTest exec is deliberately excluded.
+    executionData(tasks.test.get(), nativeIntegrationTest.get())
     reports {
         xml.required = true
     }
@@ -93,9 +93,7 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test, nativeIntegrationTest)
-    executionData(fileTree(layout.buildDirectory.dir("jacoco")) {
-        include("*.exec")
-    })
+    executionData(tasks.test.get(), nativeIntegrationTest.get())
     violationRules {
         rule {
             limit {

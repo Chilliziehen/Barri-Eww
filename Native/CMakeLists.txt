@@ -107,8 +107,15 @@ endif()
 
 # ── Java-loadable FFM shared boundary (spec §3.6 / §6.6) ────────────────────────────────
 add_library(BarriEwwNativeFfm SHARED
-    src/Interoperability/NativeCommandStreamModuleValidationBoundary.cpp
-    src/Interoperability/NativePresentationRuntimeBoundary.cpp)
+    src/Interoperability/NativeCommandStreamModuleValidationBoundary.cpp)
+
+# The presentation runtime FFM boundary is inherently Vulkan/swapchain (ADR-0004), so it is
+# only compiled into the shared library when the Vulkan backend is enabled.
+if(BARRIEWW_BACKEND_VULKAN)
+    target_sources(BarriEwwNativeFfm
+        PRIVATE
+            src/Interoperability/NativePresentationRuntimeBoundary.cpp)
+endif()
 
 target_include_directories(BarriEwwNativeFfm
     PUBLIC
