@@ -12,17 +12,19 @@ drives a C++ Vulkan backend directly, with no per-frame graph interpretation at 
 
 ## Status / 项目状态
 
-**Early development.** The command-stream toolchain core and the native execution
-backend are functional and exercised end to end on a real GPU (buffer copies, pipeline
-barriers, frame pacing, compute, GPU-driven indirect dispatch, and image clear/copy).
-The visual editor, the Fabric mod integration, the graphics (raster) pipeline path, and
-the DX12/Metal backends are not implemented yet. APIs and on-disk formats are still in
-their formation phase and may change without notice.
+**Early development.** The BECS writer/validator/materializer/recorder path is functional
+and exercised end to end on a real GPU: compute and indirect dispatch, dynamic-rendering
+graphics pipelines, BDA vertex pulling, a committed full-frame module, and compute-produced
+non-indexed `DrawIndirect`. Java SE 25 also reaches Native through a real versioned FFM
+module-validation boundary. The visual editor, Fabric/Minecraft integration, a visible
+window/swapchain execution runtime, full Java-to-Native materialization/execution, and the
+DX12/Metal backends are not implemented yet.
 
-**早期开发阶段。** 命令流工具链核心与原生执行后端已可用，并已在真实 GPU 上端到端跑通
-（缓冲拷贝、管线屏障、帧节拍、计算着色、GPU-driven 间接调度、图像清除/拷贝）。可视化
-编辑器、Fabric mod 集成、图形（光栅）管线路径以及 DX12/Metal 后端尚未实现。接口与
-磁盘格式仍处于成形期，可能不经通知即变更。
+**早期开发阶段。** BECS 写侧/校验/材质化/录制链已可用，并已在真实 GPU 上端到端跑通：
+计算与间接调度、动态渲染图形管线、BDA 顶点拉取、入库的完整整帧模块，以及 compute 产出
+参数的非索引 `DrawIndirect`。Java SE 25 也已通过真实的 versioned FFM 模块校验边界进入
+Native。可视化编辑器、Fabric/Minecraft 集成、真实窗口/swapchain 执行运行时、完整
+Java→Native 材质化/执行，以及 DX12/Metal 后端尚未实现。
 
 ---
 
@@ -123,28 +125,32 @@ Java 把紧凑命令流写入堆外内存（每条命令无 FFM 调用）；每�
 
 Implemented and covered by tests / 已实现且有测试覆盖:
 
-- BECS command-stream format: module container, per-lane streams, and handle/barrier
-  tables (buffer, barrier batch, shader module, pipeline, image), with load-time
-  validators and a text disassembler on the C++ side, and writers on the Java side.
+- BECS command-stream format: module container, per-lane streams, all current resource and
+  template tables, dynamic-rendering graphics state, `Draw`, and single-draw
+  `DrawIndirect`, with load-time validators/materializers/recorders and dual Java/C++
+  writers/readers.
 - Cross-language conformance: committed golden binaries asserted byte-exactly by both
-  the Java writers and the C++ validators.
-- Native execution on a real GPU: buffer copy round-trip, pipeline barriers
-  (global/buffer/image), a frames-in-flight frame loop, compute dispatch, GPU-driven
-  indirect dispatch, and image clear/copy round-trip.
+  Java and C++, plus a real Java `MemorySegment` → Panama → Native module/lane validation
+  boundary with stable checked-error translation.
+- Native execution on a real GPU: buffer/image transfers, barriers, frame pacing, compute,
+  GPU-generated indirect dispatch, ordinary graphics, BDA vertex pulling, committed
+  full-frame-module execution, and compute-produced non-indexed indirect draw.
 
 已实现且有测试覆盖:
 
-- BECS 命令流格式：模块容器、逐 lane 流、以及句柄/屏障表（缓冲、屏障批、着色器模块、
-  管线、图像），C++ 侧有加载期校验器与文本反汇编，Java 侧有写侧。
-- 跨语言一致性：入库的 golden 二进制由 Java 写侧与 C++ 校验器逐字节共同断言。
-- 真实 GPU 上的原生执行：缓冲拷贝往返、管线屏障（全局/缓冲/图像）、frames-in-flight
-  帧循环、计算调度、GPU-driven 间接调度、以及图像清除/拷贝往返。
+- BECS 命令流格式：模块容器、逐 lane 流、当前全部资源/模板表、动态渲染图形状态、`Draw`
+  与单次 `DrawIndirect`；具备加载期校验/材质化/录制，以及 Java/C++ 双侧写读。
+- 跨语言一致性：入库 golden 由 Java 与 C++ 逐字节共同断言；同一 Java-owned
+  `MemorySegment` 还会经真实 Panama 调用进入 Native 模块/lane 校验边界，并稳定转译受检错误。
+- 真实 GPU 原生执行：缓冲/图像传输、屏障、帧节拍、计算、GPU 生成的间接调度、普通图形、
+  BDA 顶点拉取、完整整帧模块执行，以及 compute 产出参数的非索引间接绘制。
 
-Not implemented yet / 尚未实现: the visual editor, the Fabric mod and in-game
-integration, the graphics (raster) pipeline path, and the DX12/Metal backends.
+Not implemented yet / 尚未实现: the visual editor, Fabric/Minecraft integration,
+visible WSI/swapchain presentation, full Java-to-Native materialization/execution, and
+the DX12/Metal backends.
 
-尚未实现: 可视化编辑器、Fabric mod 与游戏内集成、图形（光栅）管线路径、以及
-DX12/Metal 后端。
+尚未实现: 可视化编辑器、Fabric/Minecraft 集成、可视 WSI/swapchain 呈现、完整
+Java→Native 材质化/执行，以及 DX12/Metal 后端。
 
 ---
 
@@ -180,10 +186,11 @@ runtime branch in the binary.
 编译期功能与平台开关通过 CMake 选项注入（例如 `-DTHREADED_RECORDING=ON`、
 `-DBARRIEWW_BACKEND_VULKAN=ON`）；关闭的功能不会在二进制中留下任何运行时分支。
 
-A root-level `build.sh` / `build.bat` that orchestrates all modules is planned but not
-present yet.
+The root entry-point contract for `build.sh` / `build.bat` is fixed in §3.5; the scripts
+are the next repository-debt increment and are not present in this documentation commit.
 
-统筹所有模块的根级 `build.sh` / `build.bat` 已在计划中，但目前尚未提供。
+根 `build.sh` / `build.bat` 入口契约已在 §3.5 固化；脚本属于下一项仓库债务增量，本次
+文档提交中尚未提供。
 
 ---
 

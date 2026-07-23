@@ -19,7 +19,8 @@ namespace barrieww {
  *        agreement. Runs once per module on the slow path; the returned view is the
  *        proof of validity that keeps replay zero-check (§8.4 trust model). Slot-range
  *        validation of stream payloads against handle tables is deferred to the
- *        replayer increment that decodes payloads (still load-time, per D5).
+ *        load-time table-validation/materialization and command-recording increments that
+ *        decode payloads (still load-time, per D5).
  */
 class CommandStreamModuleValidator {
 public:
