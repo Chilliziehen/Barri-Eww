@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
@@ -159,6 +160,8 @@ TEST_CASE("Frame loop rejects misuse with the precise failure", "[vulkanFrameLoo
         REQUIRE_FALSE(frameLoopResult.has_value());
         REQUIRE(frameLoopResult.error().error
                 == VulkanFrameLoopError::InvalidFramesInFlightCount);
+        REQUIRE(frameLoopResult.error().frameSlot == UINT32_MAX);
+        REQUIRE(frameLoopResult.error().resultValue == 0);
     }
 
     SECTION("submit without an open frame") {
@@ -167,6 +170,8 @@ TEST_CASE("Frame loop rejects misuse with the precise failure", "[vulkanFrameLoo
         const auto submitResult = frameLoopResult->submitFrame({});
         REQUIRE_FALSE(submitResult.has_value());
         REQUIRE(submitResult.error().error == VulkanFrameLoopError::FrameNotOpen);
+        REQUIRE(submitResult.error().frameSlot == 0u);
+        REQUIRE(submitResult.error().resultValue == 0);
     }
 
     SECTION("double beginFrame") {
@@ -176,7 +181,32 @@ TEST_CASE("Frame loop rejects misuse with the precise failure", "[vulkanFrameLoo
         const auto secondBeginResult = frameLoopResult->beginFrame();
         REQUIRE_FALSE(secondBeginResult.has_value());
         REQUIRE(secondBeginResult.error().error == VulkanFrameLoopError::FrameAlreadyOpen);
+        REQUIRE(secondBeginResult.error().frameSlot == 0u);
+        REQUIRE(secondBeginResult.error().resultValue == 0);
         // Close the frame so the destructor's drain has a signalled fence to meet.
         REQUIRE(frameLoopResult->submitFrame({}).has_value());
+    }
+}
+
+TEST_CASE("Frame loop advances empty submissions and transfers fence ownership",
+          "[vulkanFrameLoop][gpu]") {
+    const auto harness = TestVulkanDeviceHarness::create();
+    if (harness == nullptr) {
+        SKIP("no usable Vulkan driver on this machine");
+    }
+    const VulkanContext vulkanContext{harness->makeContextCreateInfo()};
+
+    auto frameLoopResult = VulkanFrameLoop::create(vulkanContext, 3u);
+    REQUIRE(frameLoopResult.has_value());
+    VulkanFrameLoop movedFrameLoop{std::move(*frameLoopResult)};
+    REQUIRE(frameLoopResult->framesInFlightCount() == 0u);
+    REQUIRE(movedFrameLoop.framesInFlightCount() == 3u);
+
+    constexpr std::array<std::uint32_t, 4> expectedFrameSlots{0u, 1u, 2u, 0u};
+    for (std::uint32_t expectedFrameSlot : expectedFrameSlots) {
+        const auto beginResult = movedFrameLoop.beginFrame();
+        REQUIRE(beginResult.has_value());
+        REQUIRE(*beginResult == expectedFrameSlot);
+        REQUIRE(movedFrameLoop.submitFrame({}).has_value());
     }
 }

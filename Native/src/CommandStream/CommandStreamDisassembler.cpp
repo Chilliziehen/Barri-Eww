@@ -56,6 +56,8 @@ const char* sectionTypeName(std::uint16_t sectionTypeValue) {
         case CommandStreamModuleSectionType::ImageViewHandleTable: return "ImageViewHandleTable";
         case CommandStreamModuleSectionType::SamplerHandleTable: return "SamplerHandleTable";
         case CommandStreamModuleSectionType::ShaderModuleTable: return "ShaderModuleTable";
+        case CommandStreamModuleSectionType::GraphicsPipelineTable:
+            return "GraphicsPipelineTable";
         case CommandStreamModuleSectionType::BarrierBatchTable: return "BarrierBatchTable";
         case CommandStreamModuleSectionType::RenderingTemplateTable: return "RenderingTemplateTable";
         case CommandStreamModuleSectionType::PushDescriptorTemplateTable: return "PushDescriptorTemplateTable";
