@@ -86,6 +86,68 @@ static_assert(std::is_trivially_copyable_v<NativePresentationRuntimeCreateInfoVe
 static_assert(sizeof(NativePresentationRuntimeCreateResultVersion1) == 32u);
 static_assert(std::is_standard_layout_v<NativePresentationRuntimeCreateResultVersion1>);
 
+/**
+ * @note ThreadSafety: Plain output record; separate instances are concurrency-safe.
+ * @brief Completed-frame CPU/GPU timings and identity (§6.7.3). GPU durations are populated
+ *        only when timestamp metrics are compiled in; validFlags reports which are valid.
+ */
+struct NativePresentationFrameMetricsVersion1 {
+    std::uint64_t frameSequence;
+    std::uint64_t swapchainGeneration;
+    std::uint32_t frameSlotIndex;
+    std::uint32_t imageIndex;
+    std::uint32_t validFlags;
+    std::int32_t presentResultValue;
+    std::uint64_t fenceWaitNanoseconds;
+    std::uint64_t acquireNanoseconds;
+    std::uint64_t nativeSubmitCallNanoseconds;
+    std::uint64_t presentCallNanoseconds;
+    std::uint64_t totalCpuFrameNanoseconds;
+    std::uint64_t computeGpuNanoseconds;
+    std::uint64_t graphicsGpuNanoseconds;
+    std::uint64_t finalTransferGpuNanoseconds;
+    std::uint64_t totalSubmittedGpuNanoseconds;
+    std::uint32_t presentModeValue;
+    std::uint32_t sharingModeValue;
+};
+
+static_assert(sizeof(NativePresentationFrameMetricsVersion1) == 112u);
+static_assert(offsetof(NativePresentationFrameMetricsVersion1, fenceWaitNanoseconds) == 32u);
+static_assert(offsetof(NativePresentationFrameMetricsVersion1, presentModeValue) == 104u);
+static_assert(std::is_standard_layout_v<NativePresentationFrameMetricsVersion1>);
+static_assert(std::is_trivially_copyable_v<NativePresentationFrameMetricsVersion1>);
+
+/**
+ * @note ThreadSafety: Plain output record; separate instances are concurrency-safe.
+ * @brief Begin-frame identity and status; priorMetricsValid marks a populated metrics
+ *        out-parameter for the prior frame that reused this slot.
+ */
+struct NativePresentationBeginFrameResultVersion1 {
+    std::uint32_t frameStatusValue;
+    std::uint32_t frameSlotIndex;
+    std::uint32_t imageIndex;
+    std::uint32_t priorMetricsValid;
+    std::uint64_t frameSequence;
+    std::uint64_t swapchainGeneration;
+    std::int32_t vulkanResult;
+    std::uint32_t reserved;
+};
+
+static_assert(sizeof(NativePresentationBeginFrameResultVersion1) == 40u);
+static_assert(std::is_standard_layout_v<NativePresentationBeginFrameResultVersion1>);
+
+/**
+ * @note ThreadSafety: Plain output record; separate instances are concurrency-safe.
+ * @brief Submit-and-present status and raw Vulkan result.
+ */
+struct NativePresentationSubmitFrameResultVersion1 {
+    std::uint32_t frameStatusValue;
+    std::int32_t vulkanResult;
+};
+
+static_assert(sizeof(NativePresentationSubmitFrameResultVersion1) == 8u);
+static_assert(std::is_standard_layout_v<NativePresentationSubmitFrameResultVersion1>);
+
 } // namespace barrieww
 
 /**
@@ -116,3 +178,38 @@ barriEwwCreatePresentationRuntimeVersion1(
 extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
 barrieww::NativePresentationRuntimeOperationResult
 barriEwwDestroyPresentationRuntimeVersion1(std::uint64_t runtimeAddress) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
+ * @brief Waits the next frame slot, acquires an image and reports prior-frame metrics.
+ * @param std::uint64_t runtimeAddress Native-owned runtime address
+ * @param std::uint32_t framebufferWidth Current framebuffer width; 0 means unavailable
+ * @param std::uint32_t framebufferHeight Current framebuffer height; 0 means unavailable
+ * @param barrieww::NativePresentationBeginFrameResultVersion1* beginResult Writable result
+ * @param barrieww::NativePresentationFrameMetricsVersion1* priorMetrics Writable metrics of
+ *        the prior frame that reused this slot; cleared then filled when valid
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns both output records; Native writes them synchronously.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwBeginPresentationFrameVersion1(
+    std::uint64_t runtimeAddress, std::uint32_t framebufferWidth,
+    std::uint32_t framebufferHeight,
+    barrieww::NativePresentationBeginFrameResultVersion1* beginResult,
+    barrieww::NativePresentationFrameMetricsVersion1* priorMetrics) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
+ * @brief Submits the open frame's prerecorded command buffer and presents it.
+ * @param std::uint64_t runtimeAddress Native-owned runtime address
+ * @param std::uint64_t commandBufferHandle Prerecorded primary command buffer, or 0 for none
+ * @param barrieww::NativePresentationSubmitFrameResultVersion1* submitResult Writable result
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns submitResult and the borrowed command buffer.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitPresentationFrameVersion1(
+    std::uint64_t runtimeAddress, std::uint64_t commandBufferHandle,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;

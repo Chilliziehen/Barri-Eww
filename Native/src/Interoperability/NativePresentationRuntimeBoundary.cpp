@@ -20,6 +20,30 @@ std::uint32_t neutralFormatValue(VkFormat format) {
     }
 }
 
+/** Fills the fixed metrics record from a runtime frame-metrics value. */
+void writeFrameMetrics(const barrieww::VulkanPresentationRuntime& runtime,
+                       const barrieww::VulkanPresentationRuntime::FrameMetrics& source,
+                       barrieww::NativePresentationFrameMetricsVersion1* target) {
+    *target = {};
+    target->frameSequence = source.frameSequence;
+    target->swapchainGeneration = source.swapchainGeneration;
+    target->frameSlotIndex = source.frameSlotIndex;
+    target->imageIndex = source.imageIndex;
+    target->validFlags = source.validFlags;
+    target->presentResultValue = source.presentResultValue;
+    target->fenceWaitNanoseconds = source.fenceWaitNanoseconds;
+    target->acquireNanoseconds = source.acquireNanoseconds;
+    target->nativeSubmitCallNanoseconds = source.nativeSubmitCallNanoseconds;
+    target->presentCallNanoseconds = source.presentCallNanoseconds;
+    target->totalCpuFrameNanoseconds = source.totalCpuFrameNanoseconds;
+    target->computeGpuNanoseconds = source.computeGpuNanoseconds;
+    target->graphicsGpuNanoseconds = source.graphicsGpuNanoseconds;
+    target->finalTransferGpuNanoseconds = source.finalTransferGpuNanoseconds;
+    target->totalSubmittedGpuNanoseconds = source.totalSubmittedGpuNanoseconds;
+    target->presentModeValue = static_cast<std::uint32_t>(runtime.presentMode());
+    target->sharingModeValue = static_cast<std::uint32_t>(runtime.sharingMode());
+}
+
 } // namespace
 
 extern "C" barrieww::NativePresentationRuntimeOperationResult
@@ -85,6 +109,74 @@ barriEwwDestroyPresentationRuntimeVersion1(std::uint64_t runtimeAddress) noexcep
         delete reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
         return NativePresentationRuntimeOperationResult::Success;
     } catch (...) {
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwBeginPresentationFrameVersion1(
+    std::uint64_t runtimeAddress, std::uint32_t framebufferWidth,
+    std::uint32_t framebufferHeight,
+    barrieww::NativePresentationBeginFrameResultVersion1* beginResult,
+    barrieww::NativePresentationFrameMetricsVersion1* priorMetrics) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (beginResult == nullptr || priorMetrics == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *beginResult = {};
+    *priorMetrics = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        const auto frameResult = runtime->beginFrame(framebufferWidth, framebufferHeight);
+        beginResult->frameStatusValue = static_cast<std::uint32_t>(frameResult.status);
+        beginResult->frameSlotIndex = frameResult.frameSlotIndex;
+        beginResult->imageIndex = frameResult.imageIndex;
+        beginResult->frameSequence = frameResult.frameSequence;
+        beginResult->swapchainGeneration = frameResult.swapchainGeneration;
+        beginResult->vulkanResult = frameResult.vulkanResult;
+        if (frameResult.priorMetricsValid) {
+            beginResult->priorMetricsValid = 1u;
+            writeFrameMetrics(*runtime, frameResult.priorMetrics, priorMetrics);
+        }
+        return NativePresentationRuntimeOperationResult::Success;
+    } catch (...) {
+        *beginResult = {};
+        *priorMetrics = {};
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitPresentationFrameVersion1(
+    std::uint64_t runtimeAddress, std::uint64_t commandBufferHandle,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (submitResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *submitResult = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        if (!runtime->isFrameOpen()) {
+            return NativePresentationRuntimeOperationResult::InvalidArgument;
+        }
+        const auto frameResult = runtime->submitAndPresentFrame(
+            reinterpret_cast<VkCommandBuffer>(commandBufferHandle));
+        submitResult->frameStatusValue = static_cast<std::uint32_t>(frameResult.status);
+        submitResult->vulkanResult = frameResult.vulkanResult;
+        return NativePresentationRuntimeOperationResult::Success;
+    } catch (...) {
+        *submitResult = {};
         return NativePresentationRuntimeOperationResult::InternalFailure;
     }
 }

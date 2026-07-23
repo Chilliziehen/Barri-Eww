@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
+#include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
 
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
@@ -24,6 +25,11 @@ std::uint32_t g_destroyedImageViewCount = 0u;
 std::uint32_t g_destroyedSwapchainCount = 0u;
 VkSharingMode g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 std::uint32_t g_observedQueueFamilyCount = 0u;
+VkResult g_acquireResult = VK_SUCCESS;
+VkResult g_presentResult = VK_SUCCESS;
+std::uint32_t g_acquiredImageIndex = 0u;
+std::uint32_t g_submitCallCount = 0u;
+std::uint32_t g_presentCallCount = 0u;
 
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
@@ -38,6 +44,11 @@ void resetPresentationState() {
     g_destroyedSwapchainCount = 0u;
     g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     g_observedQueueFamilyCount = 0u;
+    g_acquireResult = VK_SUCCESS;
+    g_presentResult = VK_SUCCESS;
+    g_acquiredImageIndex = 0u;
+    g_submitCallCount = 0u;
+    g_presentCallCount = 0u;
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -179,6 +190,90 @@ extern "C" VkResult VKAPI_CALL vkQueueWaitIdle(VkQueue queue) {
     return VK_SUCCESS;
 }
 
+extern "C" VkResult VKAPI_CALL vkCreateSemaphore(
+    VkDevice device, const VkSemaphoreCreateInfo* createInfo,
+    const VkAllocationCallbacks* allocationCallbacks, VkSemaphore* semaphore) {
+    static_cast<void>(device);
+    static_cast<void>(createInfo);
+    static_cast<void>(allocationCallbacks);
+    *semaphore = reinterpret_cast<VkSemaphore>(0x8000u);
+    return VK_SUCCESS;
+}
+
+extern "C" void VKAPI_CALL vkDestroySemaphore(
+    VkDevice device, VkSemaphore semaphore,
+    const VkAllocationCallbacks* allocationCallbacks) {
+    static_cast<void>(device);
+    static_cast<void>(semaphore);
+    static_cast<void>(allocationCallbacks);
+}
+
+extern "C" VkResult VKAPI_CALL vkCreateFence(
+    VkDevice device, const VkFenceCreateInfo* createInfo,
+    const VkAllocationCallbacks* allocationCallbacks, VkFence* fence) {
+    static_cast<void>(device);
+    static_cast<void>(createInfo);
+    static_cast<void>(allocationCallbacks);
+    *fence = reinterpret_cast<VkFence>(0x9000u);
+    return VK_SUCCESS;
+}
+
+extern "C" void VKAPI_CALL vkDestroyFence(
+    VkDevice device, VkFence fence, const VkAllocationCallbacks* allocationCallbacks) {
+    static_cast<void>(device);
+    static_cast<void>(fence);
+    static_cast<void>(allocationCallbacks);
+}
+
+extern "C" VkResult VKAPI_CALL vkWaitForFences(
+    VkDevice device, std::uint32_t fenceCount, const VkFence* fences, VkBool32 waitAll,
+    std::uint64_t timeout) {
+    static_cast<void>(device);
+    static_cast<void>(fenceCount);
+    static_cast<void>(fences);
+    static_cast<void>(waitAll);
+    static_cast<void>(timeout);
+    return VK_SUCCESS;
+}
+
+extern "C" VkResult VKAPI_CALL vkResetFences(
+    VkDevice device, std::uint32_t fenceCount, const VkFence* fences) {
+    static_cast<void>(device);
+    static_cast<void>(fenceCount);
+    static_cast<void>(fences);
+    return VK_SUCCESS;
+}
+
+extern "C" VkResult VKAPI_CALL vkAcquireNextImageKHR(
+    VkDevice device, VkSwapchainKHR swapchain, std::uint64_t timeout,
+    VkSemaphore semaphore, VkFence fence, std::uint32_t* imageIndex) {
+    static_cast<void>(device);
+    static_cast<void>(swapchain);
+    static_cast<void>(timeout);
+    static_cast<void>(semaphore);
+    static_cast<void>(fence);
+    *imageIndex = g_acquiredImageIndex;
+    return g_acquireResult;
+}
+
+extern "C" VkResult VKAPI_CALL vkQueueSubmit(
+    VkQueue queue, std::uint32_t submitCount, const VkSubmitInfo* submitInfo, VkFence fence) {
+    static_cast<void>(queue);
+    static_cast<void>(submitCount);
+    static_cast<void>(submitInfo);
+    static_cast<void>(fence);
+    ++g_submitCallCount;
+    return VK_SUCCESS;
+}
+
+extern "C" VkResult VKAPI_CALL vkQueuePresentKHR(
+    VkQueue queue, const VkPresentInfoKHR* presentInfo) {
+    static_cast<void>(queue);
+    static_cast<void>(presentInfo);
+    ++g_presentCallCount;
+    return g_presentResult;
+}
+
 TEST_CASE("Presentation runtime boundary rejects null arguments", "[presentationRuntime]") {
     NativePresentationRuntimeCreateResultVersion1 createResult{};
     REQUIRE(barriEwwCreatePresentationRuntimeVersion1(nullptr, &createResult)
@@ -282,5 +377,132 @@ TEST_CASE("Presentation runtime boundary clamps image count to the surface maxim
             == NativePresentationRuntimeOperationResult::Success);
     REQUIRE(createResult.swapchainImageCount == 3u);
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(createResult.runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+namespace {
+
+/** Creates a runtime through the boundary; caller destroys the returned address. */
+std::uint64_t openRuntime() {
+    const NativePresentationRuntimeCreateInfoVersion1 createInfo = makeCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+    REQUIRE(barriEwwCreatePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    return createResult.runtimeAddress;
+}
+
+} // namespace
+
+TEST_CASE("Presentation frame reports surface unavailable on zero extent",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 0u, 720u, &beginResult,
+                                                   &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::SurfaceUnavailable));
+    REQUIRE(beginResult.priorMetricsValid == 0u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation frame rejects submit without an open frame and null results",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(0u, 8u, 8u, nullptr, nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation frame cycles begin/submit and reuses a slot with prior metrics",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    // Frames-in-flight is 2, so the third frame reuses slot 0 and returns its metrics.
+    for (std::uint32_t frameIndex = 0u; frameIndex < 3u; ++frameIndex) {
+        g_acquiredImageIndex = frameIndex % 3u;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(beginResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+        REQUIRE(beginResult.frameSlotIndex == frameIndex % 2u);
+        REQUIRE(beginResult.frameSequence == frameIndex);
+        if (frameIndex == 2u) {
+            REQUIRE(beginResult.priorMetricsValid == 1u);
+            REQUIRE(priorMetrics.frameSequence == 0u);
+            REQUIRE(priorMetrics.frameSlotIndex == 0u);
+            REQUIRE((priorMetrics.validFlags
+                     & barrieww::VulkanPresentationRuntime::s_cpuMetricsValidFlag) != 0u);
+            REQUIRE(priorMetrics.presentModeValue
+                    == static_cast<std::uint32_t>(VK_PRESENT_MODE_MAILBOX_KHR));
+        }
+        REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(submitResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    }
+    REQUIRE(g_submitCallCount == 3u);
+    REQUIRE(g_presentCallCount == 3u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation frame maps out-of-date and suboptimal to recreate/suboptimal",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    SECTION("out-of-date at acquire requests recreation without submitting") {
+        g_acquireResult = VK_ERROR_OUT_OF_DATE_KHR;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(beginResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+        REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+
+    SECTION("suboptimal at present completes the frame") {
+        g_presentResult = VK_SUBOPTIMAL_KHR;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(submitResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Suboptimal));
+        REQUIRE(g_presentCallCount == 1u);
+    }
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
 }
