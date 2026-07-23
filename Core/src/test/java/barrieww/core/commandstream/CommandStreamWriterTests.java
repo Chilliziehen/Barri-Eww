@@ -209,6 +209,37 @@ class CommandStreamWriterTests {
     }
 
     @Test
+    void copyBufferToImageUsesThePinnedPayloadLayout() {
+        // One CopyBufferToImage command (64B): 32-byte header + 64 = 96.
+        ByteBuffer expectedBytes = ByteBuffer.allocate(96).order(ByteOrder.LITTLE_ENDIAN);
+        expectedBytes.put(new byte[] {0x42, 0x45, 0x43, 0x53});
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMajor);
+        expectedBytes.putShort(CommandStreamFormat.s_currentVersionMinor);
+        expectedBytes.putInt(0);
+        expectedBytes.putInt(1);
+        expectedBytes.putLong(96);
+        expectedBytes.putLong(s_goldenGraphHash);
+        expectedBytes.putShort((short) 0x0046).putShort((short) 0).putInt(64);
+        expectedBytes.putInt(3).putInt(1).putInt(6)
+                .putInt(CommandStreamImageAspect.s_color).putInt(0).putInt(0).putInt(1)
+                .putInt(0);
+        expectedBytes.putLong(0);
+        expectedBytes.putInt(8).putInt(8).putInt(1).putInt(0);
+
+        try (Arena testArena = Arena.ofConfined()) {
+            MemorySegment streamSegment = testArena.allocate(96, 8);
+            CommandStreamWriter streamWriter =
+                    new CommandStreamWriter(streamSegment, 0, s_goldenGraphHash);
+            streamWriter.appendCopyBufferToImage(3, 1,
+                    CommandStreamImageLayout.TRANSFER_DESTINATION,
+                    CommandStreamImageAspect.s_color, 0, 0, 1, 0, 8, 8, 1);
+            assertEquals(96, streamWriter.finish());
+            assertArrayEquals(expectedBytes.array(),
+                    streamSegment.toArray(ValueLayout.JAVA_BYTE));
+        }
+    }
+
+    @Test
     void writerRejectsUseAfterFinish() {
         try (Arena testArena = Arena.ofConfined()) {
             MemorySegment streamSegment = testArena.allocate(80, 8);

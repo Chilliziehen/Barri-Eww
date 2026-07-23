@@ -401,6 +401,53 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a CopyBufferToImage command (opcode 0x0046, P24, tightly packed region at
+     * image origin). Pinned payload layout (mirrored by the native CommandBufferRecorder):
+     * +0 bufferSlot u32, +4 imageSlot u32, +8 imageLayoutValue u32, +12 aspectMaskValue
+     * u32, +16 mipLevel u32, +20 baseArrayLayer u32, +24 arrayLayerCount u32, +28 reserved,
+     * +32 bufferByteOffset u64, +40 copyWidth u32, +44 copyHeight u32, +48 copyDepth u32,
+     * +52 reserved zero; command byteSize 64.
+     *
+     * @param int bufferSlot Buffer table slot to copy from
+     * @param int imageSlot Image table slot to copy into
+     * @param CommandStreamImageLayout imageLayout The layout the image is in when the copy
+     *        executes (General or TransferDestination)
+     * @param int aspectMaskValue OR-mask of CommandStreamImageAspect bits
+     * @param int mipLevel The mip level to copy into
+     * @param int baseArrayLayer First array layer to copy into
+     * @param int arrayLayerCount Array layer count; must be concrete (no sentinel)
+     * @param long bufferByteOffset Byte offset within the source buffer
+     * @param int copyWidth Copied extent width in texels
+     * @param int copyHeight Copied extent height in texels
+     * @param int copyDepth Copied extent depth in texels
+     */
+    public void appendCopyBufferToImage(int bufferSlot, int imageSlot,
+                                        CommandStreamImageLayout imageLayout,
+                                        int aspectMaskValue, int mipLevel,
+                                        int baseArrayLayer, int arrayLayerCount,
+                                        long bufferByteOffset, int copyWidth,
+                                        int copyHeight, int copyDepth) {
+        writeCommandHeader(CommandStreamOpcode.COPY_BUFFER_TO_IMAGE, 64);
+        long payloadOffset = m_currentByteOffset + 8;
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 4, imageSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 8,
+                imageLayout.rawImageLayoutValue());
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 12, aspectMaskValue);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 16, mipLevel);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 20, baseArrayLayer);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 24, arrayLayerCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 28, 0);
+        m_targetSegment.set(s_littleEndianLongLayout, payloadOffset + 32, bufferByteOffset);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 40, copyWidth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 44, copyHeight);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 48, copyDepth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 52, 0);
+        m_currentByteOffset += 64;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Writes the 32-byte stream header (magic, version, laneIndex, commandCount,
      * totalByteSize, graphHash) and seals the writer.
      *
