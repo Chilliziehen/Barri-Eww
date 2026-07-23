@@ -6,6 +6,31 @@
 
 ---
 
+## 2026-07-22 (第三批)
+
+- [新增] §6.6 [FfmBinding.md](FfmBinding.md) —— 固化首个真实 Java→Native FFM
+  module-validation Version 1 C ABI（所有者裁决 P19）：`BarriEwwNativeFfm` shared target、
+  versioned symbol、24-byte status layout、同步 Java-owned segment 借用、稳定错误码/offset
+  转译；明确只验证 BECM container 与内嵌 BECS lane，不宣称 Vulkan 完整装载。
+- [修改] §6.1/§6.2 [FfmBinding.md](FfmBinding.md) —— FFM 归属与总纲统一为 `Core/`；
+  保留 generated hot-path `condy` 规则，增加 handwritten load/init binding 的 instance-lifetime
+  一次解析规则；将不存在的 `Linker.Option.isTrivial` 更正为 JDK 25
+  `Linker.Option.critical(boolean)`，P19 validation 固定 non-critical。
+- [新增] §3.6 [BuildSystem.md](BuildSystem.md) —— 固化 internal static target 与
+  Java-loadable shared target、hidden-by-default export、`ffm/` artifact 目录和 Core absolute
+  library path property。
+- [修改] §4.1/§4.2.1/§4.3/§4.5 [Testing.md](Testing.md) —— Java 测试/覆盖率归属修正为
+  `Core/` 与 `Mod/`；P19 用同一 Java-produced native segment 经真实 FFM 完成 staged gate
+  第一阶段替换；保留未来 IR→ASM→ClassLoader→Native execution 完整门禁；CI target 修正为
+  `dev` / `master`。
+- [修改] §7.1.2 [ErrorHandlingAndLogging.md](ErrorHandlingAndLogging.md) 与 §8
+  [GeneratedArtifacts.md](GeneratedArtifacts.md) —— FFM 错误转译及 codegen/ClassLoader 归属
+  修正为 Core；P19 不创建不存在的 `CompiledRenderPipeline`/ASM/ClassLoader 占位 API。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P19 已裁决并迁入 §3/§4/§6/§7/§8；
+  P18 保留给后续 indexed-draw ABI 提案。
+
+---
+
 ## 2026-07-22 (第二批)
 
 - [修改] §9.11 [CommandStreamFormat.md](CommandStreamFormat.md) —— 固化 DrawIndirect

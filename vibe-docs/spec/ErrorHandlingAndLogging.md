@@ -14,13 +14,15 @@
 - 错误码集中定义为强类型 `enum class`，语义完整命名，禁止裸整型/魔数。
 - 不吞错：所有失败要么被处理，要么向上传播并保留上下文。
 
-### §7.1.2 Java (`Mod/`)
+### §7.1.2 Java (`Core/` / `Mod/`)
 
 - **热路径 (JIT 生成的录制代码) 不抛异常**，不做异常控制流。
 - **慢路径 (图数据校验、编译、init) 抛受检异常**，异常须携带完整上下文
   (出错节点 ID、资源版本、原因)，便于定位。
 - 自定义异常继承合适基类并语义完整命名 (如 `GraphValidationException`)。
-- Native 返回的错误码在慢路径转译为对应 Java 异常 (见 §6.4)。
+- Native 返回的错误码在 `Core/` 慢路径转译为对应 Java 受检异常 (见 §6.4)；异常须保留
+  原生错误类别及该类别适用的 byte offset、lane offset、slot、command index 或 backend
+  result 等完整上下文。`Mod/` 只传播或呈现 Core 异常，不重复定义 FFM 错误映射。
 
 ### §7.1.3 TypeScript (`Editor/`)
 
