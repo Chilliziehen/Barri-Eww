@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <vector>
 
 #include "BarriEww/CommandStream/CommandStreamHandleTableValidationError.hpp"
@@ -109,6 +110,87 @@ TEST_CASE("Shader module table validator accepts and rejects precisely",
 
 TEST_CASE("Pipeline table validator accepts and rejects precisely",
           "[commandStream][pipelineHandleTable]") {
+    SECTION("valid empty table and portable push constant boundaries") {
+        const std::vector<std::byte> emptyTableBytes = makePipelineTable({});
+        const auto emptyValidationResult =
+            CommandStreamPipelineHandleTableValidator::validate(emptyTableBytes);
+        REQUIRE(emptyValidationResult.has_value());
+        REQUIRE(emptyValidationResult->entryCount() == 0u);
+
+        const std::vector<std::byte> tableBytes = makePipelineTable(
+            {{1u, 0u, 0u, 0u}, {1u, 0u, 4u, 0u}, {1u, 0u, 128u, 0u}});
+        const auto validationResult =
+            CommandStreamPipelineHandleTableValidator::validate(tableBytes);
+        REQUIRE(validationResult.has_value());
+        REQUIRE(validationResult->entryCount() == 3u);
+        REQUIRE(validationResult->entry(0u).pushConstantByteSize == 0u);
+        REQUIRE(validationResult->entry(1u).pushConstantByteSize == 4u);
+        REQUIRE(validationResult->entry(2u).pushConstantByteSize == 128u);
+    }
+
+    SECTION("table smaller than its header") {
+        const std::array<std::byte, 7> tinyTableBytes{};
+        const auto validationResult =
+            CommandStreamPipelineHandleTableValidator::validate(tinyTableBytes);
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::TableTooSmall);
+        REQUIRE(validationResult.error().byteOffset == 0u);
+    }
+
+    SECTION("misaligned table base") {
+        const std::vector<std::byte> tableBytes = makePipelineTable({});
+        alignas(8) std::array<std::byte, 16> backingBytes{};
+        std::memcpy(backingBytes.data() + 1u, tableBytes.data(), tableBytes.size());
+        const auto misalignedBytes =
+            std::span<const std::byte>{backingBytes.data() + 1u, tableBytes.size()};
+        const auto validationResult =
+            CommandStreamPipelineHandleTableValidator::validate(misalignedBytes);
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::MisalignedTableBase);
+        REQUIRE(validationResult.error().byteOffset == 0u);
+    }
+
+    SECTION("header reserved flags are nonzero") {
+        std::vector<std::byte> tableBytes = makePipelineTable({});
+        const std::uint32_t reservedFlags = 1u;
+        std::memcpy(tableBytes.data() + 4u, &reservedFlags, sizeof reservedFlags);
+        const auto validationResult =
+            CommandStreamPipelineHandleTableValidator::validate(tableBytes);
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::NonZeroReservedFlags);
+        REQUIRE(validationResult.error().byteOffset == 4u);
+    }
+
+    SECTION("entry reserved flags are nonzero") {
+        const auto validationResult = CommandStreamPipelineHandleTableValidator::validate(
+            makePipelineTable({{1u, 0u, 8u, 1u}}));
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::NonZeroReservedFlags);
+        REQUIRE(validationResult.error().byteOffset == 8u);
+    }
+
+    SECTION("second malformed entry reports its own offset") {
+        const auto validationResult = CommandStreamPipelineHandleTableValidator::validate(
+            makePipelineTable({{1u, 0u, 8u, 0u}, {1u, 0u, 8u, 1u}}));
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::NonZeroReservedFlags);
+        REQUIRE(validationResult.error().byteOffset == 24u);
+    }
+
+    SECTION("push constant size is not four-byte aligned") {
+        const auto validationResult = CommandStreamPipelineHandleTableValidator::validate(
+            makePipelineTable({{1u, 0u, 6u, 0u}}));
+        REQUIRE_FALSE(validationResult.has_value());
+        REQUIRE(validationResult.error().error
+                == CommandStreamHandleTableValidationError::InvalidPushConstantByteSize);
+        REQUIRE(validationResult.error().byteOffset == 8u);
+    }
+
     SECTION("valid compute entry") {
         // Named local: the view aliases these bytes (MemoryOwnership contract).
         const std::vector<std::byte> tableBytes = makePipelineTable({{1u, 0u, 8u, 0u}});

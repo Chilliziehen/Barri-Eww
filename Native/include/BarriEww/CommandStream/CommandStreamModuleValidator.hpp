@@ -31,14 +31,15 @@ public:
      *        aligned at its base (ADR-0002 D1).
      * @return std::expected<CommandStreamModuleView, CommandStreamModuleValidationFailure>
      *         A module view on success; the first failure otherwise (with the nested
-     *         lane-stream failure attached for LaneStreamInvalid). Errors are values,
-     *         not exceptions, so the FFM boundary needs no unwinding (§6.4).
+     *         lane-stream failure attached for LaneStreamInvalid). Malformed input is an
+     *         error value; temporary-container allocation failures may throw so the FFM
+     *         boundary can contain and translate them instead of terminating the process.
      * @warning MemoryOwnership: moduleBytes is BORROWED (in production a Java-owned
      *          MemorySegment, §6.3); the returned view and its lane views alias it and
      *          the provider must keep it alive and unmodified while any of them is in use.
      */
     [[nodiscard]] static std::expected<CommandStreamModuleView, CommandStreamModuleValidationFailure>
-    validate(std::span<const std::byte> moduleBytes) noexcept;
+    validate(std::span<const std::byte> moduleBytes);
 };
 
 } // namespace barrieww

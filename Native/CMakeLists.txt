@@ -42,8 +42,12 @@ if(BARRIEWW_CRITICAL_HOTPATH_LOG AND NOT BARRIEWW_LOGGING)
         "BARRIEWW_CRITICAL_HOTPATH_LOG=ON requires BARRIEWW_LOGGING=ON (spec §3.3).")
 endif()
 
-# ── Library target ────────────────────────────────────────────────────────────────────
-add_library(BarriEwwNative)
+# ── Internal static implementation target ───────────────────────────────────────────────
+add_library(BarriEwwNative STATIC)
+set_target_properties(BarriEwwNative PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 target_sources(BarriEwwNative
     PRIVATE
@@ -59,7 +63,8 @@ target_sources(BarriEwwNative
         src/CommandStream/CommandStreamImageHandleTableValidator.cpp
         src/CommandStream/CommandStreamImageViewHandleTableValidator.cpp
         src/CommandStream/CommandStreamRenderingTemplateTableValidator.cpp
-        src/CommandStream/CommandStreamGraphicsPipelineTableValidator.cpp)
+        src/CommandStream/CommandStreamGraphicsPipelineTableValidator.cpp
+        src/Interoperability/NativeCommandStreamModuleValidationOperation.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC
@@ -96,6 +101,37 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/VulkanGraphicsPipelineTable.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
+
+# ── Java-loadable FFM shared boundary (spec §3.6 / §6.6) ────────────────────────────────
+add_library(BarriEwwNativeFfm SHARED
+    src/Interoperability/NativeCommandStreamModuleValidationBoundary.cpp)
+
+target_include_directories(BarriEwwNativeFfm
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_link_libraries(BarriEwwNativeFfm
+    PRIVATE
+        BarriEwwNative)
+
+target_compile_definitions(BarriEwwNativeFfm
+    PRIVATE
+        BARRIEWW_NATIVE_FFM_EXPORTS=1)
+
+set_target_properties(BarriEwwNativeFfm PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm")
+
+foreach(configurationName Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${configurationName}" configurationNameUpper)
+    set_target_properties(BarriEwwNativeFfm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm"
+        LIBRARY_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm"
+        ARCHIVE_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm")
+endforeach()
 
 # ── Coverage instrumentation (spec §4.5 gate: Native >= 90%) ───────────────────────────
 if(BARRIEWW_ENABLE_COVERAGE)
