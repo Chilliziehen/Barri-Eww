@@ -566,6 +566,100 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     &clearColorValue, 1u, &subresourceRange);
                 break;
             }
+            case CommandStreamOpcode::CopyBufferToImage: {
+                // Pinned payload (P24): bufferSlot, imageSlot, layout, aspect, mip, layers,
+                // bufferOffset, tightly packed extent. Mirror of CopyImageToBuffer with the
+                // source/destination roles reversed (buffer -> image).
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto imageSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                const auto imageLayoutValue =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u);
+                const auto aspectMaskValue =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u);
+                const auto mipLevel =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 16u);
+                const auto baseArrayLayer =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 20u);
+                const auto arrayLayerCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 24u);
+                const auto bufferByteOffset =
+                    readPayloadValue<std::uint64_t>(commandRecord.payloadBytes, 32u);
+                const auto copyWidth =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 40u);
+                const auto copyHeight =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 44u);
+                const auto copyDepth =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 48u);
+
+                if (imageTable == nullptr) {
+                    return fail(MissingImageTable, commandIndex, VK_SUCCESS);
+                }
+                if (imageSlot >= imageTable->slotCount()) {
+                    return fail(ImageSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanImageTable::ImageSlot& copyTargetImageSlot =
+                    imageTable->slot(imageSlot);
+                if (!copyTargetImageSlot.isBound) {
+                    return fail(UnboundImportedImage, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& copySourceBufferSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!copySourceBufferSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if (!isAssignedCommandStreamImageLayout(imageLayoutValue)) {
+                    return fail(UnknownImageLayoutValue, commandIndex, VK_SUCCESS);
+                }
+                if (!isUsableCommandStreamImageAspectMask(aspectMaskValue)) {
+                    return fail(UnknownImageAspectMask, commandIndex, VK_SUCCESS);
+                }
+
+                const auto& targetImageDescription = copyTargetImageSlot.description;
+                const std::uint32_t targetMipWidth =
+                    std::max(1u, targetImageDescription.width >> mipLevel);
+                const std::uint32_t targetMipHeight =
+                    std::max(1u, targetImageDescription.height >> mipLevel);
+                const std::uint32_t targetMipDepth =
+                    std::max(1u, targetImageDescription.depth >> mipLevel);
+                if (mipLevel >= targetImageDescription.mipLevelCount || arrayLayerCount == 0u
+                    || baseArrayLayer + arrayLayerCount
+                           > targetImageDescription.arrayLayerCount
+                    || copyWidth == 0u || copyHeight == 0u || copyDepth == 0u
+                    || copyWidth > targetMipWidth || copyHeight > targetMipHeight
+                    || copyDepth > targetMipDepth) {
+                    return fail(ImageSubresourceOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const std::uint64_t copyByteCount =
+                    static_cast<std::uint64_t>(commandStreamImageFormatTexelByteSize(
+                        static_cast<CommandStreamImageFormat>(
+                            targetImageDescription.formatValue)))
+                    * copyWidth * copyHeight * copyDepth * arrayLayerCount;
+                if (bufferByteOffset + copyByteCount > copySourceBufferSlot.byteSize) {
+                    return fail(CopyRangeOutOfBounds, commandIndex, VK_SUCCESS);
+                }
+
+                VkBufferImageCopy copyRegion{};
+                copyRegion.bufferOffset = bufferByteOffset;
+                copyRegion.bufferRowLength = 0u;   // tightly packed
+                copyRegion.bufferImageHeight = 0u; // tightly packed
+                copyRegion.imageSubresource.aspectMask =
+                    mapCommandStreamImageAspectMask(aspectMaskValue);
+                copyRegion.imageSubresource.mipLevel = mipLevel;
+                copyRegion.imageSubresource.baseArrayLayer = baseArrayLayer;
+                copyRegion.imageSubresource.layerCount = arrayLayerCount;
+                copyRegion.imageExtent = VkExtent3D{copyWidth, copyHeight, copyDepth};
+                vkCmdCopyBufferToImage(
+                    commandBuffer, copySourceBufferSlot.buffer, copyTargetImageSlot.image,
+                    mapCommandStreamImageLayout(
+                        static_cast<CommandStreamImageLayout>(imageLayoutValue)),
+                    1u, &copyRegion);
+                break;
+            }
             case CommandStreamOpcode::CopyImageToBuffer: {
                 // Pinned payload: imageSlot, bufferSlot, layout, aspect, mip, layers,
                 // bufferOffset, tightly packed extent.

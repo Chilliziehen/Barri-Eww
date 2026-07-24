@@ -96,10 +96,26 @@ if(BARRIEWW_BACKEND_VULKAN)
         PRIVATE
             Catch2::Catch2WithMain)
 
+    add_executable(BarriEwwNativePresentationRuntimeTests
+        NativePresentationRuntimeBoundaryTests.cpp
+        ../src/Interoperability/NativePresentationRuntimeBoundary.cpp
+        ../src/Vulkan/VulkanPresentationRuntime.cpp)
+    target_include_directories(BarriEwwNativePresentationRuntimeTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../include
+            ${Vulkan_INCLUDE_DIRS})
+    target_compile_definitions(BarriEwwNativePresentationRuntimeTests
+        PRIVATE
+            BARRIEWW_NATIVE_FFM_EXPORTS=1)
+    target_link_libraries(BarriEwwNativePresentationRuntimeTests
+        PRIVATE
+            Catch2::Catch2WithMain)
+
     foreach(failureTestTarget
             BarriEwwVulkanFrameLoopFailureTests
             BarriEwwVulkanImageTableFailureTests
-            BarriEwwVulkanPipelineTableFailureTests)
+            BarriEwwVulkanPipelineTableFailureTests
+            BarriEwwNativePresentationRuntimeTests)
         if(BARRIEWW_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             target_compile_options(${failureTestTarget} PRIVATE --coverage -O0 -g)
             target_link_options(${failureTestTarget} PRIVATE --coverage)
@@ -123,6 +139,7 @@ if(BARRIEWW_BACKEND_VULKAN)
     catch_discover_tests(BarriEwwVulkanFrameLoopFailureTests)
     catch_discover_tests(BarriEwwVulkanImageTableFailureTests)
     catch_discover_tests(BarriEwwVulkanPipelineTableFailureTests)
+    catch_discover_tests(BarriEwwNativePresentationRuntimeTests)
 endif()
 catch_discover_tests(BarriEwwNativeFfmBoundaryTests
     DL_PATHS

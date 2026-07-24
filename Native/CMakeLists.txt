@@ -34,6 +34,7 @@ option(BARRIEWW_CRITICAL_HOTPATH_LOG "Allow log I/O on the command-recording hot
 # injected as product #if macros (spec §3.3 dimension note).
 option(BARRIEWW_BUILD_TESTS    "Build Native unit tests (Catch2)"        ON)
 option(BARRIEWW_ENABLE_COVERAGE "Instrument for coverage (GCC/Clang)"    OFF)
+option(BARRIEWW_GPU_FRAME_METRICS "Compile GPU timestamp frame metrics" OFF)
 
 # Switch dependency validation at configure time (spec §3.3): hot-path logging is
 # meaningless without the logging system.
@@ -78,7 +79,8 @@ foreach(featureSwitch
         BARRIEWW_BACKEND_DX12
         BARRIEWW_BACKEND_METAL
         BARRIEWW_LOGGING
-        BARRIEWW_CRITICAL_HOTPATH_LOG)
+        BARRIEWW_CRITICAL_HOTPATH_LOG
+        BARRIEWW_GPU_FRAME_METRICS)
     if(${featureSwitch})
         target_compile_definitions(BarriEwwNative PUBLIC ${featureSwitch}=1)
     endif()
@@ -98,13 +100,22 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/VulkanPipelineTable.cpp
             src/Vulkan/VulkanImageTable.cpp
             src/Vulkan/VulkanImageViewTable.cpp
-            src/Vulkan/VulkanGraphicsPipelineTable.cpp)
+            src/Vulkan/VulkanGraphicsPipelineTable.cpp
+            src/Vulkan/VulkanPresentationRuntime.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
 
 # ── Java-loadable FFM shared boundary (spec §3.6 / §6.6) ────────────────────────────────
 add_library(BarriEwwNativeFfm SHARED
     src/Interoperability/NativeCommandStreamModuleValidationBoundary.cpp)
+
+# The presentation runtime FFM boundary is inherently Vulkan/swapchain (ADR-0004), so it is
+# only compiled into the shared library when the Vulkan backend is enabled.
+if(BARRIEWW_BACKEND_VULKAN)
+    target_sources(BarriEwwNativeFfm
+        PRIVATE
+            src/Interoperability/NativePresentationRuntimeBoundary.cpp)
+endif()
 
 target_include_directories(BarriEwwNativeFfm
     PUBLIC

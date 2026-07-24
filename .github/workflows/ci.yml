@@ -109,7 +109,13 @@ jobs:
             nativeLibraryPath="$PWD/Native/build/ffm/libBarriEwwNativeFfm.so"
           fi
           test -f "$nativeLibraryPath"
-          ./Core/gradlew -p Core clean test nativeIntegrationTest \
+          # The presentation runtime FFM symbols exist only in Vulkan-enabled builds, so the
+          # demoTest binding suite runs on the Linux (Vulkan) cells, not Windows backend-neutral.
+          demoTestTask=""
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            demoTestTask="demoTest"
+          fi
+          ./Core/gradlew -p Core clean test nativeIntegrationTest $demoTestTask \
             jacocoTestReport jacocoTestCoverageVerification \
             -PbarriewwNativeLibraryPath="$nativeLibraryPath" --no-daemon
 
