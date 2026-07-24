@@ -88,14 +88,45 @@ endif()
 
 ## §3.5 根构建入口契约
 
-`build.sh` / `build.bat` 须支持 (最低)：
+根 `build.sh` 与 `build.bat` 必须提供完全同构的 CLI、默认值、参数校验、模块顺序、退出码
+与变体翻译：
 
-- 选择目标模块 (`Native` / `Mod` / 全部)；
-- 透传变体/开关 (如 `--threaded-recording=off`)，转译为各模块构建系统的对应参数；
-- 统一 Debug/Release 配置入口；
-- 保证两侧功能开关一致性 (§3.4)。
+```text
+build.sh|build.bat
+  [--module native|core|mod|editor|all]
+  [--configuration debug|release]
+  [--backend vulkan]
+  [--threaded-recording on|off]
+  [--tests on|off]
+  [--coverage on|off]
+  [--help]
+```
 
-> 具体 CLI 契约在实现前进入 ProposedExtensions 讨论定稿。
+| 参数 | 默认值 | 语义 |
+| ---- | ------ | ---- |
+| `--module` | `all` | 构建一个指定模块，或按 `Native → Core → Mod → Editor` 固定依赖顺序构建全部模块 |
+| `--configuration` | `debug` | 映射到各模块等价的 Debug/Release 构建配置 |
+| `--backend` | `vulkan` | 当前仅接受已实现的 Vulkan；未知/未实现后端必须失败 |
+| `--threaded-recording` | `on` | 映射到 Native `THREADED_RECORDING=ON/OFF` 及 Java 语义对齐的 Gradle property |
+| `--tests` | `on` | 控制 Native `BARRIEWW_BUILD_TESTS` 与 Java/TypeScript test task 是否执行 |
+| `--coverage` | `off` | 控制 Native `BARRIEWW_ENABLE_COVERAGE` 与 Java/TypeScript coverage gate |
+
+固定行为：
+
+1. `--coverage on` 要求 `--tests on`；显式冲突必须在调用任何模块构建前失败。
+2. `--help` 仅输出 usage 并成功退出；未知参数、缺值、非法值均输出错误并非零退出。
+3. `all` 始终表示固定拓扑中的全部模块，不得静默退化为“当前可构建模块”。任一模块缺少其
+   固定 build manifest 时，显式构建该模块或 `all` 必须清晰失败；若未来需要“可用模块”
+   模式，须新增不同名称并先登记规约。
+4. 两脚本只负责编排并打印所执行的模块命令；CMake/Gradle/npm 配置与 dependency lock
+   仍仅存在于模块目录。根目录不得新增模块 build system。
+5. Native 变体翻译：configuration → CMake config，backend → `BARRIEWW_BACKEND_*`，
+   threaded/tests/coverage → §3.3 已登记开关。Core/Mod/Editor 使用各自等价 task/property；
+   不支持某个已请求维度时须失败，不得忽略。
+6. 脚本必须原样传播第一个失败模块的非零退出码并停止后续模块；路径必须相对脚本自身目录
+   解析，从任意 working directory 调用及 repository path 含空格时行为一致。
+
+该契约由所有者裁决 P20 固化；后续增加参数、模块模式或默认值均须走规约修订。
 
 ---
 
