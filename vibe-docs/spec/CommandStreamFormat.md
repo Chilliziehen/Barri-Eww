@@ -356,6 +356,10 @@ PushBufferDeviceAddress  0x0008  byteSize 16  {bufferSlot u32, pushConstantByteO
 ExecuteBarrierBatch      0x0032  byteSize 16  {barrierBatchSlot u32, reserved u32}
 CopyBuffer               0x0040  byteSize 40  {sourceBufferSlot u32, destinationBufferSlot u32,
                                                sourceByteOffset u64, destinationByteOffset u64, copyByteCount u64}
+CopyBufferToImage        0x0046  byteSize 64  {bufferSlot u32, imageSlot u32, imageLayoutValue u32,
+                                               aspectMaskValue u32, mipLevel u32, baseArrayLayer u32,
+                                               arrayLayerCount u32, reserved u32, bufferByteOffset u64,
+                                               copyWidth u32, copyHeight u32, copyDepth u32, reserved u32}
 ClearColorImage          0x0043  byteSize 56  {imageSlot u32, imageLayoutValue u32, clearColor[4] f32,
                                                aspectMaskValue u32, baseMipLevel u32, mipLevelCount u32,
                                                baseArrayLayer u32, arrayLayerCount u32, reserved u32}
@@ -390,11 +394,49 @@ Indirect usage bit on the buffer, a 4-aligned `bufferOffset`, and
 `drawCount == 1` with `strideByteCount == 16`; multi-draw is a later additive increment
 gated on the device's multi-draw capability.
 
+`CopyBufferToImage` is the P24 visible Pure Compute transfer. It mirrors
+`CopyImageToBuffer` field order with source/destination slots reversed. Recording requires
+buffer TransferSource, bound image TransferDestination, assigned/compatible layout and
+aspect, nonzero copy extent, valid mip/layer ranges, and a tightly packed texel range
+`bufferByteOffset + width*height*depth*layerCount*texelByteSize` inside the buffer. v0.1
+fixes `bufferRowLength=0` and `bufferImageHeight=0`; the compiler emits barriers before and
+after the copy. Swapchain usage must advertise `VK_IMAGE_USAGE_TRANSFER_DST_BIT`; absence
+is an explicit unsupported-surface failure, never a silent storage-image fallback.
+
 Payload decoding is the load-time point where slot ranges, bind state, usage bits and
 copy/subresource ranges are validated against the materialized tables (ADR-0002 D5);
 device addresses are resolved and baked at record time. Assigned opcodes that a recorder
 does not yet implement fail loudly rather than being skipped. Opcodes present in the
 ADR-0002 catalog but absent above are reserved for later increments.
+
+---
+
+## §9.15 Imported image runtime binding v0.1（P22）
+
+BECS imported image entry 继续只携带非零 `importIdentifier` 与 neutral expected description，
+不写入 raw Vulkan handle 或 swapchain image index。load/recreation 通过 Version 1 fixed-width
+binding records 按 identifier 安装 borrowed image：image handle、format、extent、mips/layers/
+samples/usage 与 `swapchainGeneration`。
+
+Rules:
+
+1. identifier 非零且 binding set 内唯一；每个 imported entry 恰好一个 binding，不允许 extra/
+   missing/duplicate。
+2. Native 校验 format/extent/mips/layers/samples 和 required usage；不兼容则在录制前失败。
+3. Native 复制 binding record，不保留 Java temporary segment；slot 标为 bound/borrowed，且没有
+   owned device memory。`VulkanImageTable` 永不销毁 borrowed image。
+4. binding set 在一个 generation 内 immutable；recreation 先创建新 set 并重录依赖 handle 的
+   command buffers，相关旧 work 完成后再退休旧 generation。
+5. acquire image index 是 runtime selection，不进入 BECS；presentation runtime 可内聚管理其
+   swapchain images，但通用 imported entry 必须遵守相同 metadata/ownership 规则。
+
+---
+
+## §9.16 Presentation runtime 与 BECS 边界
+
+Swapchain mode/format/extent/image index、semaphore/fence rotation 与 present result 只在运行期
+可知，属于 ADR-0003 D3 microkernel，不新增每帧 graph/pass 数据。BECS 仍只在 load/recreation
+消费；presentation primary 按 `(frameSlot, swapchainImage)` 预录并 O(1) 选择。
 
 ---
 

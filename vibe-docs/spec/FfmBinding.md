@@ -116,3 +116,48 @@ barriEwwValidateCommandStreamModuleVersion1(
 5. Version 1 symbol/layout 一经发布不得原位 breaking 修改；不兼容版本增加新 Version symbol。
 6. Java binding 接受明确的 absolute library `Path`，不使用全局 symbol cache、
    `System.loadLibrary` 搜索或 Mod 资源解压。对应生产打包规则留待 Mod feature 固化。
+
+## §6.7 Presentation execution Version 1 ABI（P21/P23）
+
+### §6.7.1 Ownership 与 symbol 集合
+
+Java 创建并拥有 Vulkan bootstrap handles；Native presentation runtime 只借用它们，并通过
+versioned C ABI 拥有 swapchain/frame/module resources。Version 1 固定提供语义完整的：
+
+- create/destroy presentation runtime；
+- load/destroy one BECS module owner；
+- begin frame；
+- submit and present frame；
+- recreate swapchain；
+- query mapped frame-slot region；
+- copy completed-frame metrics/failure context。
+
+最终 C symbol 必须带 `Version1` 后缀且使用完整单词；不得暴露 C++ class、`std::*`、Vulkan
+struct 或 Java object identity。Native owner 以 opaque address 返回，由 Java final
+`AutoCloseable` 独占；destroy 返回后 address 永久失效。Java device/surface/queue 生命周期必须
+覆盖 runtime；module backing segment 生命周期必须覆盖 loaded owner，且先 destroy Native owner
+再关闭 Java Arena。
+
+所有 create/load/begin/submit/present/recreate/destroy 都是 non-critical downcall；只允许经证明
+bounded/nonblocking 的 scalar query 使用 `Linker.Option.critical(false)`。每个 handle 与
+`FunctionDescriptor` 在 binding 创建期解析一次，不得进入 frame path。
+
+### §6.7.2 Frame status
+
+正常 frame 状态是值而非异常：`Success`、`SurfaceUnavailable`、`RecreateRequired`、
+`Suboptimal`。初始化、materialization、recording 与不可恢复 Vulkan failure 使用 operation
+result + stable error + raw VkResult，并在 Java 慢路径转受检异常。Native 必须 containment
+全部 C++ 异常；Java exception 不穿越 upcall/downcall。
+
+### §6.7.3 FrameMetricsVersion1（P23）
+
+固定 record 至少包含：`frameSequence`、`swapchainGeneration`、`frameSlotIndex`、`imageIndex`、
+`validFlags`、`fenceWaitNanoseconds`、`acquireNanoseconds`、`nativeSubmitCallNanoseconds`、
+`presentCallNanoseconds`、`totalCpuFrameIntervalNanoseconds`、`computeGpuNanoseconds`、
+`graphicsGpuNanoseconds`、`finalTransferGpuNanoseconds`、`totalSubmittedGpuNanoseconds`、
+present result/mode 与 sharing mode。所有字段使用固定宽度；完整 offset/sizeof 在 ABI header
+实现前追加到 §6.7 表并由双侧 compile-time/layout assertions 钉死。
+
+metrics 表示**已完成 frame**：`beginFrame` 在复用一个 slot 时返回该 slot 上一次 frame 的记录，
+并保留原 `frameSequence`；无效 GPU query 由 validFlags 表达，不返回虚假 0 duration。Java 自行
+测 `JavaParameterWriteNanoseconds` 并按 frameSequence 合并。

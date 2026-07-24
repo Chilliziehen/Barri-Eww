@@ -61,6 +61,7 @@ endif()
 | `BARRIEWW_CRITICAL_HOTPATH_LOG` | 功能 | OFF | 允许热路径 (command 录制) 内的日志 I/O      | Native |
 | `BARRIEWW_BUILD_TESTS`          | 构建 | ON  | 是否构建单元测试 (Catch2)                   | Native |
 | `BARRIEWW_ENABLE_COVERAGE`      | 构建 | OFF | 是否为覆盖率插桩 (GCC/Clang)                | Native |
+| `BARRIEWW_GPU_FRAME_METRICS`    | 功能 | OFF | 编译 GPU timestamp query 与完成帧 GPU 分段指标；Release Demo 变体开启 | Native |
 
 > **维度说明**：`功能`/`平台` 维度的开关会被注入为产品代码宏 (`<SWITCH>=1`) 并由 `#if`
 > 消费；`构建` 维度的开关 (`BARRIEWW_BUILD_TESTS`/`BARRIEWW_ENABLE_COVERAGE`) 仅影响

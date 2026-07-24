@@ -30,6 +30,10 @@
 | P17  | DrawIndirect 载荷固化 (GPU-driven 绘制; v0.1 限 drawCount==1/stride==16, 多重间接绘制留待 additive 增量) | CommandStreamFormat §9.11 |
 | P19  | 首个 FFM 校验边界（Core 归属、JDK 25 critical API、Version 1 C ABI、真实 Java→Native 校验门禁） | BuildSystem §3.6 / Testing §4.2.1 / §6 / §7.1.2 / §8 |
 | P20  | 根构建入口 CLI（跨平台同构参数、变体透传、模块顺序、fail-fast 语义） | BuildSystem §3.5 |
+| P21  | Java-owned Vulkan bootstrap / Native-owned presentation execution FFM Version 1：opaque runtime/module owners、frame status、lifetime | FfmBinding §6.7 / ADR-0004 |
+| P22  | ImportedImageBinding v0.1：按 importIdentifier 绑定 borrowed image、metadata compatibility 与 generation replacement | CommandStreamFormat §9.15 / ADR-0004 |
+| P23  | FrameMetricsVersion 1 与 `BARRIEWW_GPU_FRAME_METRICS`：completed-frame CPU/GPU 分段指标 | BuildSystem §3.3 / FfmBinding §6.7.3 / ADR-0004 |
+| P24  | Pure Compute visible CopyBufferToImage：64-byte payload、tight-packed range 与 swapchain TRANSFER_DST 规则 | CommandStreamFormat §9.11 / §9.16 / ADR-0004 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
 | —    | 新增开关 `BARRIEWW_CRITICAL_HOTPATH_LOG`          | BuildSystem §3.3 / §7.2.1 (所有者补充)      |
