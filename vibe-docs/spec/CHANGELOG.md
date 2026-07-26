@@ -17,6 +17,76 @@
   非放弃）。
 - [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 登记 P25 能力清单产出物、
   P26 参数 DSL 与参数块 ABI；逐项批准前不得实现。
+- [新增] §9.17 [CommandStreamFormat.md](CommandStreamFormat.md) —— GraphOutputTable v0.1
+  （所有者裁决 P27）：section type `0x0008`，固化图与 presentation 的**单一交接契约**——
+  每帧槽一张由 RDG 分配并拥有的 output color image、图收尾布局、format/extent 一致性与
+  usage 校验；每帧槽独立 output 为必需（相邻帧在飞时共用会读写相撞）。
+- [修改] §9.4 / §9.16 [CommandStreamFormat.md](CommandStreamFormat.md) —— section 类型清单
+  加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
+  独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
+  测试中原样执行。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— 状态
+  `Proposed` → **`Accepted`**（所有者逐项裁决 D1、D3–D6、D8–D10）。D8/D9/D10 裁决：
+  D8 合成结构固定为一次全屏图形 pass、不对 TA 开放且**不承诺开放机制**，三者 extent 必须
+  相等（MVP 不缩放）、不做色彩空间转换，**混合公式依赖 D7 故 D8 在其定案前不完备**；
+  D9 验证路径由三步改为**四步**，新增「取消世界 + 纯色背景」一步使 D7 的 alpha 语义
+  单独暴露（第 2 步中宿主纹理完全不透明，合成退化为拷贝，不触发 alpha 问题）；
+  D10 **订正初稿**——初稿「不满足则保持原版路径」假定了不存在的运行期回退，实际上阻止
+  宿主创建 swapchain 是 generation 级一次性决定，接管后原版无 swapchain 可用；现拆为两层：
+  presentation 接管为 generation 级且接管后仅支持**延迟回退**（下个 generation 不再接管），
+  世界替换为每帧级可自由回退，并保留「已接管即每帧必须有输出」不变式。
+  D2（屏蔽手法）留待实现期、D7 留待实测，其余条款为已批准决策。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) D5.3 —— 补强
+  保持 GENERAL 的理由：宿主对 main render target 的使用不止 blit，后处理链与截图
+  （`GameRenderer.java:234/:431/:473`）同样假定 GENERAL，转走而不转回将使这些路径进入
+  未定义行为，且症状与渲染主线索无关、极难定位。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D5 裁决：
+  D5.1 仅导入宿主 main render target 的 color texture，不导 depth；D5.2 **订正初稿**——
+  宿主 GUI 纹理**不走 P22**（P22 是 BECS imported entry 机制，与 D3「宿主纹理不进 BECS」
+  冲突），它只是 presentation 侧的借用句柄，故 presentation 路径**不再以 P22 为前置依赖**；
+  D5.3 保持 `VK_IMAGE_LAYOUT_GENERAL` 只发内存 barrier，理由为回退安全（宿主 blit 恒按
+  GENERAL 读，转走而不转回将使 D10 回退路径进入未定义行为），并禁止以 `UNDEFINED` 作
+  `oldLayout`；D5.4 hook `RenderTarget.resize()` 换代 + `VkImage` 句柄比对兜底；
+  D5.5 记录已知限制——取消世界渲染后宿主深度缺失致**手部恒在最前**，玩家嵌入方块时穿模，
+  不阻塞 MVP，记录以免日后反复排查。
+  Context 补入两项实测：宿主纹理恒为 GENERAL（`VulkanGpuTexture.java:47/62-63`、
+  `VulkanGpuSurface.java:366`）、main target color texture 含 `SAMPLED` usage
+  （`MainTarget.java:79` + `VulkanConst.textureUsageToVk`），故合成可直接采样。
+- [修改] [ADR-0004](../adr/ADR-0004-JavaVulkanPresentationRuntime.md) D4 —— 加入
+  2026-07-26 修正记录：图工作由「secondary + `vkCmdExecuteCommands`」改为**多 primary
+  同批提交**（ADR-0006 D4.1 裁决）。依据为 `CommandBufferRecorder` 落地后产出的即是
+  primary（begin 路径不设 inheritance info），已有 61 个用例建立其上；改用 secondary 需
+  改动 recorder 与全部测试夹具而无对应收益。原文保留，以修正记录形式追加，不改写决策轨迹。
+- [修改] §9.16 [CommandStreamFormat.md](CommandStreamFormat.md) —— 明确 presentation 侧
+  合成/呈现管线为手写实现、不经 BECS，因而**不受 §9.8 push-constants-only 约束**，可自由
+  使用 descriptor set；为支持合成而向 BECS 增加 descriptor table 属不必要（ADR-0006 D4.5）。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D4 裁决：
+  D4.1 多 primary 同批提交（`submitAndPresentFrame` 参数改为 `std::span<const VkCommandBuffer>`）；
+  D4.2 presentation primary 固定构成；D4.3 查询面为装载期一次性、普通 C++ 访问器 +
+  `std::span`，依赖方向严格单向（模块不知晓 presentation）；D4.4 合成所需 sampled view
+  由 presentation 自建；D4.5 合成必须为图形 pass（blit 无法 alpha 混合）。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D6 裁决为
+  **独立提交**：Barri-Eww 自行 `vkQueueSubmit`，完全不注入 Minecraft 的
+  `VulkanCommandEncoder`，首版即终局。依据为 `Minecraft.java:1308` 的唯一 `submit()`
+  紧邻 `:1310` 的 `present()`，故我方在 present 接管点提交时宿主 GUI 工作已提交完毕，
+  仅凭 Vulkan submission-order 语义下的一次 barrier 即可同步，无需任何 semaphore 交互；
+  接管点与现有 `beginFrame`/`submitAndPresentFrame` 一一对应，presentation runtime 零改动。
+  **推翻初稿建议的方案 α**（注入宿主 encoder）：`VulkanCommandEncoder` 无 `signalFence`，
+  走 α 将迫使 frame-slot fence 迁移为 timeline semaphore 而产生双同步路径（D3 已否决的
+  双模式问题），并继承宿主 `awaitSubmitCompletion` 的双重节流。α 作为已评估否决方案留档。
+  连带记录两项必须查证/处理项：宿主 GUI 纹理渲染后的 image layout（D5，禁止以
+  `UNDEFINED` 代替）、`isAcquired()` 门控（D2，不处理将直接黑屏）。D4 标记为须依
+  D3/D6 重写并已消除与 D3 的表述冲突。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D3 裁决为单一
+  交接点；**订正初稿论证**：原「barrier 必须编译期计算故须进 RDG 体系」不成立（presentation
+  的 barrier 是封闭集合，硬编码同样是编译期确定），真实理由是图的可移植性。备选演进方向
+  （presentation 图化）明确标注为非既定路径。
+- [新增] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) `Proposed`
+  —— Native-owned Minecraft presentation：D1 presentation 由 Native 完全接管已裁决
+  （否决 Minecraft-hosted，理由为单一模型 + HDR/FG 空间，非"避免图像回传 Java"）；
+  其余条款待逐项讨论，含四个接管点、RDG 与 presentation 的资源/帧循环边界、
+  合成尾段预录矩阵、P22 导入契约、提交边界方案 α/β、GUI alpha 待实测项与三步验证路径。
+  基于 2026-07-26 反编译 MC 26.2 的实测帧流。
 
 ---
 
