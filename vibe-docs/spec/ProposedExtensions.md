@@ -44,6 +44,12 @@ T0 三指标仲裁顺序 `性能 > 兼容性 > 可维护性` 已确认 (spec.md 
 
 ## 待裁决 (PROPOSED)
 
-_当前无待裁决项。_
+| 编号 | 建议                                                                                                     | 目标条款                          |
+| ---- | -------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| P25  | **能力清单 (Capability Manifest) 产出物** `PROPOSED`：装载期枚举 MC `ENVIRONMENT_ATTRIBUTE` / `ATTRIBUTE_TYPE` 注册表导出的机器可读数据源清单（属性 id、值类型、默认值、range、是否空间插值/同步 + 我方内建源），供 Editor 作数据调色板。需定义命名、序列化格式与版本策略 | GeneratedArtifacts §8 / ADR-0005 D1 |
+| P26  | **参数 DSL 与 frame-slot 参数块 ABI** `PROPOSED`：受限 DSL 文法与内建函数集、值类型到 MC `AttributeType` 的显式映射（含 RGB_COLOR 等打包类型）、参数块 schema 与编译期偏移分配规则 | CodingConvention §1 / CommandStreamFormat §9 / ADR-0005 D2·D4 |
+
+> ADR-0005 D5 另记录两项**明确推迟、非放弃**的方向，落地时须先在此登记并裁决：
+> Tier 2 外部声明数据源 (D5.1)、B 类图结构决策 (D5.2)。
 
 新的扩充建议在此登记，标 `PROPOSED`，经所有者确认后迁入对应正式文档并在 CHANGELOG 记录。
