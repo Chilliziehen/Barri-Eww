@@ -25,6 +25,18 @@
   加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
   独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
   测试中原样执行。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D6 裁决为
+  **独立提交**：Barri-Eww 自行 `vkQueueSubmit`，完全不注入 Minecraft 的
+  `VulkanCommandEncoder`，首版即终局。依据为 `Minecraft.java:1308` 的唯一 `submit()`
+  紧邻 `:1310` 的 `present()`，故我方在 present 接管点提交时宿主 GUI 工作已提交完毕，
+  仅凭 Vulkan submission-order 语义下的一次 barrier 即可同步，无需任何 semaphore 交互；
+  接管点与现有 `beginFrame`/`submitAndPresentFrame` 一一对应，presentation runtime 零改动。
+  **推翻初稿建议的方案 α**（注入宿主 encoder）：`VulkanCommandEncoder` 无 `signalFence`，
+  走 α 将迫使 frame-slot fence 迁移为 timeline semaphore 而产生双同步路径（D3 已否决的
+  双模式问题），并继承宿主 `awaitSubmitCompletion` 的双重节流。α 作为已评估否决方案留档。
+  连带记录两项必须查证/处理项：宿主 GUI 纹理渲染后的 image layout（D5，禁止以
+  `UNDEFINED` 代替）、`isAcquired()` 门控（D2，不处理将直接黑屏）。D4 标记为须依
+  D3/D6 重写并已消除与 D3 的表述冲突。
 - [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D3 裁决为单一
   交接点；**订正初稿论证**：原「barrier 必须编译期计算故须进 RDG 体系」不成立（presentation
   的 barrier 是封闭集合，硬编码同样是编译期确定），真实理由是图的可移植性。备选演进方向

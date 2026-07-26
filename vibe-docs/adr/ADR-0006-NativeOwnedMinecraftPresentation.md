@@ -3,6 +3,7 @@
 - **状态**: Proposed (2026-07-26)
   - **D1 已裁决**：presentation 由 Native 完全接管。
   - **D3 已裁决**：单一交接点(图产出 output image)，契约固化于 §9.17。
+  - **D6 已裁决**：独立提交，不注入 Minecraft 的 encoder。
   - 其余条款为待逐项讨论的草案；标注 `待裁决` 或 `待实测` 的条目在批准前不得实现。
 - **决策者**: 项目所有者 (Chilliziehen)、Claude
 - **关系**: 把 ADR-0004 的 Native-owned presentation 模型延伸到 Minecraft 宿主，
@@ -89,6 +90,11 @@ Minecraft.runTick()
 `swapchainOutOfDate`)，接管后必须保证 Minecraft 侧代码路径不进入非法状态或抛出。
 具体屏蔽方式(mixin 取消 / 重定向 / 空实现)在实现提案中确定。
 
+**必须处理项 —— `isAcquired()` 门控**：`Minecraft.java:1309` 以
+`if (this.windowSurface.isAcquired())` 决定是否调用 `present()`。接管 acquire 后
+Minecraft 内部的 `currentImageIndex` 不再被设置，`isAcquired()` 可能返回 false，导致
+`present()` 永不被调用而直接黑屏。该门控必须一并接管或使其返回真值。
+
 ### D3. RDG 与 presentation 的职责边界 `已裁决`
 
 **采用单一交接点：图产出 output image，presentation 侧持有其余一切。**
@@ -134,33 +140,37 @@ swapchain image 与宿主 GUI 纹理**不进入 BECS**。
 两者由同一 RDG 编译器编译)。**此为备选方向，非既定演进路径**——presentation 图化的需求是否
 真实出现尚不确定，不得据此提前引入图组合机制。
 
-### D4. 预录矩阵与合成尾段 `待裁决`
+### D4. 预录矩阵 `待裁决（须依 D3/D6 重写）`
+
+> 本条初稿写于 D3 裁决之前，其中「合成尾段由 RDG 编译器识别并编译」的表述已与 D3
+> 冲突：合成归 presentation 侧，swapchain image 与宿主 GUI 纹理不进 BECS。以下为
+> 修正后的框架，具体条款待讨论。
 
 沿用 ADR-0004 D4 的两级结构：
 
 ```text
-secondary[frameSlot][lane]      图工作，与 imageIndex 无关
-primary[frameSlot][imageIndex]  presentation，含合成尾段
+secondary[frameSlot][lane]      图编译产物，与 imageIndex 无关
+primary[frameSlot][imageIndex]  presentation 侧手写预录
 ```
 
 presentation primary 的固定构成：
 
 ```text
 timestamp begin
-execute secondary[frameSlot][*]                 // 世界
-barrier worldColor    → shader read             // 编译期计算
-barrier mcGuiTexture  → shader read             // 编译期计算
-<composite>           → swapchainImage[imageIndex]
+barrier hostGuiTexture → 合成读取布局        // 兼作与宿主提交的同步点（D6）
+execute secondary[frameSlot][*]              // 图工作
+barrier graphOutput    → 合成读取布局
+<composite>            → swapchainImage[imageIndex]
 barrier swapchainImage → PRESENT_SRC
 timestamp end
 ```
 
-合成是图的**尾段**，由 RDG 编译器识别并单独编译进 presentation primary；只有尾段按
-`imageIndex` 展开。若将世界渲染一并编入 primary，其命令需按 swapchain image 数量
-(2–4)复制，命令缓冲内存按倍数增长。
+只有 primary 按 `imageIndex` 展开；图的 secondary 与 swapchain 无关，因此世界渲染的命令
+不随 swapchain image 数量(2–4)复制。
 
-Minecraft 的 GUI 纹理只被尾段消费，世界渲染期间不参与，barrier 编译器据此只需为它
-生成一次 layout transition。
+**待讨论**：presentation 侧预录 primary 时需要向已材质化的模块查询哪些信息——至少是
+按 frameSlot 的 secondary 命令缓冲句柄与 graph output image(§9.17)。该查询面位于 Native
+内部两个子系统之间，不跨 FFM，但同样应为编译期确定的固定形状。
 
 ### D5. 导入契约 `待裁决`
 
@@ -174,30 +184,64 @@ Minecraft 的 GUI 纹理只被尾段消费，世界渲染期间不参与，barri
 - 若未来实测发现该纹理来自 `GraphicsResourceAllocator` 池化分配而非稳定句柄，回退方案为
   按 `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
 
-### D6. 提交边界 `待裁决`
+**必须查证项 —— Minecraft 渲染完成后该纹理的 image layout**(D6 依赖)：我方 primary 起始
+barrier 需以该布局为 `oldLayout`。**不得以 `VK_IMAGE_LAYOUT_UNDEFINED` 代替**——那会丢弃
+图像内容，GUI 随之消失。若实测表明该布局不唯一或随路径变化，则需在接管点显式转换或
+扩展导入契约携带该布局。实现前必须查清，不得以推断定案。
 
-Minecraft 的 GUI 由其自身经 `VulkanCommandEncoder.submit()` 提交，我方合成需读取该纹理，
-跨提交必须同步。两条候选路径：
+### D6. 提交边界：独立提交 `已裁决`
 
-**方案 α — 注入 Minecraft 的 encoder(建议首版)**
+**Barri-Eww 自行 `vkQueueSubmit`，完全不注入 Minecraft 的 `VulkanCommandEncoder`。**
+首版即终局形态，无后续迁移成本。
 
-```text
-encoder.waitSemaphore(ourAcquireSemaphore, ...)
-encoder.execute(ourPrerecordedPrimary[frameSlot][imageIndex])
-encoder.signalSemaphore(ourPresentSemaphore, ...)
-→ 我方 vkQueuePresentKHR
+#### 决定性依据：Minecraft 的提交与呈现只隔一行
+
+```java
+RenderSystem.getDevice().createCommandEncoder().submit();   // Minecraft.java:1308
+if (this.windowSurface.isAcquired()) {
+    this.windowSurface.present();                            // Minecraft.java:1310  ← 接管点
+}
 ```
 
-Minecraft 自身的 blit 即此结构，我方仅替换其命令缓冲内容。同队列提交顺序保证 GUI 先于
-合成执行，仅需一次 memory barrier 保证可见性。swapchain / semaphore / present 仍归我方，
-满足 D1；提交动作借用宿主机器，避免与 `VulkanCommandEncoder` 内部状态冲突。
+Minecraft 每帧只有这一次 `submit()`(`blitFromTexture` 在 `:1294` 仅录入 submissionBuilder，
+不提交)。我方在 `present()` 接管点提交时，Minecraft 的全部 GUI 工作已提交完毕。
 
-**方案 β — 自行 `vkQueueSubmit`**
+由此，**同步无需任何 semaphore 交互**：Vulkan 的 submission order 语义规定 pipeline barrier
+的第一同步域覆盖同一队列上提交顺序更早的所有命令，因此我方 primary 起始处的一次 barrier
+(src = `COLOR_ATTACHMENT_OUTPUT | TRANSFER`，srcAccess = `COLOR_ATTACHMENT_WRITE |
+TRANSFER_WRITE`)即与 Minecraft 的 GUI 写入建立执行与内存依赖。
 
-完全独立提交。控制力更强(frame generation、latency marker 需要)，但须自行处理与
-Minecraft 提交的排序及 encoder 状态一致性，风险更高。
+#### 接管点与现有 API 一一对应
 
-α → β 的切换不改变图的编译产物，仅影响提交层。
+| Minecraft 方法 | Barri-Eww 动作 |
+| -------------- | -------------- |
+| `acquireNextTexture()` | `beginFrame(width, height)` — 等 frame-slot fence + 以我方 semaphore acquire |
+| `blitFromTexture(...)` | 空实现 |
+| `present()` | `submitAndPresentFrame(primary[frameSlot][imageIndex])` |
+
+`VulkanPresentationRuntime` 无需任何改动：fence 仍为 fence，与 standalone 共用同一条代码路径。
+
+#### 前提条件
+
+同队列。β 的 barrier 同步依赖我方与 Minecraft 使用同一 graphics queue；按 D1 我方借用
+Minecraft 的 device 与 queues，该前提天然成立，但实现中必须显式断言，不得默认。
+
+#### 已评估并否决：方案 α（注入 Minecraft 的 encoder）
+
+初稿曾建议首版采用 α(`encoder.waitSemaphore` / `execute(ourPrimary)` / `signalSemaphore`，
+我方 present)。**该建议被推翻**，否决理由：
+
+1. **`VulkanCommandEncoder` 无 `signalFence` API**(仅 `waitSemaphore` / `execute` /
+   `signalSemaphore` / `submit`)。走 α 则我方 frame-slot fence 必须迁移为 timeline semaphore，
+   导致 presentation runtime 出现 standalone(fence)与 Minecraft(timeline)两套同步路径——
+   正是 D3 已否决的双模式问题。
+2. **继承 Minecraft 的节流**：`submit()` 内含
+   `awaitSubmitCompletion(currentSubmitIndex - 2)` 主机等待，Minecraft 自身已做 2 帧深流控；
+   叠加我方 frame slot 形成双重节流，且提交时机受宿主控制。
+3. α 的唯一优点(「Minecraft 的 blit 本就是该形状」)不成立：**β 完全不触碰 Minecraft 的
+   encoder，耦合更少而非更多**。
+
+保留此记录，以免日后重新提出「注入宿主 encoder 更省事」。
 
 ### D7. GUI alpha 与 clear 策略 `待实测`
 
@@ -248,7 +292,7 @@ frame slot 获取成功时才接管；任一条件不满足则不接管，保持
 
 ## Open
 
-- D6 方案 α/β 的首版选择(建议 α)。
+- D4 依 D3/D6 重写后的具体条款，含 presentation 侧对已材质化模块的查询面形状。
 - D7 的 GUI alpha 方案，须实测后定案。
 - D8 合成规则是否、何时对 TA 开放。
 - `VulkanGpuSurface` 的具体屏蔽手法与其内部状态一致性保证。
