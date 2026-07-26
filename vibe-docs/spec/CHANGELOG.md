@@ -17,6 +17,12 @@
   非放弃）。
 - [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 登记 P25 能力清单产出物、
   P26 参数 DSL 与参数块 ABI；逐项批准前不得实现。
+- [新增] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) `Proposed`
+  —— Native-owned Minecraft presentation：D1 presentation 由 Native 完全接管已裁决
+  （否决 Minecraft-hosted，理由为单一模型 + HDR/FG 空间，非"避免图像回传 Java"）；
+  其余条款待逐项讨论，含四个接管点、RDG 与 presentation 的资源/帧循环边界、
+  合成尾段预录矩阵、P22 导入契约、提交边界方案 α/β、GUI alpha 待实测项与三步验证路径。
+  基于 2026-07-26 反编译 MC 26.2 的实测帧流。
 
 ---
 
