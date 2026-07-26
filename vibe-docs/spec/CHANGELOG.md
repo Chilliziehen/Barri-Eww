@@ -25,6 +25,18 @@
   加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
   独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
   测试中原样执行。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D5 裁决：
+  D5.1 仅导入宿主 main render target 的 color texture，不导 depth；D5.2 **订正初稿**——
+  宿主 GUI 纹理**不走 P22**（P22 是 BECS imported entry 机制，与 D3「宿主纹理不进 BECS」
+  冲突），它只是 presentation 侧的借用句柄，故 presentation 路径**不再以 P22 为前置依赖**；
+  D5.3 保持 `VK_IMAGE_LAYOUT_GENERAL` 只发内存 barrier，理由为回退安全（宿主 blit 恒按
+  GENERAL 读，转走而不转回将使 D10 回退路径进入未定义行为），并禁止以 `UNDEFINED` 作
+  `oldLayout`；D5.4 hook `RenderTarget.resize()` 换代 + `VkImage` 句柄比对兜底；
+  D5.5 记录已知限制——取消世界渲染后宿主深度缺失致**手部恒在最前**，玩家嵌入方块时穿模，
+  不阻塞 MVP，记录以免日后反复排查。
+  Context 补入两项实测：宿主纹理恒为 GENERAL（`VulkanGpuTexture.java:47/62-63`、
+  `VulkanGpuSurface.java:366`）、main target color texture 含 `SAMPLED` usage
+  （`MainTarget.java:79` + `VulkanConst.textureUsageToVk`），故合成可直接采样。
 - [修改] [ADR-0004](../adr/ADR-0004-JavaVulkanPresentationRuntime.md) D4 —— 加入
   2026-07-26 修正记录：图工作由「secondary + `vkCmdExecuteCommands`」改为**多 primary
   同批提交**（ADR-0006 D4.1 裁决）。依据为 `CommandBufferRecorder` 落地后产出的即是

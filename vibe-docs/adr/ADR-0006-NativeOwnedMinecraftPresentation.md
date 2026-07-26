@@ -4,6 +4,7 @@
   - **D1 已裁决**：presentation 由 Native 完全接管。
   - **D3 已裁决**：单一交接点(图产出 output image)，契约固化于 §9.17。
   - **D4 已裁决**：多 primary 同批提交（修正 ADR-0004 D4）、查询面、合成为图形 pass。
+  - **D5 已裁决**：仅导 color texture、保持 GENERAL、不走 P22、hook `resize()` 换代。
   - **D6 已裁决**：独立提交，不注入 Minecraft 的 encoder。
   - 其余条款为待逐项讨论的草案；标注 `待裁决` 或 `待实测` 的条目在批准前不得实现。
 - **决策者**: 项目所有者 (Chilliziehen)、Claude
@@ -65,6 +66,15 @@ Minecraft.runTick()
 4. **`VulkanCommandEncoder` 暴露可注入接缝**：`waitSemaphore` / `execute(VkCommandBuffer)`
    / `signalSemaphore` / `submit`(`VulkanCommandEncoder.java:155/164/173/198`)。
    Minecraft 自身的 blit 正是经此路径提交(`VulkanGpuSurface.java:398-400`)。
+5. **Minecraft 全程将纹理保持在 `VK_IMAGE_LAYOUT_GENERAL`**：创建时即
+   `UNDEFINED(0) → GENERAL(1)`(`VulkanGpuTexture.java:47/62-63`)且此后不再转换；
+   `blitFromTexture` 对源纹理**不发任何 barrier**，直接以
+   `srcImageLayout = 1 (GENERAL)` 调用 `vkCmdBlitImage`(`VulkanGpuSurface.java:366`)。
+   Minecraft 以「一律 GENERAL」换取免除布局跟踪。
+6. **main render target 的 color texture 含 `SAMPLED` usage**：`MainTarget` 以
+   `usage = 15` 创建(`MainTarget.java:79`)，按 `VulkanConst.textureUsageToVk` 展开为
+   `TRANSFER_DST | TRANSFER_SRC | SAMPLED | COLOR_ATTACHMENT`。因此合成可直接采样该纹理，
+   无需先行拷贝。
 
 ## Decision
 
@@ -219,22 +229,69 @@ view 由 presentation 自行创建并拥有，销毁时机随 presentation gener
 「v0.1 管线布局仅 push constants、资源经 device address 到达着色器」的约束**，可自由使用
 descriptor set。为支持合成而向 BECS ABI 增加 descriptor table 是不必要的。
 
-### D5. 导入契约 `待裁决`
+### D5. 宿主纹理导入契约 `已裁决`
 
-- Minecraft `mainRenderTarget` 的 color texture 以 P22 ImportedImageBinding 导入，
-  按 importIdentifier 绑定，携带 format/extent/mips/layers/samples/usage/layout/
-  queue family 的中立描述并在装载期校验。
-- 句柄在一个 generation 内不变(依据 Context 事实 2)，因此可被预录命令缓冲直接引用。
-- `resize` / render-scale 变化 → presentation generation 换代 → 重建导入绑定与依赖的
-  命令缓冲；沿用 ADR-0004 D3 的 old-swapchain 与 generation 退休策略，不依赖全局
-  `vkDeviceWaitIdle`。
-- 若未来实测发现该纹理来自 `GraphicsResourceAllocator` 池化分配而非稳定句柄，回退方案为
-  按 `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
+#### D5.1 导入范围：仅 color texture
 
-**必须查证项 —— Minecraft 渲染完成后该纹理的 image layout**(D6 依赖)：我方 primary 起始
-barrier 需以该布局为 `oldLayout`。**不得以 `VK_IMAGE_LAYOUT_UNDEFINED` 代替**——那会丢弃
-图像内容，GUI 随之消失。若实测表明该布局不唯一或随路径变化，则需在接管点显式转换或
-扩展导入契约携带该布局。实现前必须查清，不得以推断定案。
+只导入 `gameRenderer.mainRenderTarget()` 的 **color texture**，不导入 depth texture。
+合成为 2D alpha 混合，不需要宿主深度。
+
+#### D5.2 不走 P22；这是 presentation 侧的借用句柄
+
+**订正初稿**：初稿称「以 P22 ImportedImageBinding 导入，按 importIdentifier 绑定」。
+该表述与 D3 冲突并已废止——P22 是 **BECS** 的 imported entry 机制(`importIdentifier`
+位于 BECS image table)，而 D3 已裁决宿主 GUI 纹理**不进入 BECS**。
+
+三类资源的归属如下，presentation 路径**完全不依赖 P22**：
+
+| 资源 | 归属 | 进入 BECS |
+| ---- | ---- | --------- |
+| graph output image | RDG 创建并拥有；image table 内的 **created** 条目 | 是（§9.17） |
+| swapchain images | presentation 拥有 | 否 |
+| 宿主 GUI 纹理 | presentation **借用** | 否 |
+
+宿主 GUI 纹理仅是 presentation 侧持有的一个借用 `VkImage` 句柄，其校验契约为 presentation
+内部实现，无 `importIdentifier`、无 BECS binding record。P22 仍为将来的**图级**导入
+（例如图需采样 Minecraft 方块图集）所需，但**不是本路径的前置依赖**。
+
+#### D5.3 布局策略：保持 GENERAL，只发内存 barrier
+
+依 Context 事实 5，宿主纹理恒为 `VK_IMAGE_LAYOUT_GENERAL`。我方**不做布局转换**，
+只发内存 barrier（`srcAccess = MEMORY_WRITE` → `dstAccess = SHADER_READ`），
+采样时仍以 GENERAL 为布局。
+
+决定性理由是**回退安全**：D10 规定 readiness 不满足时回退 Minecraft 原生路径，而其 blit
+恒以 `srcImageLayout = GENERAL` 读取。若我方将该纹理转为 `SHADER_READ_ONLY_OPTIMAL`
+而未转回，原生路径即为未定义行为。保持 GENERAL 使回退**构造上安全**，而非依赖「记得转回」
+的约定。
+
+代价：GENERAL 下的采样在部分硬件上略逊于 `SHADER_READ_ONLY_OPTIMAL`。该代价为一次全屏
+采样，可忽略。
+
+**禁止**以 `VK_IMAGE_LAYOUT_UNDEFINED` 作为 `oldLayout`——那将丢弃图像内容，GUI 随之消失。
+
+#### D5.4 Generation 触发：hook `resize()` + 句柄比对兜底
+
+- **主路径**：Mod 侧 mixin 钩住 `RenderTarget.resize()`，通知 presentation 换代。
+  无每帧开销。
+- **兜底**：generation 校验时比对 `VkImage` 句柄（指针比较，开销可忽略），防止宿主在
+  未钩住的路径上重建纹理。
+- 换代时重建导入绑定、sampled view 与依赖其句柄的预录命令缓冲；沿用 ADR-0004 D3 的
+  old-swapchain 与 generation 退休策略，不依赖全局 `vkDeviceWaitIdle`。
+- 句柄在一个 generation 内不变（Context 事实 2），故可被预录命令缓冲直接引用。
+- 若未来实测发现该纹理改为来自 `GraphicsResourceAllocator` 池化分配，回退方案为按
+  `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
+
+#### D5.5 已知限制：手部遮挡不正确
+
+取消 `LevelRenderer.render` 后，Minecraft 的深度缓冲内不含世界深度，而**手部**由
+Minecraft 以深度测试绘入 main render target。缺少世界深度时手部将无条件绘出；合成为
+「宿主 GUI + 手 覆盖于世界之上」，因此**手部恒在最前**。
+
+绝大多数情形下观感正确（手本就贴近相机），但**玩家嵌入方块、手部本应被遮挡时会穿模**。
+
+该项**不阻塞 MVP**，在此记录以免日后被反复当作缺陷排查。将来修正的两条路径：将我方深度
+提供给 Minecraft 的手部渲染，或将手部一并纳入我方渲染。
 
 ### D6. 提交边界：独立提交 `已裁决`
 
@@ -329,7 +386,8 @@ frame slot 获取成功时才接管；任一条件不满足则不接管，保持
 
 - ADR-0004 的 presentation runtime、frame slot、generation retirement、frame metrics
   全部复用；Minecraft 宿主与 standalone demo 共享同一 Native 实现。
-- 需要 P22 ImportedImageBinding 先行落地(ADR-0004 已登记，尚未实现)。
+- **不依赖 P22 ImportedImageBinding**：初稿曾将其列为前置依赖，该判断依 D5.2 已废止——
+  presentation 路径涉及的三类资源均不经 BECS imported entry。P22 仍为将来的图级导入所需。
 - `Mod/` 需承载对 `VulkanGpuSurface` / `Minecraft` / `LevelRenderer` 的 mixin；
   这些 Minecraft 内部类型不得出现在 `Core`/`Native` 的 ABI 中。
 - 接管 present 与 `LevelRenderer.render` 会影响注入这些阶段的其他模组；renderer
