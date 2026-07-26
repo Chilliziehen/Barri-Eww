@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-07-26
+
+- [新增] [ADR-0005](../adr/ADR-0005-SceneDataAccessAndParameterDsl.md) —— 固化 Minecraft
+  场景数据接入与 TA 参数 DSL（所有者裁决 D1–D4）：数据源分级 MVP 只做 Tier 1
+  （枚举 `ENVIRONMENT_ATTRIBUTE` / `ATTRIBUTE_TYPE` 注册表自动发现，含第三方模组属性）；
+  TA 脚本采用自研受限 DSL 并在烘焙期经 ASM 编译为直线字节码（控制权优先，否决 Lua/
+  GraalVM/Java 子集）；TA 逻辑时间域 MVP 只做 A 类参数计算，C 类逐 draw 逻辑永久禁止；
+  参数块布局编译期固定。明确推迟 Tier 2 外部声明数据源与 B 类图结构决策（记录于 D5，
+  非放弃）。
+- [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 登记 P25 能力清单产出物、
+  P26 参数 DSL 与参数块 ABI；逐项批准前不得实现。
+
+---
+
 ## 2026-07-23
 
 - [修改] [ProposedExtensions.md](ProposedExtensions.md) / §3.3 / §6.7 / §9.11 / §9.15–§9.16
