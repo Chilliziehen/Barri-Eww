@@ -1,7 +1,8 @@
 # ADR-0006: Native-owned Minecraft presentation
 
 - **状态**: Proposed (2026-07-26)
-  - **D1 方向已由所有者裁决**：presentation 由 Native 完全接管。
+  - **D1 已裁决**：presentation 由 Native 完全接管。
+  - **D3 已裁决**：单一交接点(图产出 output image)，契约固化于 §9.17。
   - 其余条款为待逐项讨论的草案；标注 `待裁决` 或 `待实测` 的条目在批准前不得实现。
 - **决策者**: 项目所有者 (Chilliziehen)、Claude
 - **关系**: 把 ADR-0004 的 Native-owned presentation 模型延伸到 Minecraft 宿主，
@@ -88,22 +89,50 @@ Minecraft.runTick()
 `swapchainOutOfDate`)，接管后必须保证 Minecraft 侧代码路径不进入非法状态或抛出。
 具体屏蔽方式(mixin 取消 / 重定向 / 空实现)在实现提案中确定。
 
-### D3. RDG 与 presentation 的职责边界 `待裁决`
+### D3. RDG 与 presentation 的职责边界 `已裁决`
+
+**采用单一交接点：图产出 output image，presentation 侧持有其余一切。**
 
 | 归属 | 内容 |
 | ---- | ---- |
-| **RDG(编译期)** | 全部资源(含 imported image)、barrier 计算、命令录制 |
-| **Presentation runtime(执行期微内核)** | acquire/present、fence/semaphore、frame slot、generation、recreation |
+| **RDG(编译期)** | 图内资源、barrier 计算、命令录制；**分配并拥有 output image**(每帧槽一张) |
+| **Presentation runtime(宿主特定)** | swapchain 与 image views、宿主 GUI 纹理导入、合成 pipeline 及其固定 barrier 集合、acquire/present、fence/semaphore、frame slot、generation、recreation |
 
-**presentation 不脱离 RDG 的资源与命令体系，但帧循环独立于 RDG。**
+交接契约固化于 **§9.17 GraphOutputTable**：format/extent/final layout/帧槽多重性。
+swapchain image 与宿主 GUI 纹理**不进入 BECS**。
 
-决定性理由：barrier 由编译器在编译期计算。若 Minecraft 的 GUI 纹理与 swapchain image
-不在 RDG 资源体系内，合成步骤的 layout transition 与 access mask 便无法在编译期确定，
-只能在执行期补算，直接违背 T0 与 ADR-0003。
+#### 论证订正
 
-次要理由：P22 ImportedImageBinding 契约已存在，swapchain image 与 Minecraft GUI 纹理
-属同一类 borrowed 资源；HDR/色彩空间/frame generation 均需在合成处表达，故合成必须
-是图可描述的对象。
+本 ADR 初稿曾以「barrier 必须编译期计算，故这两个资源必须进 RDG 体系」为决定性理由。
+**该论证不成立，特此订正**：presentation 的 barrier 是封闭集合(swapchain image 只有
+`UNDEFINED`/`PRESENT_SRC` → 写入布局 → `PRESENT_SRC`；宿主 GUI 纹理只有「宿主写完 → 我方读」)，
+不随图拓扑变化，硬编码于 C++ 同样是编译期确定的，T0 两种方案均满足。需要编译器计算 barrier
+的是**拓扑可变**的图内部，不是固定的收尾段。
+
+#### 真实理由：图的可移植性
+
+选择单一交接点的决定性理由是**图必须能在 standalone、Minecraft 宿主与离屏测试中原样执行**。
+若 swapchain image 与宿主 GUI 纹理进入图的资源模型，世界图即与 Minecraft 强耦合：离屏 GPU
+测试须伪造宿主纹理，或图按宿主分叉。本项目的正确性建立在 GPU 级测试之上，该代价将长期偿付。
+
+次要理由：presentation 的 barrier 集合封闭，手写一次、验证一次即可长期稳定；RDG 编译器
+不必处理 swapchain image 的多重性展开；与 ADR-0004 已建成的实现一致，改动最小。
+
+已评估并否决的替代方案：**全进 RDG**(swapchain image 与 GUI 纹理作为 imported resource
+进图、合成为图的尾段)——牺牲图的可移植性，且迫使纯离屏模块也携带 presentation 尾段。
+
+#### 零拷贝取舍
+
+「全进 RDG」理论上允许世界直接写入 swapchain image，省去一次全屏读写。该优势被判定为不成立：
+任何带后处理(tone mapping / bloom / TAA)的真实管线本就需要中间图像，无法直接写 swapchain；
+仅「无后处理且不显示 UI」这一边缘场景可受益，不足以支撑第二条代码路径。
+
+#### 可能的演进方向（非承诺）
+
+若 presentation 侧的合成逻辑将来复杂到需要美术可控(见 D8)，一种可选形态是把 presentation
+段本身表达为**第二张图**(世界图保持可移植，宿主特定的合成图导入 GUI 纹理与 swapchain image，
+两者由同一 RDG 编译器编译)。**此为备选方向，非既定演进路径**——presentation 图化的需求是否
+真实出现尚不确定，不得据此提前引入图组合机制。
 
 ### D4. 预录矩阵与合成尾段 `待裁决`
 

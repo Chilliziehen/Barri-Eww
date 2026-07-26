@@ -17,6 +17,18 @@
   非放弃）。
 - [新增] [ProposedExtensions.md](ProposedExtensions.md) —— 登记 P25 能力清单产出物、
   P26 参数 DSL 与参数块 ABI；逐项批准前不得实现。
+- [新增] §9.17 [CommandStreamFormat.md](CommandStreamFormat.md) —— GraphOutputTable v0.1
+  （所有者裁决 P27）：section type `0x0008`，固化图与 presentation 的**单一交接契约**——
+  每帧槽一张由 RDG 分配并拥有的 output color image、图收尾布局、format/extent 一致性与
+  usage 校验；每帧槽独立 output 为必需（相邻帧在飞时共用会读写相撞）。
+- [修改] §9.4 / §9.16 [CommandStreamFormat.md](CommandStreamFormat.md) —— section 类型清单
+  加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
+  独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
+  测试中原样执行。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D3 裁决为单一
+  交接点；**订正初稿论证**：原「barrier 必须编译期计算故须进 RDG 体系」不成立（presentation
+  的 barrier 是封闭集合，硬编码同样是编译期确定），真实理由是图的可移植性。备选演进方向
+  （presentation 图化）明确标注为非既定路径。
 - [新增] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) `Proposed`
   —— Native-owned Minecraft presentation：D1 presentation 由 Native 完全接管已裁决
   （否决 Minecraft-hosted，理由为单一模型 + HDR/FG 空间，非"避免图像回传 Java"）；

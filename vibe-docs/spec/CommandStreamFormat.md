@@ -147,8 +147,9 @@ SectionDirectoryEntry (24 bytes):
 Section types: `0x0001 PipelineHandleTable`, `0x0002 BufferHandleTable`,
 `0x0003 ImageHandleTable`, `0x0004 ImageViewHandleTable`, `0x0005 SamplerHandleTable`
 (reserved), `0x0006 ShaderModuleTable`, `0x0007 GraphicsPipelineTable` (§9.14),
-`0x0010 BarrierBatchTable`, `0x0011 RenderingTemplateTable`,
-`0x0012 PushDescriptorTemplateTable` (reserved), `0x0020 LaneStream`.
+`0x0008 GraphOutputTable` (§9.17), `0x0010 BarrierBatchTable`,
+`0x0011 RenderingTemplateTable`, `0x0012 PushDescriptorTemplateTable` (reserved),
+`0x0020 LaneStream`.
 
 Rules: sections lie inside the module and outside the directory, are 8-byte aligned, and
 do not overlap; no two directory entries share a `(sectionTypeValue, sectionIndex)`
@@ -437,6 +438,48 @@ Rules:
 Swapchain mode/format/extent/image index、semaphore/fence rotation 与 present result 只在运行期
 可知，属于 ADR-0003 D3 microkernel，不新增每帧 graph/pass 数据。BECS 仍只在 load/recreation
 消费；presentation primary 按 `(frameSlot, swapchainImage)` 预录并 O(1) 选择。
+
+图与 presentation 之间只有**一个交接点**：图产出的 output image（§9.17）。swapchain image 与
+宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧独立持有并发出其固定 barrier 集合
+（ADR-0006 D3）。该边界使同一张图可在 standalone、Minecraft 宿主与离屏测试中原样执行。
+
+---
+
+## §9.17 GraphOutputTable v0.1（P27）
+
+Section type `0x0008`。声明图与 presentation 的交接契约：图每帧槽产出一张 output color image，
+presentation 侧只读它并自行完成后续合成与呈现。Header 16 字节，其后每帧槽一条 8 字节记录；
+精确尺寸 `16 + outputCount * 8`。
+
+```text
+GraphOutputTableHeader (16 bytes):
+  +0  outputCount       u32   // 每帧槽一条；必须等于 runtime frames-in-flight
+  +4  finalLayoutValue  u32   // §9.12 image layout：图执行结束时 output 所处布局
+  +8  reservedFlags     u32   // must be zero
+  +12 reserved          u32   // must be zero
+
+GraphOutputRecord (8 bytes):
+  +0  outputImageSlot   u32   // slot into the module ImageHandleTable
+  +4  reservedFlags     u32   // must be zero
+```
+
+Rules:
+
+1. `outputCount` 非零；load 期校验其等于 runtime frames-in-flight（ADR-0004 D2 固定为 2），
+   不匹配即失败。每帧槽独立 output 是必需的：相邻帧可同时在飞，共用一张 output 会让后一帧的
+   图写入与前一帧的合成读取相撞。
+2. 每个 `outputImageSlot` 必须存在于 ImageHandleTable，且为 **created** 条目（非 imported）——
+   output image 由 RDG 分配并拥有（ADR-0006 D3）。
+3. 全部 output 的 format/extent/mips/layers/samples 必须一致；presentation 侧按单一套参数建立
+   合成资源。
+4. `finalLayoutValue` 为 assigned layout；图的录制必须以该布局收尾，barrier 编译器据此生成尾部
+   转换。presentation 侧在 load 期校验该布局与其合成实现所需的读取方式兼容，不兼容则失败。
+5. output 必须携带合成实现所需的 usage 位；具体位由 presentation 侧的合成方式决定
+   （采样式合成需 Sampled，blit 式合成需 TransferSource），同样在 load 期校验。
+6. `outputImageSlot` 互不相同。
+7. presentation 侧**只读**该 image：不拥有、不销毁、不改其 owned memory。跨提交的可见性由
+   presentation 侧的固定 barrier 集合保证。
+8. 无 GraphOutputTable 的模块是合法的（纯离屏/计算模块），此时该模块不可用于 presentation。
 
 ---
 

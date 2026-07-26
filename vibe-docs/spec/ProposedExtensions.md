@@ -28,6 +28,7 @@
 | P15  | 全量 BECS ABI 规范固化 (流头/命令头/模块容器/全部 handle·barrier·template 表/命令 opcode 载荷/中立编码枚举) | CommandStreamFormat §9.3–§9.13 |
 | P16  | GraphicsPipelineTable v0.1 (section type 0x0007, 80B 定长记录, 动态渲染管线; BindGraphicsPipeline/SetViewport/SetScissor 载荷; 拓扑/比较/剔除/绕向中立编码) | CommandStreamFormat §9.14 / §9.11 / §9.12 |
 | P17  | DrawIndirect 载荷固化 (GPU-driven 绘制; v0.1 限 drawCount==1/stride==16, 多重间接绘制留待 additive 增量) | CommandStreamFormat §9.11 |
+| P27  | GraphOutputTable v0.1 (section type 0x0008)：图与 presentation 的单一交接契约——每帧槽一张 RDG 拥有的 output image、final layout、format/extent 一致性；swapchain image 与宿主 GUI 纹理不进 BECS | CommandStreamFormat §9.17 / §9.16 / ADR-0006 D3 |
 | P19  | 首个 FFM 校验边界（Core 归属、JDK 25 critical API、Version 1 C ABI、真实 Java→Native 校验门禁） | BuildSystem §3.6 / Testing §4.2.1 / §6 / §7.1.2 / §8 |
 | P20  | 根构建入口 CLI（跨平台同构参数、变体透传、模块顺序、fail-fast 语义） | BuildSystem §3.5 |
 | P21  | Java-owned Vulkan bootstrap / Native-owned presentation execution FFM Version 1：opaque runtime/module owners、frame status、lifetime | FfmBinding §6.7 / ADR-0004 |
