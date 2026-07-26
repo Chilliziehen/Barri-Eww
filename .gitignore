@@ -2,6 +2,9 @@
 /Native/build/
 /Native/out/
 /Native/cmake-build-*/
+# CI-only vendored software rasterizer trees (never committed).
+/Native/swiftshader-source/
+/Native/swiftshader-build/
 *.o
 *.obj
 *.a
@@ -46,5 +49,6 @@
 Thumbs.db
 
 /**/ref/
+/vibe-docs/ref-analyze/
 
 vibe-docs/claude/project-brief.md

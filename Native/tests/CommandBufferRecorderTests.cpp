@@ -105,8 +105,10 @@ std::vector<std::byte> makeExecuteBarrierBatchPayload(std::uint32_t barrierBatch
  * A one-batch table with a single whole-size buffer barrier on bufferSlot, using the
  * given sync2 masks (transfer write -> transfer read by default).
  */
-std::vector<std::byte> makeSingleBufferBarrierTable(std::uint32_t bufferSlot,
-                                                    std::uint64_t stageMask = 0x1000u) {
+std::vector<std::byte> makeSingleBufferBarrierTable(
+    std::uint32_t bufferSlot, std::uint64_t stageMask = 0x1000u,
+    std::uint64_t barrierByteOffset = 0u,
+    std::uint64_t barrierByteCount = CommandStreamBufferBarrierRecord::s_wholeByteCount) {
     std::vector<std::byte> tableBytes;
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0});
@@ -121,8 +123,8 @@ std::vector<std::byte> makeSingleBufferBarrierTable(std::uint32_t bufferSlot,
     appendValue(tableBytes, std::uint64_t{0x800u});        // TRANSFER_READ
     appendValue(tableBytes, bufferSlot);
     appendValue(tableBytes, std::uint32_t{0});
-    appendValue(tableBytes, std::uint64_t{0});
-    appendValue(tableBytes, CommandStreamBufferBarrierRecord::s_wholeByteCount);
+    appendValue(tableBytes, barrierByteOffset);
+    appendValue(tableBytes, barrierByteCount);
     return tableBytes;
 }
 
@@ -271,6 +273,30 @@ TEST_CASE("Recorder rejects invalid barrier batches with the precise failure",
                 == CommandBufferRecordingError::MissingBarrierBatchTable);
     }
 
+    SECTION("no buffer table provided at all") {
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView, {});
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::MissingBufferTable);
+    }
+
+    SECTION("buffer barrier range leaving the buffer") {
+        // Offset 32 + count 64 leaves the 64-byte buffer at slot 1.
+        const std::vector<std::byte> barrierTableBytes = makeSingleBufferBarrierTable(
+            1u, 0x1000u, /*barrierByteOffset=*/32u, /*barrierByteCount=*/64u);
+        const auto barrierTableView =
+            CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
+        REQUIRE(barrierTableView.has_value());
+        const auto recordingResult = CommandBufferRecorder::record(
+            harness->allocateCommandBuffer(), *streamView,
+            {.bufferTable = &*bufferTableResult,
+             .barrierBatchTableView = &barrierTableView.value()});
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::BarrierRangeOutOfBounds);
+    }
+
     SECTION("barrier batch slot outside the table") {
         const std::vector<std::byte> barrierTableBytes = makeSingleBufferBarrierTable(1u);
         const auto barrierTableView =
@@ -347,8 +373,9 @@ TEST_CASE("Recorder rejects invalid streams with the precise failure",
 
     SECTION("assigned but unimplemented opcode fails loudly") {
         TestCommandStreamBuilder streamBuilder{0u};
-        streamBuilder.appendCommand(static_cast<std::uint16_t>(CommandStreamOpcode::Draw),
-                                    std::vector<std::byte>(16u, std::byte{0}));
+        streamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::DrawIndexed),
+            std::vector<std::byte>(16u, std::byte{0}));
         const std::vector<std::byte> streamBytes = streamBuilder.build();
         const auto streamView = CommandStreamValidator::validate(streamBytes);
         REQUIRE(streamView.has_value());

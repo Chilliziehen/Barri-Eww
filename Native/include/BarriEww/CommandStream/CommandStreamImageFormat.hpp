@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "BarriEww/CommandStream/CommandStreamImageAspect.hpp"
+
 namespace barrieww {
 
 /**
@@ -50,6 +52,43 @@ commandStreamImageFormatTexelByteSize(CommandStreamImageFormat imageFormat) noex
         case CommandStreamImageFormat::D24UnormS8Uint: return 4u;
     }
     return 0u;
+}
+
+/**
+ * @note ThreadSafety: Thread-safe (pure constant expression).
+ * @brief Returns the complete neutral aspect mask defined by an assigned image format.
+ * @param imageFormat The assigned neutral image format.
+ * @return std::uint32_t The full format aspect mask, or zero for an unassigned value.
+ */
+[[nodiscard]] constexpr std::uint32_t
+commandStreamImageFormatAspectMask(CommandStreamImageFormat imageFormat) noexcept {
+    switch (imageFormat) {
+        case CommandStreamImageFormat::R8G8B8A8Unorm:
+        case CommandStreamImageFormat::B8G8R8A8Unorm:
+        case CommandStreamImageFormat::R16G16B16A16Float:
+        case CommandStreamImageFormat::R32Uint:
+            return static_cast<std::uint32_t>(CommandStreamImageAspect::Color);
+        case CommandStreamImageFormat::D32Float:
+            return static_cast<std::uint32_t>(CommandStreamImageAspect::Depth);
+        case CommandStreamImageFormat::D24UnormS8Uint:
+            return static_cast<std::uint32_t>(CommandStreamImageAspect::Depth)
+                   | static_cast<std::uint32_t>(CommandStreamImageAspect::Stencil);
+    }
+    return 0u;
+}
+
+/**
+ * @note ThreadSafety: Thread-safe (pure constant expression).
+ * @brief Whether an aspect mask is a non-empty subset supported by an assigned format.
+ * @param imageFormat The assigned neutral image format.
+ * @param aspectMaskValue The neutral image aspect mask to test.
+ * @return bool True when every selected aspect exists in the format.
+ */
+[[nodiscard]] constexpr bool
+isCompatibleCommandStreamImageAspectMask(CommandStreamImageFormat imageFormat,
+                                         std::uint32_t aspectMaskValue) noexcept {
+    const std::uint32_t formatAspectMask = commandStreamImageFormatAspectMask(imageFormat);
+    return aspectMaskValue != 0u && (aspectMaskValue & ~formatAspectMask) == 0u;
 }
 
 } // namespace barrieww

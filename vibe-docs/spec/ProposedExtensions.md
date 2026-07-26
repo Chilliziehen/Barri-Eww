@@ -24,6 +24,16 @@
 | P11  | 覆盖率门槛 C++/Java ≥ 90%、TS ≥ 70%               | Testing §4.5                               |
 | P12  | §1.1.2 豁免 Vulkan 惯用语 `Info`/`CreateInfo` (限镜像 API 概念) | CodingConvention §1.1.2       |
 | P13  | 简单访问器精简注释 (类级总括 + 单行说明)          | CommentConvention §2.6                     |
+| P14  | ImageViewHandleTable v0.1 ABI + BECS staged integration gate | CommandStreamFormat §9.2 / Testing §4.2.1 |
+| P15  | 全量 BECS ABI 规范固化 (流头/命令头/模块容器/全部 handle·barrier·template 表/命令 opcode 载荷/中立编码枚举) | CommandStreamFormat §9.3–§9.13 |
+| P16  | GraphicsPipelineTable v0.1 (section type 0x0007, 80B 定长记录, 动态渲染管线; BindGraphicsPipeline/SetViewport/SetScissor 载荷; 拓扑/比较/剔除/绕向中立编码) | CommandStreamFormat §9.14 / §9.11 / §9.12 |
+| P17  | DrawIndirect 载荷固化 (GPU-driven 绘制; v0.1 限 drawCount==1/stride==16, 多重间接绘制留待 additive 增量) | CommandStreamFormat §9.11 |
+| P19  | 首个 FFM 校验边界（Core 归属、JDK 25 critical API、Version 1 C ABI、真实 Java→Native 校验门禁） | BuildSystem §3.6 / Testing §4.2.1 / §6 / §7.1.2 / §8 |
+| P20  | 根构建入口 CLI（跨平台同构参数、变体透传、模块顺序、fail-fast 语义） | BuildSystem §3.5 |
+| P21  | Java-owned Vulkan bootstrap / Native-owned presentation execution FFM Version 1：opaque runtime/module owners、frame status、lifetime | FfmBinding §6.7 / ADR-0004 |
+| P22  | ImportedImageBinding v0.1：按 importIdentifier 绑定 borrowed image、metadata compatibility 与 generation replacement | CommandStreamFormat §9.15 / ADR-0004 |
+| P23  | FrameMetricsVersion 1 与 `BARRIEWW_GPU_FRAME_METRICS`：completed-frame CPU/GPU 分段指标 | BuildSystem §3.3 / FfmBinding §6.7.3 / ADR-0004 |
+| P24  | Pure Compute visible CopyBufferToImage：64-byte payload、tight-packed range 与 swapchain TRANSFER_DST 规则 | CommandStreamFormat §9.11 / §9.16 / ADR-0004 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
 | —    | 新增开关 `BARRIEWW_CRITICAL_HOTPATH_LOG`          | BuildSystem §3.3 / §7.2.1 (所有者补充)      |
@@ -34,6 +44,12 @@ T0 三指标仲裁顺序 `性能 > 兼容性 > 可维护性` 已确认 (spec.md 
 
 ## 待裁决 (PROPOSED)
 
-_当前无待裁决项。_
+| 编号 | 建议                                                                                                     | 目标条款                          |
+| ---- | -------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| P25  | **能力清单 (Capability Manifest) 产出物** `PROPOSED`：装载期枚举 MC `ENVIRONMENT_ATTRIBUTE` / `ATTRIBUTE_TYPE` 注册表导出的机器可读数据源清单（属性 id、值类型、默认值、range、是否空间插值/同步 + 我方内建源），供 Editor 作数据调色板。需定义命名、序列化格式与版本策略 | GeneratedArtifacts §8 / ADR-0005 D1 |
+| P26  | **参数 DSL 与 frame-slot 参数块 ABI** `PROPOSED`：受限 DSL 文法与内建函数集、值类型到 MC `AttributeType` 的显式映射（含 RGB_COLOR 等打包类型）、参数块 schema 与编译期偏移分配规则 | CodingConvention §1 / CommandStreamFormat §9 / ADR-0005 D2·D4 |
+
+> ADR-0005 D5 另记录两项**明确推迟、非放弃**的方向，落地时须先在此登记并裁决：
+> Tier 2 外部声明数据源 (D5.1)、B 类图结构决策 (D5.2)。
 
 新的扩充建议在此登记，标 `PROPOSED`，经所有者确认后迁入对应正式文档并在 CHANGELOG 记录。

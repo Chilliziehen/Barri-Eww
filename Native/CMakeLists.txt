@@ -34,6 +34,7 @@ option(BARRIEWW_CRITICAL_HOTPATH_LOG "Allow log I/O on the command-recording hot
 # injected as product #if macros (spec §3.3 dimension note).
 option(BARRIEWW_BUILD_TESTS    "Build Native unit tests (Catch2)"        ON)
 option(BARRIEWW_ENABLE_COVERAGE "Instrument for coverage (GCC/Clang)"    OFF)
+option(BARRIEWW_GPU_FRAME_METRICS "Compile GPU timestamp frame metrics" OFF)
 
 # Switch dependency validation at configure time (spec §3.3): hot-path logging is
 # meaningless without the logging system.
@@ -42,8 +43,12 @@ if(BARRIEWW_CRITICAL_HOTPATH_LOG AND NOT BARRIEWW_LOGGING)
         "BARRIEWW_CRITICAL_HOTPATH_LOG=ON requires BARRIEWW_LOGGING=ON (spec §3.3).")
 endif()
 
-# ── Library target ────────────────────────────────────────────────────────────────────
-add_library(BarriEwwNative)
+# ── Internal static implementation target ───────────────────────────────────────────────
+add_library(BarriEwwNative STATIC)
+set_target_properties(BarriEwwNative PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 target_sources(BarriEwwNative
     PRIVATE
@@ -56,7 +61,11 @@ target_sources(BarriEwwNative
         src/CommandStream/CommandStreamBarrierBatchTableValidator.cpp
         src/CommandStream/CommandStreamShaderModuleTableValidator.cpp
         src/CommandStream/CommandStreamPipelineHandleTableValidator.cpp
-        src/CommandStream/CommandStreamImageHandleTableValidator.cpp)
+        src/CommandStream/CommandStreamImageHandleTableValidator.cpp
+        src/CommandStream/CommandStreamImageViewHandleTableValidator.cpp
+        src/CommandStream/CommandStreamRenderingTemplateTableValidator.cpp
+        src/CommandStream/CommandStreamGraphicsPipelineTableValidator.cpp
+        src/Interoperability/NativeCommandStreamModuleValidationOperation.cpp)
 
 target_include_directories(BarriEwwNative
     PUBLIC
@@ -70,7 +79,8 @@ foreach(featureSwitch
         BARRIEWW_BACKEND_DX12
         BARRIEWW_BACKEND_METAL
         BARRIEWW_LOGGING
-        BARRIEWW_CRITICAL_HOTPATH_LOG)
+        BARRIEWW_CRITICAL_HOTPATH_LOG
+        BARRIEWW_GPU_FRAME_METRICS)
     if(${featureSwitch})
         target_compile_definitions(BarriEwwNative PUBLIC ${featureSwitch}=1)
     endif()
@@ -88,9 +98,51 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/CommandBufferRecorder.cpp
             src/Vulkan/VulkanFrameLoop.cpp
             src/Vulkan/VulkanPipelineTable.cpp
-            src/Vulkan/VulkanImageTable.cpp)
+            src/Vulkan/VulkanImageTable.cpp
+            src/Vulkan/VulkanImageViewTable.cpp
+            src/Vulkan/VulkanGraphicsPipelineTable.cpp
+            src/Vulkan/VulkanPresentationRuntime.cpp)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
+
+# ── Java-loadable FFM shared boundary (spec §3.6 / §6.6) ────────────────────────────────
+add_library(BarriEwwNativeFfm SHARED
+    src/Interoperability/NativeCommandStreamModuleValidationBoundary.cpp)
+
+# The presentation runtime FFM boundary is inherently Vulkan/swapchain (ADR-0004), so it is
+# only compiled into the shared library when the Vulkan backend is enabled.
+if(BARRIEWW_BACKEND_VULKAN)
+    target_sources(BarriEwwNativeFfm
+        PRIVATE
+            src/Interoperability/NativePresentationRuntimeBoundary.cpp)
+endif()
+
+target_include_directories(BarriEwwNativeFfm
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_link_libraries(BarriEwwNativeFfm
+    PRIVATE
+        BarriEwwNative)
+
+target_compile_definitions(BarriEwwNativeFfm
+    PRIVATE
+        BARRIEWW_NATIVE_FFM_EXPORTS=1)
+
+set_target_properties(BarriEwwNativeFfm PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ffm")
+
+foreach(configurationName Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${configurationName}" configurationNameUpper)
+    set_target_properties(BarriEwwNativeFfm PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm"
+        LIBRARY_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm"
+        ARCHIVE_OUTPUT_DIRECTORY_${configurationNameUpper} "${CMAKE_BINARY_DIR}/ffm")
+endforeach()
 
 # ── Coverage instrumentation (spec §4.5 gate: Native >= 90%) ───────────────────────────
 if(BARRIEWW_ENABLE_COVERAGE)

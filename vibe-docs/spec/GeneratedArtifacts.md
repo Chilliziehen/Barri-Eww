@@ -1,7 +1,8 @@
 # §8 生成产物与 ClassLoader 约定
 
-> 适用范围：`Mod/` 中 JIT codegen 产出的字节码、其加载隔离，以及受控扩展机制。
-> 服务 T0[1] (性能) 与 T0[2] (可维护)，并保障与 MC/其他 mod 的类空间隔离。
+> 适用范围：`Core/` 中 JIT codegen 产出的字节码、其加载隔离，以及受控扩展机制；
+> `Mod/` 仅负责游戏侧产物装载与生命周期挂接。服务 T0[1] (性能) 与 T0[2] (可维护)，
+> 并保障与 MC/其他 mod 的类空间隔离。
 
 ---
 
@@ -45,3 +46,7 @@ Java 接口、编译为独立 jar 分发，**图 JSON 仅引用节点类型 ID**
 
 - 加载任何生成产物/扩展前，图数据须通过拓扑与语义校验 (慢路径，见 §4 单测覆盖)。
 - 生成字节码在 classload 前应通过 JVM 校验器 (不生成会被 verifier 拒绝的字节码)。
+
+> P19 边界：首个 FFM 增量只建立手写的 Core module-validation binding，不创建占位的
+> `CompiledRenderPipeline`、ASM 生成器或产物 ClassLoader。上述接口与隔离策略在相应
+> IR/codegen feature 落地时整体实现和验证，不得由校验边界预先猜测其生命周期 API。

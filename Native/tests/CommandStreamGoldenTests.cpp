@@ -11,15 +11,25 @@
 #include "BarriEww/CommandStream/CommandStreamBufferHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferMemoryKind.hpp"
 #include "BarriEww/CommandStream/CommandStreamBufferUsage.hpp"
+#include "BarriEww/CommandStream/CommandStreamImageViewHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleSectionType.hpp"
 #include "BarriEww/CommandStream/CommandStreamModuleValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamGraphicsPipelineTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamImageHandleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
+#include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableValidator.hpp"
+#include "BarriEww/CommandStream/CommandStreamShaderModuleTableValidator.hpp"
 #include "BarriEww/CommandStream/CommandStreamValidator.hpp"
 
 using barrieww::CommandStreamBarrierBatchTableValidator;
+using barrieww::CommandStreamGraphicsPipelineTableValidator;
+using barrieww::CommandStreamRenderingTemplateTableValidator;
 using barrieww::CommandStreamBufferHandleTableValidator;
 using barrieww::CommandStreamBufferMemoryKind;
 using barrieww::CommandStreamBufferUsage;
+using barrieww::CommandStreamImageHandleTableValidator;
+using barrieww::CommandStreamImageViewHandleTableValidator;
+using barrieww::CommandStreamShaderModuleTableValidator;
 using barrieww::CommandStreamModuleSectionType;
 using barrieww::CommandStreamModuleValidator;
 using barrieww::CommandStreamOpcode;
@@ -83,6 +93,100 @@ TEST_CASE("Committed golden lane stream validates and decodes as authored",
 
     ++commandIterator;
     REQUIRE(commandIterator == validationResult->end());
+}
+
+// ImageViewHandleTable ABI arbiter: Java emits the committed table byte-exactly, and this
+// Native test validates and decodes the same fixture. The source slots are deliberately
+// not resolved here; that is VulkanImageViewTable's cross-table responsibility.
+TEST_CASE("Committed ImageView table golden validates and decodes as authored",
+          "[commandStream][golden][imageViewHandleTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/ImageViewHandleTable.becs");
+    REQUIRE(goldenBytes.size() == 72u);
+
+    const auto validationResult =
+        CommandStreamImageViewHandleTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->entryCount() == 2u);
+
+    const auto firstEntry = validationResult->entry(0u);
+    REQUIRE(firstEntry.imageSlot == 4u);
+    REQUIRE(firstEntry.imageViewKindValue == 2u);
+    REQUIRE(firstEntry.formatValue == 1u);
+    REQUIRE(firstEntry.aspectMaskValue == 0x1u);
+    REQUIRE(firstEntry.baseMipLevel == 1u);
+    REQUIRE(firstEntry.mipLevelCount == 2u);
+    REQUIRE(firstEntry.baseArrayLayer == 3u);
+    REQUIRE(firstEntry.arrayLayerCount == 1u);
+
+    const auto secondEntry = validationResult->entry(1u);
+    REQUIRE(secondEntry.imageSlot == 8u);
+    REQUIRE(secondEntry.imageViewKindValue == 3u);
+    REQUIRE(secondEntry.formatValue == 5u);
+    REQUIRE(secondEntry.aspectMaskValue == 0x2u);
+    REQUIRE(secondEntry.baseMipLevel == 0u);
+    REQUIRE(secondEntry.mipLevelCount == 1u);
+    REQUIRE(secondEntry.baseArrayLayer == 0u);
+    REQUIRE(secondEntry.arrayLayerCount == 1u);
+}
+
+// RenderingTemplateTable ABI arbiter: Java emits the committed table byte-exactly, and
+// this Native test validates and decodes the same fixture. The source image-view slot is
+// deliberately not resolved here; that is the recorder's cross-table responsibility.
+TEST_CASE("Committed rendering template table golden validates and decodes as authored",
+          "[commandStream][golden][renderingTemplateTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/RenderingTemplateTable.becs");
+    REQUIRE(goldenBytes.size() == 80u);
+
+    const auto validationResult =
+        CommandStreamRenderingTemplateTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->templateCount() == 1u);
+
+    const auto record = validationResult->templateRecord(0u);
+    REQUIRE(record.colorAttachmentCount == 1u);
+    REQUIRE(record.depthAttachmentPresent == 0u);
+    REQUIRE(record.renderAreaWidth == 8u);
+    REQUIRE(record.renderAreaHeight == 8u);
+    REQUIRE(record.layerCount == 1u);
+
+    const auto attachment = validationResult->attachmentRecord(0u, 0u);
+    REQUIRE(attachment.imageViewSlot == 0u);
+    REQUIRE(attachment.imageLayoutValue == 2u); // ColorAttachment
+    REQUIRE(attachment.loadOpValue == 1u);      // Clear
+    REQUIRE(attachment.storeOpValue == 0u);     // Store
+    REQUIRE(attachment.clearValue[3] == 1.0f);
+}
+
+// GraphicsPipelineTable ABI arbiter: Java emits the committed table byte-exactly, and
+// this Native test validates and decodes the same fixture. Shader-module slots are
+// deliberately not resolved here; that is the materialization's cross-table check.
+TEST_CASE("Committed graphics pipeline table golden validates and decodes as authored",
+          "[commandStream][golden][graphicsPipelineTable]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/GraphicsPipelineTable.becs");
+    REQUIRE(goldenBytes.size() == 88u);
+
+    const auto validationResult =
+        CommandStreamGraphicsPipelineTableValidator::validate(goldenBytes);
+    REQUIRE(validationResult.has_value());
+    REQUIRE(validationResult->pipelineCount() == 1u);
+
+    const auto record = validationResult->pipelineRecord(0u);
+    REQUIRE(record.vertexShaderModuleSlot == 0u);
+    REQUIRE(record.fragmentShaderModuleSlot == 1u);
+    REQUIRE(record.pushConstantByteSize == 8u);
+    REQUIRE(record.topologyValue == 4u); // TriangleList
+    REQUIRE(record.colorAttachmentCount == 1u);
+    REQUIRE(record.colorAttachmentFormatValues[0] == 1u); // R8G8B8A8Unorm
+    REQUIRE(record.colorAttachmentFormatValues[7] == 0u);
+    REQUIRE(record.depthAttachmentFormatValue == 5u); // D32Float
+    REQUIRE(record.depthTestEnable == 1u);
+    REQUIRE(record.depthWriteEnable == 1u);
+    REQUIRE(record.depthCompareOperationValue == 4u); // LessOrEqual
+    REQUIRE(record.cullModeValue == 3u);              // Back
+    REQUIRE(record.frontFaceValue == 1u);             // CounterClockwise
 }
 
 // Module-level arbiter: the same committed golden module must be produced byte-exactly
@@ -155,4 +259,77 @@ TEST_CASE("Committed golden module validates and decodes as authored",
     const auto laneOneDrawRecord = *laneOneView.begin();
     REQUIRE(laneOneDrawRecord.opcode == CommandStreamOpcode::Draw);
     REQUIRE(readUnsignedInteger(laneOneDrawRecord.payloadBytes, 0u) == 6u); // vertexCount
+}
+
+// Full-frame module arbiter (structure side): the committed FirstTriangleModule must
+// be produced byte-exactly by the Java write-side composition (Core test) and must
+// validate and decode here — module container, every table section and the lane-0
+// stream. GPU replay of the same fixture lives in GraphicsModuleExecutionTests.
+TEST_CASE("Committed first triangle module golden validates and decodes as authored",
+          "[commandStream][golden][graphicsModule]") {
+    const std::vector<std::byte> goldenBytes =
+        readTestDataFile("CommandStream/FirstTriangleModule.becs");
+    REQUIRE(goldenBytes.size() == 2280u);
+
+    const auto moduleView = CommandStreamModuleValidator::validate(goldenBytes);
+    REQUIRE(moduleView.has_value());
+    REQUIRE(moduleView->graphHash() == 0x1122334455667788ull);
+    REQUIRE(moduleView->laneStreamCount() == 1u);
+    REQUIRE(moduleView->sectionEntries().size() == 8u);
+
+    const auto bufferSection =
+        moduleView->findSection(CommandStreamModuleSectionType::BufferHandleTable);
+    const auto imageSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ImageHandleTable);
+    const auto imageViewSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ImageViewHandleTable);
+    const auto shaderSection =
+        moduleView->findSection(CommandStreamModuleSectionType::ShaderModuleTable);
+    const auto graphicsPipelineSection =
+        moduleView->findSection(CommandStreamModuleSectionType::GraphicsPipelineTable);
+    const auto barrierSection =
+        moduleView->findSection(CommandStreamModuleSectionType::BarrierBatchTable);
+    const auto renderingTemplateSection =
+        moduleView->findSection(CommandStreamModuleSectionType::RenderingTemplateTable);
+    REQUIRE(bufferSection.has_value());
+    REQUIRE(imageSection.has_value());
+    REQUIRE(imageViewSection.has_value());
+    REQUIRE(shaderSection.has_value());
+    REQUIRE(graphicsPipelineSection.has_value());
+    REQUIRE(barrierSection.has_value());
+    REQUIRE(renderingTemplateSection.has_value());
+
+    // Every table section independently passes its own schema validator.
+    REQUIRE(CommandStreamBufferHandleTableValidator::validate(*bufferSection).has_value());
+    REQUIRE(CommandStreamImageHandleTableValidator::validate(*imageSection).has_value());
+    REQUIRE(CommandStreamImageViewHandleTableValidator::validate(*imageViewSection)
+                .has_value());
+    REQUIRE(CommandStreamShaderModuleTableValidator::validate(*shaderSection).has_value());
+    REQUIRE(CommandStreamBarrierBatchTableValidator::validate(*barrierSection).has_value());
+    REQUIRE(CommandStreamRenderingTemplateTableValidator::validate(*renderingTemplateSection)
+                .has_value());
+    const auto graphicsPipelineTableView =
+        CommandStreamGraphicsPipelineTableValidator::validate(*graphicsPipelineSection);
+    REQUIRE(graphicsPipelineTableView.has_value());
+    const auto pipelineRecord = graphicsPipelineTableView->pipelineRecord(0u);
+    REQUIRE(pipelineRecord.pushConstantByteSize == 8u);
+    REQUIRE(pipelineRecord.topologyValue == 4u); // TriangleList
+    REQUIRE(pipelineRecord.colorAttachmentFormatValues[0] == 1u); // R8G8B8A8Unorm
+
+    // The lane-0 stream decodes as the exact first-triangle command sequence.
+    const auto& laneView = moduleView->laneStream(0u);
+    REQUIRE(laneView.commandCount() == 10u);
+    constexpr CommandStreamOpcode expectedOpcodes[] = {
+        CommandStreamOpcode::ExecuteBarrierBatch, CommandStreamOpcode::BeginRendering,
+        CommandStreamOpcode::BindGraphicsPipeline,
+        CommandStreamOpcode::PushBufferDeviceAddress, CommandStreamOpcode::SetViewport,
+        CommandStreamOpcode::SetScissor, CommandStreamOpcode::Draw,
+        CommandStreamOpcode::EndRendering, CommandStreamOpcode::ExecuteBarrierBatch,
+        CommandStreamOpcode::CopyImageToBuffer};
+    std::size_t expectedOpcodeIndex = 0;
+    for (const auto commandRecord : laneView) {
+        REQUIRE(commandRecord.opcode == expectedOpcodes[expectedOpcodeIndex]);
+        ++expectedOpcodeIndex;
+    }
+    REQUIRE(expectedOpcodeIndex == 10u);
 }

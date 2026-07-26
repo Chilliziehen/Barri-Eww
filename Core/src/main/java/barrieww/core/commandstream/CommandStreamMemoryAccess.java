@@ -11,6 +11,7 @@ public final class CommandStreamMemoryAccess {
     public static final long s_indirectCommandRead = 0x1L;
     public static final long s_shaderRead = 0x20L;
     public static final long s_shaderWrite = 0x40L;
+    public static final long s_colorAttachmentWrite = 0x100L;
     public static final long s_transferRead = 0x800L;
     public static final long s_transferWrite = 0x1000L;
 

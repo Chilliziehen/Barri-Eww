@@ -43,8 +43,11 @@ void appendValue(std::vector<std::byte>& targetBytes, ValueType value) {
     std::memcpy(targetBytes.data() + writeOffset, &value, sizeof value);
 }
 
-/** One created 8x8 R8G8B8A8Unorm image (TransferSource | TransferDestination). */
-std::vector<std::byte> makeImageTableBytes() {
+/**
+ * One 8x8 R8G8B8A8Unorm image (TransferSource | TransferDestination); a non-zero
+ * importIdentifier makes it an IMPORTED entry (v0.1: stays an unbound placeholder).
+ */
+std::vector<std::byte> makeImageTableBytes(std::uint32_t importIdentifier = 0u) {
     std::vector<std::byte> tableBytes;
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0});
@@ -57,7 +60,7 @@ std::vector<std::byte> makeImageTableBytes() {
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{1});
     appendValue(tableBytes, std::uint32_t{0x3});
-    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, importIdentifier);
     return tableBytes;
 }
 
@@ -123,7 +126,8 @@ std::vector<std::byte> makeLayoutTransitionBarrierTableBytes() {
 /** Pinned 48-byte ClearColorImage payload (full color subresource). */
 std::vector<std::byte> makeClearColorImagePayload(std::uint32_t imageSlot,
                                                   std::uint32_t imageLayoutValue,
-                                                  std::uint32_t baseMipLevel = 0u) {
+                                                  std::uint32_t baseMipLevel = 0u,
+                                                  std::uint32_t aspectMaskValue = 0x1u) {
     std::vector<std::byte> payloadBytes;
     appendValue(payloadBytes, imageSlot);
     appendValue(payloadBytes, imageLayoutValue);
@@ -131,7 +135,7 @@ std::vector<std::byte> makeClearColorImagePayload(std::uint32_t imageSlot,
     appendValue(payloadBytes, 0.0f);
     appendValue(payloadBytes, 1.0f);
     appendValue(payloadBytes, 1.0f);
-    appendValue(payloadBytes, std::uint32_t{0x1}); // Color aspect
+    appendValue(payloadBytes, aspectMaskValue);
     appendValue(payloadBytes, baseMipLevel);
     appendValue(payloadBytes, CommandStreamImageBarrierRecord::s_remainingCount);
     appendValue(payloadBytes, std::uint32_t{0});
@@ -160,7 +164,133 @@ std::vector<std::byte> makeCopyImageToBufferPayload(std::uint32_t imageSlot,
     return payloadBytes;
 }
 
+/** Two buffers: slot 0 mapped source (TransferSource), slot 1 readback (256B each). */
+std::vector<std::byte> makeSourceAndReadbackBufferTableBytes() {
+    std::vector<std::byte> tableBytes;
+    appendValue(tableBytes, std::uint32_t{2});
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint64_t{256});
+    appendValue(tableBytes, std::uint32_t{0x1}); // TransferSource
+    appendValue(tableBytes, std::uint32_t{2});   // HostVisiblePersistentMapped
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint64_t{256});
+    appendValue(tableBytes, std::uint32_t{0x2}); // TransferDestination
+    appendValue(tableBytes, std::uint32_t{3});   // HostVisibleReadback
+    appendValue(tableBytes, std::uint32_t{0});
+    appendValue(tableBytes, std::uint32_t{0});
+    return tableBytes;
+}
+
+/** Pinned 56-byte CopyBufferToImage payload (P24; layer 0, full 8x8 extent). */
+std::vector<std::byte> makeCopyBufferToImagePayload(std::uint32_t bufferSlot,
+                                                    std::uint32_t imageSlot,
+                                                    std::uint32_t imageLayoutValue,
+                                                    std::uint32_t aspectMaskValue = 0x1u,
+                                                    std::uint32_t mipLevel = 0u,
+                                                    std::uint64_t bufferByteOffset = 0u) {
+    std::vector<std::byte> payloadBytes;
+    appendValue(payloadBytes, bufferSlot);
+    appendValue(payloadBytes, imageSlot);
+    appendValue(payloadBytes, imageLayoutValue);
+    appendValue(payloadBytes, aspectMaskValue);
+    appendValue(payloadBytes, mipLevel);
+    appendValue(payloadBytes, std::uint32_t{0}); // baseArrayLayer
+    appendValue(payloadBytes, std::uint32_t{1}); // arrayLayerCount
+    appendValue(payloadBytes, std::uint32_t{0});
+    appendValue(payloadBytes, bufferByteOffset);
+    appendValue(payloadBytes, std::uint32_t{8});
+    appendValue(payloadBytes, std::uint32_t{8});
+    appendValue(payloadBytes, std::uint32_t{1});
+    appendValue(payloadBytes, std::uint32_t{0});
+    return payloadBytes;
+}
+
 } // namespace
+
+// P24 visible-compute transfer proof, prerecorded as ONE command buffer: transition the
+// image Undefined -> TransferDestination, copy an 8x8 RGBA pattern from the mapped source
+// buffer into the image (CopyBufferToImage), transition to TransferSource, then copy the
+// image back into the readback buffer (CopyImageToBuffer) and assert byte-exact round-trip.
+TEST_CASE("Recorded buffer-to-image copy round-trips a texel pattern",
+          "[imageExecution][gpu]") {
+    const auto harness = TestVulkanDeviceHarness::create();
+    if (harness == nullptr) {
+        SKIP("no usable Vulkan driver on this machine");
+    }
+    const VulkanContext vulkanContext{harness->makeContextCreateInfo()};
+
+    const std::vector<std::byte> imageTableBytes = makeImageTableBytes();
+    const std::vector<std::byte> bufferTableBytes = makeSourceAndReadbackBufferTableBytes();
+    const std::vector<std::byte> barrierTableBytes = makeLayoutTransitionBarrierTableBytes();
+    const auto imageTableView =
+        CommandStreamImageHandleTableValidator::validate(imageTableBytes);
+    const auto bufferTableView =
+        CommandStreamBufferHandleTableValidator::validate(bufferTableBytes);
+    const auto barrierTableView =
+        CommandStreamBarrierBatchTableValidator::validate(barrierTableBytes);
+    REQUIRE(imageTableView.has_value());
+    REQUIRE(bufferTableView.has_value());
+    REQUIRE(barrierTableView.has_value());
+
+    auto imageTable = VulkanImageTable::createFromTable(vulkanContext, *imageTableView);
+    REQUIRE(imageTable.has_value());
+    auto bufferTable = VulkanBufferTable::createFromTable(vulkanContext, *bufferTableView);
+    REQUIRE(bufferTable.has_value());
+
+    std::byte* sourceBytes = bufferTable->slot(0u).mappedPointer;
+    REQUIRE(sourceBytes != nullptr);
+    for (std::uint32_t texelIndex = 0u; texelIndex < 64u; ++texelIndex) {
+        sourceBytes[texelIndex * 4u + 0u] = static_cast<std::byte>(texelIndex);
+        sourceBytes[texelIndex * 4u + 1u] = static_cast<std::byte>(texelIndex * 3u);
+        sourceBytes[texelIndex * 4u + 2u] = static_cast<std::byte>(texelIndex * 7u);
+        sourceBytes[texelIndex * 4u + 3u] = std::byte{0xFF};
+    }
+
+    TestCommandStreamBuilder streamBuilder{0u};
+    {
+        std::vector<std::byte> payloadBytes;
+        appendValue(payloadBytes, std::uint32_t{0});
+        appendValue(payloadBytes, std::uint32_t{0});
+        streamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::ExecuteBarrierBatch),
+            payloadBytes);
+    }
+    streamBuilder.appendCommand(
+        static_cast<std::uint16_t>(CommandStreamOpcode::CopyBufferToImage),
+        makeCopyBufferToImagePayload(0u, 0u, /*TransferDestination*/ 6u));
+    {
+        std::vector<std::byte> payloadBytes;
+        appendValue(payloadBytes, std::uint32_t{1});
+        appendValue(payloadBytes, std::uint32_t{0});
+        streamBuilder.appendCommand(
+            static_cast<std::uint16_t>(CommandStreamOpcode::ExecuteBarrierBatch),
+            payloadBytes);
+    }
+    streamBuilder.appendCommand(
+        static_cast<std::uint16_t>(CommandStreamOpcode::CopyImageToBuffer),
+        makeCopyImageToBufferPayload(0u, 1u));
+    const std::vector<std::byte> streamBytes = streamBuilder.build();
+    const auto streamView = CommandStreamValidator::validate(streamBytes);
+    REQUIRE(streamView.has_value());
+
+    const VkCommandBuffer commandBuffer = harness->allocateCommandBuffer();
+    REQUIRE(CommandBufferRecorder::record(commandBuffer, *streamView,
+            {.bufferTable = &*bufferTable, .barrierBatchTableView = &*barrierTableView, .imageTable = &*imageTable})
+                .has_value());
+    REQUIRE(harness->submitAndWait(commandBuffer));
+
+    const std::byte* readbackBytes = bufferTable->slot(1u).mappedPointer;
+    REQUIRE(readbackBytes != nullptr);
+    for (std::uint32_t texelIndex = 0u; texelIndex < 64u; ++texelIndex) {
+        REQUIRE(readbackBytes[texelIndex * 4u + 0u] == static_cast<std::byte>(texelIndex));
+        REQUIRE(readbackBytes[texelIndex * 4u + 1u]
+                == static_cast<std::byte>(texelIndex * 3u));
+        REQUIRE(readbackBytes[texelIndex * 4u + 2u]
+                == static_cast<std::byte>(texelIndex * 7u));
+        REQUIRE(readbackBytes[texelIndex * 4u + 3u] == std::byte{0xFF});
+    }
+}
 
 // First image execution of the toolchain, prerecorded as ONE command buffer: transition
 // Undefined -> TransferDestination, clear to magenta {1,0,1,1}, transition to
@@ -301,5 +431,117 @@ TEST_CASE("Image command recording rejects invalid streams with the precise fail
         REQUIRE_FALSE(recordingResult.has_value());
         REQUIRE(recordingResult.error().error
                 == CommandBufferRecordingError::ImageSubresourceOutOfRange);
+    }
+
+    SECTION("empty aspect mask") {
+        const auto recordingResult = recordSingleClear(
+            makeClearColorImagePayload(0u, 6u, 0u, /*aspectMaskValue=*/0u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnknownImageAspectMask);
+    }
+
+    SECTION("unbound imported image slot") {
+        const std::vector<std::byte> importedTableBytes =
+            makeImageTableBytes(/*importIdentifier=*/7u);
+        const auto importedTableView =
+            CommandStreamImageHandleTableValidator::validate(importedTableBytes);
+        REQUIRE(importedTableView.has_value());
+        auto importedImageTable =
+            VulkanImageTable::createFromTable(vulkanContext, *importedTableView);
+        REQUIRE(importedImageTable.has_value());
+        REQUIRE_FALSE(importedImageTable->slot(0u).isBound);
+        const auto recordingResult = recordSingleClear(
+            makeClearColorImagePayload(0u, 6u), &*importedImageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnboundImportedImage);
+    }
+
+    const auto recordSingleCopyBufferToImage =
+        [&](std::vector<std::byte> payloadBytes,
+            const VulkanImageTable* imageTablePointer) {
+            TestCommandStreamBuilder streamBuilder{0u};
+            streamBuilder.appendCommand(
+                static_cast<std::uint16_t>(CommandStreamOpcode::CopyBufferToImage),
+                payloadBytes);
+            const std::vector<std::byte> streamBytes = streamBuilder.build();
+            const auto streamView = CommandStreamValidator::validate(streamBytes);
+            REQUIRE(streamView.has_value());
+            return CommandBufferRecorder::record(harness->allocateCommandBuffer(), *streamView,
+                {.bufferTable = &*bufferTable, .imageTable = imageTablePointer});
+        };
+
+    SECTION("buffer-to-image missing image table") {
+        const auto recordingResult =
+            recordSingleCopyBufferToImage(makeCopyBufferToImagePayload(0u, 0u, 6u), nullptr);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::MissingImageTable);
+    }
+
+    SECTION("buffer-to-image image slot outside the table") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 9u, 6u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::ImageSlotOutOfRange);
+    }
+
+    SECTION("buffer-to-image buffer slot outside the table") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(9u, 0u, 6u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::BufferSlotOutOfRange);
+    }
+
+    SECTION("buffer-to-image unassigned layout value") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 0u, 99u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnknownImageLayoutValue);
+    }
+
+    SECTION("buffer-to-image empty aspect mask") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 0u, 6u, /*aspectMaskValue=*/0u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnknownImageAspectMask);
+    }
+
+    SECTION("buffer-to-image subresource range outside the image") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 0u, 6u, 0x1u, /*mipLevel=*/5u), &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::ImageSubresourceOutOfRange);
+    }
+
+    SECTION("buffer-to-image copy range beyond the source buffer") {
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 0u, 6u, 0x1u, 0u, /*bufferByteOffset=*/4u),
+            &*imageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::CopyRangeOutOfBounds);
+    }
+
+    SECTION("buffer-to-image unbound imported image slot") {
+        const std::vector<std::byte> importedTableBytes =
+            makeImageTableBytes(/*importIdentifier=*/7u);
+        const auto importedTableView =
+            CommandStreamImageHandleTableValidator::validate(importedTableBytes);
+        REQUIRE(importedTableView.has_value());
+        auto importedImageTable =
+            VulkanImageTable::createFromTable(vulkanContext, *importedTableView);
+        REQUIRE(importedImageTable.has_value());
+        const auto recordingResult = recordSingleCopyBufferToImage(
+            makeCopyBufferToImagePayload(0u, 0u, 6u), &*importedImageTable);
+        REQUIRE_FALSE(recordingResult.has_value());
+        REQUIRE(recordingResult.error().error
+                == CommandBufferRecordingError::UnboundImportedImage);
     }
 }

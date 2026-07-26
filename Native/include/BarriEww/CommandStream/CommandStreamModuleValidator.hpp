@@ -19,7 +19,8 @@ namespace barrieww {
  *        agreement. Runs once per module on the slow path; the returned view is the
  *        proof of validity that keeps replay zero-check (§8.4 trust model). Slot-range
  *        validation of stream payloads against handle tables is deferred to the
- *        replayer increment that decodes payloads (still load-time, per D5).
+ *        load-time table-validation/materialization and command-recording increments that
+ *        decode payloads (still load-time, per D5).
  */
 class CommandStreamModuleValidator {
 public:
@@ -31,14 +32,15 @@ public:
      *        aligned at its base (ADR-0002 D1).
      * @return std::expected<CommandStreamModuleView, CommandStreamModuleValidationFailure>
      *         A module view on success; the first failure otherwise (with the nested
-     *         lane-stream failure attached for LaneStreamInvalid). Errors are values,
-     *         not exceptions, so the FFM boundary needs no unwinding (§6.4).
+     *         lane-stream failure attached for LaneStreamInvalid). Malformed input is an
+     *         error value; temporary-container allocation failures may throw so the FFM
+     *         boundary can contain and translate them instead of terminating the process.
      * @warning MemoryOwnership: moduleBytes is BORROWED (in production a Java-owned
      *          MemorySegment, §6.3); the returned view and its lane views alias it and
      *          the provider must keep it alive and unmodified while any of them is in use.
      */
     [[nodiscard]] static std::expected<CommandStreamModuleView, CommandStreamModuleValidationFailure>
-    validate(std::span<const std::byte> moduleBytes) noexcept;
+    validate(std::span<const std::byte> moduleBytes);
 };
 
 } // namespace barrieww

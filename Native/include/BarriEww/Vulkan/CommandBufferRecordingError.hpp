@@ -28,7 +28,8 @@ enum class CommandBufferRecordingError : std::uint32_t {
     MissingPipelineTable = 11,
     /** A command references a pipeline slot outside the table. */
     PipelineSlotOutOfRange = 12,
-    /** Dispatch or push constants were recorded before any BindComputePipeline. */
+    /** Dispatch was recorded before BindComputePipeline, or push constants before any
+     *  pipeline bind (pushes target the most recently bound pipeline, §9.11). */
     NoBoundComputePipeline = 13,
     /** A push constant write leaves the bound pipeline's declared range. */
     PushConstantRangeExceeded = 14,
@@ -54,6 +55,34 @@ enum class CommandBufferRecordingError : std::uint32_t {
     ImageSubresourceOutOfRange = 24,
     /** No buffer table was supplied (bufferTable is required, see recording inputs). */
     MissingBufferTable = 25,
+    /** BeginRendering was recorded but no rendering template table was provided. */
+    MissingRenderingTemplateTable = 26,
+    /** A command references a rendering template slot outside the table. */
+    RenderingTemplateSlotOutOfRange = 27,
+    /** An attachment references an image view but no image view table was provided. */
+    MissingImageViewTable = 28,
+    /** An attachment references an image-view slot outside the table. */
+    ImageViewSlotOutOfRange = 29,
+    /** BeginRendering was recorded while a rendering scope is already open. */
+    NestedRenderingScope = 30,
+    /** EndRendering was recorded without an open rendering scope. */
+    RenderingScopeNotOpen = 31,
+    /** The stream binds graphics pipelines but no graphics pipeline table was provided. */
+    MissingGraphicsPipelineTable = 32,
+    /** A command references a graphics pipeline slot outside the table. */
+    GraphicsPipelineSlotOutOfRange = 33,
+    /** A graphics command was recorded outside an open rendering scope (§9.11). */
+    GraphicsCommandOutsideRenderingScope = 34,
+    /** Draw was recorded before any BindGraphicsPipeline. */
+    NoBoundGraphicsPipeline = 35,
+    /** Draw was recorded before both SetViewport and SetScissor (§9.11). */
+    ViewportOrScissorNotSet = 36,
+    /** A bound pipeline's attachment formats do not match the open scope's template. */
+    AttachmentFormatMismatch = 37,
+    /** A DrawIndirect drawCount other than 1 (v0.1; multi-draw is a later increment). */
+    UnsupportedIndirectDrawCount = 38,
+    /** A DrawIndirect strideByteCount other than 16 (v0.1 pinned argument stride). */
+    InvalidIndirectDrawStride = 39,
     /** The stream executes a barrier batch but no barrier batch table was provided. */
     MissingBarrierBatchTable = 7,
     /** A command references a barrier batch slot outside the table. */

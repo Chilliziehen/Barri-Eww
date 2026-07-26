@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "BarriEww/CommandStream/CommandStreamBufferBarrierRecord.hpp"
@@ -15,7 +16,10 @@
 #include "BarriEww/CommandStream/CommandStreamOpcode.hpp"
 #include "BarriEww/Vulkan/VulkanBufferTable.hpp"
 #include "BarriEww/Vulkan/VulkanFormatMapping.hpp"
+#include "BarriEww/CommandStream/CommandStreamRenderingTemplateTableView.hpp"
+#include "BarriEww/Vulkan/VulkanGraphicsPipelineTable.hpp"
 #include "BarriEww/Vulkan/VulkanImageTable.hpp"
+#include "BarriEww/Vulkan/VulkanImageViewTable.hpp"
 #include "BarriEww/Vulkan/VulkanPipelineTable.hpp"
 
 namespace barrieww {
@@ -76,10 +80,12 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *           slot checks against pipelineTable              -> Missing.../PipelineSlotOutOfRange
  *           vkCmdBindPipeline(COMPUTE); remember the slot's layout and push range
  *         case PushBufferDeviceAddress:
- *           requires a bound compute pipeline              -> NoBoundComputePipeline
+ *           requires a bound pipeline (push constants target the MOST RECENTLY bound
+ *           pipeline; its layout, declared range and stage flags — compute, or
+ *           vertex+fragment per §9.14)                     -> NoBoundComputePipeline
  *           buffer slot checks; slot.deviceAddress != 0    -> MissingBufferDeviceAddress
  *           pushOffset + 8 within declared push range      -> PushConstantRangeExceeded
- *           vkCmdPushConstants(boundLayout, COMPUTE, offset, 8, &resolvedAddress)
+ *           vkCmdPushConstants(targetLayout, targetStages, offset, 8, &resolvedAddress)
  *           // The stream carries the SLOT; the address exists only after
  *           // materialization, so it is baked here at record time (load path).
  *         case Dispatch:
@@ -105,6 +111,41 @@ bool isLegacyMappableMask(std::uint64_t synchronizationMask) {
  *           bufferOffset + texelSize * extent * layers within the buffer
  *                                                          -> CopyRangeOutOfBounds
  *           vkCmdCopyImageToBuffer(image, mappedLayout, buffer, one tightly packed region)
+ *         case BeginRendering:
+ *           template table present, slot in range; no scope already open
+ *                                                          -> NestedRenderingScope
+ *           resolve each attachment through the image view table (present, slot in
+ *           range); build VkRenderingInfo from the template record
+ *           vkCmdBeginRendering; remember the open template slot
+ *         case EndRendering:
+ *           a scope must be open                           -> RenderingScopeNotOpen
+ *           vkCmdEndRendering
+ *         case BindGraphicsPipeline / SetViewport / SetScissor / Draw:
+ *           all four require an open rendering scope       -> GraphicsCommandOutsideRenderingScope
+ *         case BindGraphicsPipeline:
+ *           graphics table present, slot in range
+ *           pipeline attachment formats must match the open scope's template
+ *           (count and per-attachment format resolved through the image view
+ *           table — the §9.11 record-time cross-table check)
+ *                                                          -> AttachmentFormatMismatch
+ *           vkCmdBindPipeline(GRAPHICS); remember the slot's layout and push range
+ *         case SetViewport:  vkCmdSetViewport(decoded VkViewport)
+ *         case SetScissor:   vkCmdSetScissor(decoded VkRect2D)
+ *         case Draw:
+ *           requires a bound graphics pipeline             -> NoBoundGraphicsPipeline
+ *           requires viewport and scissor both set         -> ViewportOrScissorNotSet
+ *           vkCmdDraw(vertexCount, instanceCount, firstVertex, firstInstance)
+ *         case DrawIndirect:
+ *           same scope/pipeline/viewport preconditions as Draw
+ *           v0.1: drawCount == 1                           -> UnsupportedIndirectDrawCount
+ *           v0.1: strideByteCount == 16                    -> InvalidIndirectDrawStride
+ *           buffer slot checks (bounds/bound as above)
+ *           buffer must carry the Indirect usage bit       -> MissingIndirectUsage
+ *           offset % 4 == 0                                -> MisalignedIndirectOffset
+ *           offset + drawCount * 16 within the buffer      -> IndirectArgumentsOutOfBounds
+ *           vkCmdDrawIndirect(buffer, offset, drawCount, stride)
+ *           // The GPU decides the workload at execution time; the CPU prerecorded
+ *           // everything (the GPU-driven shape of ADR-0001).
  *         default                                          -> UnsupportedOpcode
  *     vkEndCommandBuffer(commandBuffer)
  */
@@ -132,6 +173,11 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
         recordingInputs.barrierBatchTableView;
     const VulkanPipelineTable* pipelineTable = recordingInputs.pipelineTable;
     const VulkanImageTable* imageTable = recordingInputs.imageTable;
+    const VulkanImageViewTable* imageViewTable = recordingInputs.imageViewTable;
+    const CommandStreamRenderingTemplateTableView* renderingTemplateTableView =
+        recordingInputs.renderingTemplateTableView;
+    const VulkanGraphicsPipelineTable* graphicsPipelineTable =
+        recordingInputs.graphicsPipelineTable;
 
     VkCommandBufferBeginInfo commandBufferBeginInfo{};
     commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -140,11 +186,22 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
         return fail(CommandBufferBeginFailed, noCommandIndex, vulkanResult);
     }
 
-    // Recording-walk pipeline state: which compute pipeline is currently bound and the
-    // push range it declared (needed by push constant emission).
+    // Recording-walk pipeline state: which compute/graphics pipeline is currently
+    // bound, plus the graphics-side state the §9.11 recording rules track (open scope +
+    // its template, dynamic viewport/scissor set). Push constants target the MOST
+    // RECENTLY bound pipeline (§9.11: pushes land in the bound pipeline's declared
+    // range), so each bind updates the shared push target below — the layout, the
+    // declared range and the stage flags the layout's range was created with (compute,
+    // or vertex+fragment per §9.14).
     bool hasBoundComputePipeline = false;
-    VkPipelineLayout boundComputePipelineLayout = VK_NULL_HANDLE;
+    bool hasOpenRenderingScope = false;
+    VkPipelineLayout pushTargetPipelineLayout = VK_NULL_HANDLE;
+    VkShaderStageFlags pushTargetStageFlags = 0;
     std::uint32_t boundPushConstantByteSize = 0;
+    std::uint32_t openRenderingTemplateSlot = 0;
+    bool hasBoundGraphicsPipeline = false;
+    bool hasSetViewport = false;
+    bool hasSetScissor = false;
 
     std::uint32_t commandIndex = 0;
     for (const CommandStreamView::CommandRecord commandRecord : streamView) {
@@ -353,7 +410,8 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                   boundSlot.pipeline);
                 hasBoundComputePipeline = true;
-                boundComputePipelineLayout = boundSlot.pipelineLayout;
+                pushTargetPipelineLayout = boundSlot.pipelineLayout;
+                pushTargetStageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
                 boundPushConstantByteSize = boundSlot.pushConstantByteSize;
                 break;
             }
@@ -363,7 +421,7 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
                 const auto pushConstantByteOffset =
                     readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
-                if (!hasBoundComputePipeline) {
+                if (pushTargetPipelineLayout == VK_NULL_HANDLE) {
                     return fail(NoBoundComputePipeline, commandIndex, VK_SUCCESS);
                 }
                 if (bufferSlot >= bufferTable.slotCount()) {
@@ -384,8 +442,8 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                 // The address exists only after materialization; baking it here keeps
                 // the stream pure data (slot indirection) while the prerecorded buffer
                 // carries the resolved value (ADR-0003: decided at load, not per frame).
-                vkCmdPushConstants(commandBuffer, boundComputePipelineLayout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, pushConstantByteOffset,
+                vkCmdPushConstants(commandBuffer, pushTargetPipelineLayout,
+                                   pushTargetStageFlags, pushConstantByteOffset,
                                    sizeof(VkDeviceAddress), &addressedSlot.deviceAddress);
                 break;
             }
@@ -508,6 +566,100 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     &clearColorValue, 1u, &subresourceRange);
                 break;
             }
+            case CommandStreamOpcode::CopyBufferToImage: {
+                // Pinned payload (P24): bufferSlot, imageSlot, layout, aspect, mip, layers,
+                // bufferOffset, tightly packed extent. Mirror of CopyImageToBuffer with the
+                // source/destination roles reversed (buffer -> image).
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto imageSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                const auto imageLayoutValue =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u);
+                const auto aspectMaskValue =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u);
+                const auto mipLevel =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 16u);
+                const auto baseArrayLayer =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 20u);
+                const auto arrayLayerCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 24u);
+                const auto bufferByteOffset =
+                    readPayloadValue<std::uint64_t>(commandRecord.payloadBytes, 32u);
+                const auto copyWidth =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 40u);
+                const auto copyHeight =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 44u);
+                const auto copyDepth =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 48u);
+
+                if (imageTable == nullptr) {
+                    return fail(MissingImageTable, commandIndex, VK_SUCCESS);
+                }
+                if (imageSlot >= imageTable->slotCount()) {
+                    return fail(ImageSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanImageTable::ImageSlot& copyTargetImageSlot =
+                    imageTable->slot(imageSlot);
+                if (!copyTargetImageSlot.isBound) {
+                    return fail(UnboundImportedImage, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& copySourceBufferSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!copySourceBufferSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if (!isAssignedCommandStreamImageLayout(imageLayoutValue)) {
+                    return fail(UnknownImageLayoutValue, commandIndex, VK_SUCCESS);
+                }
+                if (!isUsableCommandStreamImageAspectMask(aspectMaskValue)) {
+                    return fail(UnknownImageAspectMask, commandIndex, VK_SUCCESS);
+                }
+
+                const auto& targetImageDescription = copyTargetImageSlot.description;
+                const std::uint32_t targetMipWidth =
+                    std::max(1u, targetImageDescription.width >> mipLevel);
+                const std::uint32_t targetMipHeight =
+                    std::max(1u, targetImageDescription.height >> mipLevel);
+                const std::uint32_t targetMipDepth =
+                    std::max(1u, targetImageDescription.depth >> mipLevel);
+                if (mipLevel >= targetImageDescription.mipLevelCount || arrayLayerCount == 0u
+                    || baseArrayLayer + arrayLayerCount
+                           > targetImageDescription.arrayLayerCount
+                    || copyWidth == 0u || copyHeight == 0u || copyDepth == 0u
+                    || copyWidth > targetMipWidth || copyHeight > targetMipHeight
+                    || copyDepth > targetMipDepth) {
+                    return fail(ImageSubresourceOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const std::uint64_t copyByteCount =
+                    static_cast<std::uint64_t>(commandStreamImageFormatTexelByteSize(
+                        static_cast<CommandStreamImageFormat>(
+                            targetImageDescription.formatValue)))
+                    * copyWidth * copyHeight * copyDepth * arrayLayerCount;
+                if (bufferByteOffset + copyByteCount > copySourceBufferSlot.byteSize) {
+                    return fail(CopyRangeOutOfBounds, commandIndex, VK_SUCCESS);
+                }
+
+                VkBufferImageCopy copyRegion{};
+                copyRegion.bufferOffset = bufferByteOffset;
+                copyRegion.bufferRowLength = 0u;   // tightly packed
+                copyRegion.bufferImageHeight = 0u; // tightly packed
+                copyRegion.imageSubresource.aspectMask =
+                    mapCommandStreamImageAspectMask(aspectMaskValue);
+                copyRegion.imageSubresource.mipLevel = mipLevel;
+                copyRegion.imageSubresource.baseArrayLayer = baseArrayLayer;
+                copyRegion.imageSubresource.layerCount = arrayLayerCount;
+                copyRegion.imageExtent = VkExtent3D{copyWidth, copyHeight, copyDepth};
+                vkCmdCopyBufferToImage(
+                    commandBuffer, copySourceBufferSlot.buffer, copyTargetImageSlot.image,
+                    mapCommandStreamImageLayout(
+                        static_cast<CommandStreamImageLayout>(imageLayoutValue)),
+                    1u, &copyRegion);
+                break;
+            }
             case CommandStreamOpcode::CopyImageToBuffer: {
                 // Pinned payload: imageSlot, bufferSlot, layout, aspect, mip, layers,
                 // bufferOffset, tightly packed extent.
@@ -596,6 +748,283 @@ CommandBufferRecorder::record(VkCommandBuffer commandBuffer,
                     mapCommandStreamImageLayout(
                         static_cast<CommandStreamImageLayout>(imageLayoutValue)),
                     copyTargetSlot.buffer, 1u, &copyRegion);
+                break;
+            }
+            case CommandStreamOpcode::BeginRendering: {
+                // Pinned payload: +0 renderingTemplateSlot u32, +4 reserved.
+                const auto renderingTemplateSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                if (hasOpenRenderingScope) {
+                    return fail(NestedRenderingScope, commandIndex, VK_SUCCESS);
+                }
+                if (renderingTemplateTableView == nullptr) {
+                    return fail(MissingRenderingTemplateTable, commandIndex, VK_SUCCESS);
+                }
+                if (renderingTemplateSlot >= renderingTemplateTableView->templateCount()) {
+                    return fail(RenderingTemplateSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const CommandStreamRenderingTemplateRecord templateRecord =
+                    renderingTemplateTableView->templateRecord(renderingTemplateSlot);
+
+                // Resolve one attachment record into a VkRenderingAttachmentInfo, minus
+                // its clear value (the caller fills color vs depth/stencil clears).
+                const auto resolveAttachment =
+                    [&](std::uint32_t attachmentIndex, VkRenderingAttachmentInfo& outInfo,
+                        CommandStreamRenderingAttachmentRecord& outRecord)
+                    -> std::optional<CommandBufferRecordingError> {
+                    outRecord = renderingTemplateTableView->attachmentRecord(
+                        renderingTemplateSlot, attachmentIndex);
+                    if (imageViewTable == nullptr) {
+                        return MissingImageViewTable;
+                    }
+                    if (outRecord.imageViewSlot >= imageViewTable->slotCount()) {
+                        return ImageViewSlotOutOfRange;
+                    }
+                    outInfo = VkRenderingAttachmentInfo{};
+                    outInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    outInfo.imageView = imageViewTable->imageView(outRecord.imageViewSlot);
+                    outInfo.imageLayout = mapCommandStreamImageLayout(
+                        static_cast<CommandStreamImageLayout>(outRecord.imageLayoutValue));
+                    outInfo.loadOp = mapCommandStreamAttachmentLoadOp(
+                        static_cast<CommandStreamAttachmentLoadOp>(outRecord.loadOpValue));
+                    outInfo.storeOp = mapCommandStreamAttachmentStoreOp(
+                        static_cast<CommandStreamAttachmentStoreOp>(outRecord.storeOpValue));
+                    return std::nullopt;
+                };
+
+                std::vector<VkRenderingAttachmentInfo> colorAttachmentInfos;
+                colorAttachmentInfos.reserve(templateRecord.colorAttachmentCount);
+                for (std::uint32_t colorIndex = 0;
+                     colorIndex < templateRecord.colorAttachmentCount; ++colorIndex) {
+                    VkRenderingAttachmentInfo colorInfo{};
+                    CommandStreamRenderingAttachmentRecord colorRecord{};
+                    if (const auto attachmentError =
+                            resolveAttachment(colorIndex, colorInfo, colorRecord)) {
+                        return fail(*attachmentError, commandIndex, VK_SUCCESS);
+                    }
+                    std::memcpy(&colorInfo.clearValue.color.float32, colorRecord.clearValue,
+                                sizeof colorRecord.clearValue);
+                    colorAttachmentInfos.push_back(colorInfo);
+                }
+
+                VkRenderingAttachmentInfo depthAttachmentInfo{};
+                const bool hasDepthAttachment = templateRecord.depthAttachmentPresent != 0u;
+                if (hasDepthAttachment) {
+                    CommandStreamRenderingAttachmentRecord depthRecord{};
+                    if (const auto attachmentError = resolveAttachment(
+                            templateRecord.colorAttachmentCount, depthAttachmentInfo,
+                            depthRecord)) {
+                        return fail(*attachmentError, commandIndex, VK_SUCCESS);
+                    }
+                    // Depth clear: clearValue[0] = depth (float), clearValue[1] bits = stencil.
+                    depthAttachmentInfo.clearValue.depthStencil.depth = depthRecord.clearValue[0];
+                    std::memcpy(&depthAttachmentInfo.clearValue.depthStencil.stencil,
+                                &depthRecord.clearValue[1],
+                                sizeof depthAttachmentInfo.clearValue.depthStencil.stencil);
+                }
+
+                VkRenderingInfo renderingInfo{};
+                renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                renderingInfo.renderArea.offset =
+                    VkOffset2D{templateRecord.renderAreaOffsetX,
+                               templateRecord.renderAreaOffsetY};
+                renderingInfo.renderArea.extent =
+                    VkExtent2D{templateRecord.renderAreaWidth,
+                               templateRecord.renderAreaHeight};
+                renderingInfo.layerCount = templateRecord.layerCount;
+                renderingInfo.viewMask = templateRecord.viewMask;
+                renderingInfo.colorAttachmentCount =
+                    static_cast<std::uint32_t>(colorAttachmentInfos.size());
+                renderingInfo.pColorAttachments = colorAttachmentInfos.data();
+                renderingInfo.pDepthAttachment =
+                    hasDepthAttachment ? &depthAttachmentInfo : nullptr;
+                vkCmdBeginRendering(commandBuffer, &renderingInfo);
+                hasOpenRenderingScope = true;
+                openRenderingTemplateSlot = renderingTemplateSlot;
+                break;
+            }
+            case CommandStreamOpcode::EndRendering: {
+                if (!hasOpenRenderingScope) {
+                    return fail(RenderingScopeNotOpen, commandIndex, VK_SUCCESS);
+                }
+                vkCmdEndRendering(commandBuffer);
+                hasOpenRenderingScope = false;
+                break;
+            }
+            case CommandStreamOpcode::BindGraphicsPipeline: {
+                // Pinned payload: +0 graphicsPipelineSlot u32, +4 reserved.
+                const auto graphicsPipelineSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (graphicsPipelineTable == nullptr) {
+                    return fail(MissingGraphicsPipelineTable, commandIndex, VK_SUCCESS);
+                }
+                if (graphicsPipelineSlot >= graphicsPipelineTable->slotCount()) {
+                    return fail(GraphicsPipelineSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+
+                // §9.11 record-time cross-table check: the pipeline's declared
+                // attachment formats must match the open scope's template, each
+                // template attachment format resolved through its image view. An open
+                // scope guarantees imageViewTable was present at BeginRendering.
+                const CommandStreamGraphicsPipelineRecord& pipelineRecord =
+                    graphicsPipelineTable->pipelineRecord(graphicsPipelineSlot);
+                const CommandStreamRenderingTemplateRecord templateRecord =
+                    renderingTemplateTableView->templateRecord(openRenderingTemplateSlot);
+                if (pipelineRecord.colorAttachmentCount
+                    != templateRecord.colorAttachmentCount) {
+                    return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                }
+                const bool pipelineHasDepthAttachment =
+                    pipelineRecord.depthAttachmentFormatValue != 0u;
+                if (pipelineHasDepthAttachment
+                    != (templateRecord.depthAttachmentPresent == 1u)) {
+                    return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                }
+                const std::uint32_t attachmentCount =
+                    templateRecord.colorAttachmentCount
+                    + templateRecord.depthAttachmentPresent;
+                for (std::uint32_t attachmentIndex = 0; attachmentIndex < attachmentCount;
+                     ++attachmentIndex) {
+                    const CommandStreamRenderingAttachmentRecord attachmentRecord =
+                        renderingTemplateTableView->attachmentRecord(
+                            openRenderingTemplateSlot, attachmentIndex);
+                    const std::uint32_t attachmentFormatValue =
+                        imageViewTable->description(attachmentRecord.imageViewSlot)
+                            .formatValue;
+                    const std::uint32_t pipelineFormatValue =
+                        attachmentIndex < templateRecord.colorAttachmentCount
+                            ? pipelineRecord.colorAttachmentFormatValues[attachmentIndex]
+                            : pipelineRecord.depthAttachmentFormatValue;
+                    if (attachmentFormatValue != pipelineFormatValue) {
+                        return fail(AttachmentFormatMismatch, commandIndex, VK_SUCCESS);
+                    }
+                }
+
+                const VulkanGraphicsPipelineTable::GraphicsPipelineSlot& boundGraphicsSlot =
+                    graphicsPipelineTable->slot(graphicsPipelineSlot);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  boundGraphicsSlot.pipeline);
+                hasBoundGraphicsPipeline = true;
+                pushTargetPipelineLayout = boundGraphicsSlot.pipelineLayout;
+                pushTargetStageFlags =
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+                boundPushConstantByteSize = boundGraphicsSlot.pushConstantByteSize;
+                break;
+            }
+            case CommandStreamOpcode::SetViewport: {
+                // Pinned payload: +0 x f32, +4 y f32, +8 width f32, +12 height f32,
+                // +16 minDepth f32, +20 maxDepth f32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                VkViewport viewport{};
+                viewport.x = readPayloadValue<float>(commandRecord.payloadBytes, 0u);
+                viewport.y = readPayloadValue<float>(commandRecord.payloadBytes, 4u);
+                viewport.width = readPayloadValue<float>(commandRecord.payloadBytes, 8u);
+                viewport.height = readPayloadValue<float>(commandRecord.payloadBytes, 12u);
+                viewport.minDepth = readPayloadValue<float>(commandRecord.payloadBytes, 16u);
+                viewport.maxDepth = readPayloadValue<float>(commandRecord.payloadBytes, 20u);
+                vkCmdSetViewport(commandBuffer, 0u, 1u, &viewport);
+                hasSetViewport = true;
+                break;
+            }
+            case CommandStreamOpcode::SetScissor: {
+                // Pinned payload: +0 offsetX i32, +4 offsetY i32, +8 width u32,
+                // +12 height u32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                VkRect2D scissor{};
+                scissor.offset.x =
+                    readPayloadValue<std::int32_t>(commandRecord.payloadBytes, 0u);
+                scissor.offset.y =
+                    readPayloadValue<std::int32_t>(commandRecord.payloadBytes, 4u);
+                scissor.extent.width =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u);
+                scissor.extent.height =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u);
+                vkCmdSetScissor(commandBuffer, 0u, 1u, &scissor);
+                hasSetScissor = true;
+                break;
+            }
+            case CommandStreamOpcode::Draw: {
+                // Pinned payload: +0 vertexCount u32, +4 instanceCount u32,
+                // +8 firstVertex u32, +12 firstInstance u32.
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (!hasBoundGraphicsPipeline) {
+                    return fail(NoBoundGraphicsPipeline, commandIndex, VK_SUCCESS);
+                }
+                if (!hasSetViewport || !hasSetScissor) {
+                    return fail(ViewportOrScissorNotSet, commandIndex, VK_SUCCESS);
+                }
+                vkCmdDraw(commandBuffer,
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 8u),
+                          readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 12u));
+                break;
+            }
+            case CommandStreamOpcode::DrawIndirect: {
+                // Pinned payload: +0 bufferSlot u32, +4 drawCount u32,
+                // +8 bufferOffset u64, +16 strideByteCount u32, +20 reserved.
+                const auto bufferSlot =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 0u);
+                const auto drawCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 4u);
+                const auto bufferOffset =
+                    readPayloadValue<std::uint64_t>(commandRecord.payloadBytes, 8u);
+                const auto strideByteCount =
+                    readPayloadValue<std::uint32_t>(commandRecord.payloadBytes, 16u);
+                if (!hasOpenRenderingScope) {
+                    return fail(GraphicsCommandOutsideRenderingScope, commandIndex,
+                                VK_SUCCESS);
+                }
+                if (!hasBoundGraphicsPipeline) {
+                    return fail(NoBoundGraphicsPipeline, commandIndex, VK_SUCCESS);
+                }
+                if (!hasSetViewport || !hasSetScissor) {
+                    return fail(ViewportOrScissorNotSet, commandIndex, VK_SUCCESS);
+                }
+                if (drawCount != 1u) {
+                    return fail(UnsupportedIndirectDrawCount, commandIndex, VK_SUCCESS);
+                }
+                if (strideByteCount != sizeof(VkDrawIndirectCommand)) {
+                    return fail(InvalidIndirectDrawStride, commandIndex, VK_SUCCESS);
+                }
+                if (bufferSlot >= bufferTable.slotCount()) {
+                    return fail(BufferSlotOutOfRange, commandIndex, VK_SUCCESS);
+                }
+                const VulkanBufferTable::BufferSlot& drawArgumentsSlot =
+                    bufferTable.slot(bufferSlot);
+                if (!drawArgumentsSlot.isBound) {
+                    return fail(UnboundImportedBuffer, commandIndex, VK_SUCCESS);
+                }
+                if ((drawArgumentsSlot.neutralUsageFlags
+                     & static_cast<std::uint32_t>(CommandStreamBufferUsage::Indirect))
+                    == 0u) {
+                    return fail(MissingIndirectUsage, commandIndex, VK_SUCCESS);
+                }
+                if (bufferOffset % 4u != 0u) {
+                    return fail(MisalignedIndirectOffset, commandIndex, VK_SUCCESS);
+                }
+                if (bufferOffset + static_cast<std::uint64_t>(drawCount)
+                        * sizeof(VkDrawIndirectCommand)
+                    > drawArgumentsSlot.byteSize) {
+                    return fail(IndirectArgumentsOutOfBounds, commandIndex, VK_SUCCESS);
+                }
+                // The GPU decides the workload at execution time; the CPU prerecorded
+                // everything (the GPU-driven shape of ADR-0001).
+                vkCmdDrawIndirect(commandBuffer, drawArgumentsSlot.buffer, bufferOffset,
+                                  drawCount, strideByteCount);
                 break;
             }
             default:

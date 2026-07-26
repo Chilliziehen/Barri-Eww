@@ -77,6 +77,116 @@ public final class CommandStreamWriter {
 
     /**
      * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a BeginRendering command (opcode 0x0030, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 renderingTemplateSlot u32,
+     * +4 reserved.
+     *
+     * @param int renderingTemplateSlot The RenderingTemplateTable slot to open
+     */
+    public void appendBeginRendering(int renderingTemplateSlot) {
+        writeCommandHeader(CommandStreamOpcode.BEGIN_RENDERING, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                renderingTemplateSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends an EndRendering command (opcode 0x0031, §9.11; header-only, no payload).
+     */
+    public void appendEndRendering() {
+        writeCommandHeader(CommandStreamOpcode.END_RENDERING, 8);
+        m_currentByteOffset += 8;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a BindGraphicsPipeline command (opcode 0x0001, §9.11). Pinned payload
+     * layout (mirrored by the native CommandBufferRecorder): +0 graphicsPipelineSlot
+     * u32, +4 reserved.
+     *
+     * @param int graphicsPipelineSlot The GraphicsPipelineTable slot to bind
+     */
+    public void appendBindGraphicsPipeline(int graphicsPipelineSlot) {
+        writeCommandHeader(CommandStreamOpcode.BIND_GRAPHICS_PIPELINE, 16);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8,
+                graphicsPipelineSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, 0);
+        m_currentByteOffset += 16;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a SetViewport command (opcode 0x0006, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): six f32 values.
+     *
+     * @param float x The viewport x origin
+     * @param float y The viewport y origin
+     * @param float width The viewport width
+     * @param float height The viewport height
+     * @param float minDepth The minimum viewport depth
+     * @param float maxDepth The maximum viewport depth
+     */
+    public void appendSetViewport(float x, float y, float width, float height,
+                                  float minDepth, float maxDepth) {
+        writeCommandHeader(CommandStreamOpcode.SET_VIEWPORT, 32);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 8, x);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 12, y);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 16, width);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 20, height);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 24, minDepth);
+        m_targetSegment.set(s_littleEndianFloatLayout, m_currentByteOffset + 28, maxDepth);
+        m_currentByteOffset += 32;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a SetScissor command (opcode 0x0007, §9.11). Pinned payload layout
+     * (mirrored by the native CommandBufferRecorder): +0 offsetX i32, +4 offsetY i32,
+     * +8 width u32, +12 height u32.
+     *
+     * @param int offsetX The scissor x offset
+     * @param int offsetY The scissor y offset
+     * @param int width The scissor width
+     * @param int height The scissor height
+     */
+    public void appendSetScissor(int offsetX, int offsetY, int width, int height) {
+        writeCommandHeader(CommandStreamOpcode.SET_SCISSOR, 24);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, offsetX);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, offsetY);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 16, width);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 20, height);
+        m_currentByteOffset += 24;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a DrawIndirect command (opcode 0x0012, §9.11) — the GPU-driven draw
+     * whose arguments live in the referenced buffer at record-unknown values. Pinned
+     * payload layout (mirrored by the native CommandBufferRecorder): +0 bufferSlot u32,
+     * +4 drawCount u32, +8 bufferOffset u64, +16 strideByteCount u32, +20 reserved.
+     * v0.1 recorders accept only drawCount 1 with strideByteCount 16.
+     *
+     * @param int bufferSlot Buffer table slot holding the draw arguments
+     * @param int drawCount Number of consecutive argument structures (v0.1: 1)
+     * @param long bufferOffset Byte offset of the first argument structure
+     * @param int strideByteCount Byte stride between argument structures (v0.1: 16)
+     */
+    public void appendDrawIndirect(int bufferSlot, int drawCount, long bufferOffset,
+                                   int strideByteCount) {
+        writeCommandHeader(CommandStreamOpcode.DRAW_INDIRECT, 32);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 8, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 12, drawCount);
+        m_targetSegment.set(s_littleEndianLongLayout, m_currentByteOffset + 16, bufferOffset);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 24,
+                strideByteCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, m_currentByteOffset + 28, 0);
+        m_currentByteOffset += 32;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
      * Appends a Dispatch command (opcode 0x0020, ADR-0002 appendix A). The trailing
      * 4 padding bytes are written as zero explicitly so the output does not depend on
      * the allocator's zero-initialization.
@@ -274,6 +384,53 @@ public final class CommandStreamWriter {
         long payloadOffset = m_currentByteOffset + 8;
         m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset, imageSlot);
         m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 4, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 8,
+                imageLayout.rawImageLayoutValue());
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 12, aspectMaskValue);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 16, mipLevel);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 20, baseArrayLayer);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 24, arrayLayerCount);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 28, 0);
+        m_targetSegment.set(s_littleEndianLongLayout, payloadOffset + 32, bufferByteOffset);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 40, copyWidth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 44, copyHeight);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 48, copyDepth);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 52, 0);
+        m_currentByteOffset += 64;
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe (see class note).
+     * Appends a CopyBufferToImage command (opcode 0x0046, P24, tightly packed region at
+     * image origin). Pinned payload layout (mirrored by the native CommandBufferRecorder):
+     * +0 bufferSlot u32, +4 imageSlot u32, +8 imageLayoutValue u32, +12 aspectMaskValue
+     * u32, +16 mipLevel u32, +20 baseArrayLayer u32, +24 arrayLayerCount u32, +28 reserved,
+     * +32 bufferByteOffset u64, +40 copyWidth u32, +44 copyHeight u32, +48 copyDepth u32,
+     * +52 reserved zero; command byteSize 64.
+     *
+     * @param int bufferSlot Buffer table slot to copy from
+     * @param int imageSlot Image table slot to copy into
+     * @param CommandStreamImageLayout imageLayout The layout the image is in when the copy
+     *        executes (General or TransferDestination)
+     * @param int aspectMaskValue OR-mask of CommandStreamImageAspect bits
+     * @param int mipLevel The mip level to copy into
+     * @param int baseArrayLayer First array layer to copy into
+     * @param int arrayLayerCount Array layer count; must be concrete (no sentinel)
+     * @param long bufferByteOffset Byte offset within the source buffer
+     * @param int copyWidth Copied extent width in texels
+     * @param int copyHeight Copied extent height in texels
+     * @param int copyDepth Copied extent depth in texels
+     */
+    public void appendCopyBufferToImage(int bufferSlot, int imageSlot,
+                                        CommandStreamImageLayout imageLayout,
+                                        int aspectMaskValue, int mipLevel,
+                                        int baseArrayLayer, int arrayLayerCount,
+                                        long bufferByteOffset, int copyWidth,
+                                        int copyHeight, int copyDepth) {
+        writeCommandHeader(CommandStreamOpcode.COPY_BUFFER_TO_IMAGE, 64);
+        long payloadOffset = m_currentByteOffset + 8;
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset, bufferSlot);
+        m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 4, imageSlot);
         m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 8,
                 imageLayout.rawImageLayoutValue());
         m_targetSegment.set(s_littleEndianIntegerLayout, payloadOffset + 12, aspectMaskValue);
