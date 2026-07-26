@@ -1,12 +1,11 @@
 # ADR-0006: Native-owned Minecraft presentation
 
-- **状态**: Proposed (2026-07-26)
-  - **D1 已裁决**：presentation 由 Native 完全接管。
-  - **D3 已裁决**：单一交接点(图产出 output image)，契约固化于 §9.17。
-  - **D4 已裁决**：多 primary 同批提交（修正 ADR-0004 D4）、查询面、合成为图形 pass。
-  - **D5 已裁决**：仅导 color texture、保持 GENERAL、不走 P22、hook `resize()` 换代。
-  - **D6 已裁决**：独立提交，不注入 Minecraft 的 encoder。
-  - 其余条款为待逐项讨论的草案；标注 `待裁决` 或 `待实测` 的条目在批准前不得实现。
+- **状态**: Accepted (2026-07-26，所有者逐项裁决 D1、D3–D6、D8–D10)
+  - **D2 接管点**：具体屏蔽手法留待实现期确定（形态高度依赖 mixin 实际命中情况）；
+    其中 `isAcquired()` 门控为**必须处理项**，不处理将直接黑屏。
+  - **D7 GUI alpha**：`待实测`，由 D9 第 3 步给出答案；**D8.4 的混合公式在其定案前不完备**，
+    实现时不得自行假定。
+  - 除上述两项外，本 ADR 条款为已批准决策。
 - **决策者**: 项目所有者 (Chilliziehen)、Claude
 - **关系**: 把 ADR-0004 的 Native-owned presentation 模型延伸到 Minecraft 宿主，
   **不引入第二种 presentation 模式**；沿用 ADR-0003 的执行期微内核约束与 P22
@@ -260,10 +259,16 @@ descriptor set。为支持合成而向 BECS ABI 增加 descriptor table 是不�
 只发内存 barrier（`srcAccess = MEMORY_WRITE` → `dstAccess = SHADER_READ`），
 采样时仍以 GENERAL 为布局。
 
-决定性理由是**回退安全**：D10 规定 readiness 不满足时回退 Minecraft 原生路径，而其 blit
-恒以 `srcImageLayout = GENERAL` 读取。若我方将该纹理转为 `SHADER_READ_ONLY_OPTIMAL`
-而未转回，原生路径即为未定义行为。保持 GENERAL 使回退**构造上安全**，而非依赖「记得转回」
-的约定。
+决定性理由是**宿主对该纹理的其他用途同样假定 GENERAL**，不止 blit：
+
+```java
+postChain.process(this.mainRenderTarget, this.resourcePool);   // GameRenderer.java:234 / :431
+Screenshot.takeScreenshot(this.mainRenderTarget, ...);         // GameRenderer.java:473
+```
+
+后处理链与截图都会读取它。若我方将其转为 `SHADER_READ_ONLY_OPTIMAL` 而未转回，这些路径
+即进入未定义行为，且症状（截图花屏、后处理异常）与渲染主线索无关，极难定位。保持 GENERAL
+使之**构造上安全**，而非依赖「记得转回」的约定。D10 的延迟回退路径同样受益。
 
 代价：GENERAL 下的采样在部分硬件上略逊于 `SHADER_READ_ONLY_OPTIMAL`。该代价为一次全屏
 采样，可忽略。
@@ -356,31 +361,98 @@ Minecraft 的 device 与 queues，该前提天然成立，但实现中必须显�
 候选方案：(a) 将 GUI 重定向至我方持有的 render target；(b) 修改 `clearColorOverride`
 使其 clear 为透明。**该项不得以推理定案，必须在原型阶段实测确认。**
 
-### D8. 合成规则的开放程度 `待裁决`
+### D8. 合成规则 `已裁决`
 
-MVP 阶段合成规则硬编码(世界在下、GUI 在上、alpha blend)，不对 TA 开放。待 HDR/色彩
-空间或 frame generation 实际落地时，再评估是否将合成尾段开放为图可编辑的 pass
-(与 ADR-0005 的 TA 创作面协同设计)。
+#### D8.1 结构固定，不对 TA 开放
 
-### D9. 三步验证路径 `待裁决`
+MVP 阶段合成为**一次全屏图形 pass**：采样 graph output 与宿主 GUI 纹理，写入
+swapchain image；世界在下、宿主 GUI 在上。该 pass 为 presentation 侧手写实现，不对 TA
+开放，亦不进入图。
 
-每一步独立可回退，失败不影响游戏可玩性：
+推迟开放**不承诺任何实现机制**——是否、以及以何种形式开放，待 HDR/色彩空间或 frame
+generation 产生真实需求时另行裁决（参见 D3「可能的演进方向（非承诺）」）。
 
-1. **接管 present，输出纯色**。阻止 Minecraft 建 swapchain，我方创建、acquire、清屏、
-   present；不合成 GUI、不取消世界。验证接管本身、resize 与 teardown。
-2. **合成 Minecraft GUI**。导入 `mainRenderTarget`，尾段将其输出至 swapchain；世界仍由
-   Minecraft 渲染(不取消 `LevelRenderer.render`)。验证导入契约、跨提交同步与 D7。
-   **判据：画面与原版一致。**
-3. **取消世界，接入 Barri-Eww 图**。完整链路。
+#### D8.2 输入约束：三者 extent 必须相等
 
-第 2 步的"与原版一致"判据把"接管 present + 导入 + 同步"与"我方图渲染正确性"完全解耦，
+graph output、宿主 GUI 纹理与 swapchain image 的 extent 必须**完全相等**，装载期校验；
+不等则 readiness 关闭（D10）。**MVP 不做缩放**。
+
+该约束不构成实际限制：宿主 main render target 按窗口尺寸创建（`GameRenderer.java:163`
+及 `:296` 的 resize），swapchain 亦然，graph output 由我方控制。渲染缩放/超分作为后续
+特性，届时再引入合成期缩放。
+
+#### D8.3 MVP 不做色彩空间转换
+
+合成 pass 只做混合，不做 tone mapping、不做色彩空间变换。graph output 与 swapchain 的
+格式必须兼容，装载期校验。HDR 落地时本条重写，届时由真实需求驱动。
+
+#### D8.4 混合公式依赖 D7
+
+本条仅固定合成的**结构**。具体 blend factor 取决于宿主 GUI 纹理的 alpha 语义，
+须待 D7 实测后填入。**D8 在 D7 定案前不完备**，实现时不得自行假定混合公式。
+
+### D9. 四步验证路径 `已裁决`
+
+**每一步只改变一个变量**，各步独立可回退：
+
+| 步 | 改变什么 | 判据 | 验证内容 |
+| -- | -------- | ---- | -------- |
+| 1 | 接管 present，清为纯色 | 出现纯色、不崩溃、resize 与 alt-tab 正常 | 接管机制、`isAcquired()` 门控(D2)、generation 换代、teardown |
+| 2 | 导入宿主纹理并合成（世界仍由 Minecraft 渲染） | **画面与原版一致** | 导入契约(D5)、GENERAL 布局策略、跨提交同步(D6) |
+| 3 | 取消世界渲染，宿主 GUI 合成于**纯色**背景之上 | 纯色背景 + GUI 正常显示 | **D7 的 alpha 语义在此单独暴露** |
+| 4 | 纯色背景替换为 graph output | 世界渲染正确 | 交接契约(§9.17)、图执行 |
+
+第 2 步的「与原版一致」判据把「接管 + 导入 + 同步」与「我方图的渲染正确性」完全解耦，
 是本 ADR 首选的正确性判据。
 
-### D10. Readiness 与回退 `待裁决`
+第 3 步为必需：第 2 步中宿主 main render target 含完整世界因而完全不透明，合成退化为
+拷贝，**不触发 alpha 问题**。若省略第 3 步，D7 的 alpha 语义与图自身的正确性将在第 4 步
+同时引入而相互混淆。第 3 步的成本仅为把第 2 步的世界来源换成 clear。
 
-仅当 backend 为 Vulkan、能力协商通过、Native runtime 健康、导入 generation 当前、
-frame slot 获取成功时才接管；任一条件不满足则不接管，保持 Minecraft 原生路径。
-不允许出现"已接管但无输出"的状态。失败以值上报并记入 failure context。
+### D10. Readiness 与回退 `已裁决`
+
+#### D10.1 两层结构，回退能力不同
+
+**订正初稿**：初稿称「任一条件不满足则不接管，保持 Minecraft 原生路径」，该表述假定了
+一种不存在的运行期回退。**阻止 Minecraft 创建 swapchain 发生在 `configure()`，是
+generation 级的一次性决定**；一旦阻止，Minecraft 便无 swapchain 可用，「运行中回退原版
+present」在物理上不可能。
+
+两件事必须分层判定，其回退能力截然不同：
+
+| 层 | 判定时机 | 回退能力 |
+| -- | -------- | -------- |
+| **presentation 接管** | generation 级（swapchain 创建/重建时） | 决定**之前**可放弃接管；接管**之后不可**运行期回退 |
+| **世界替换**（取消 `LevelRenderer.render`） | 每帧 | **随时可回退**——不取消即恢复原版世界渲染 |
+
+该分解使两者的风险等级不再绑定：世界替换廉价可逆，presentation 接管是一次性承诺。
+
+#### D10.2 presentation 接管的 readiness（generation 级）
+
+全部满足方可接管，任一不满足则**不阻止** Minecraft 创建 swapchain，游戏以原版路径运行：
+
+- 宿主图形后端为 Vulkan；
+- 设备能力协商成功（D2 的扩展/特性追加）；
+- Native presentation runtime 创建成功；
+- 宿主 GUI 纹理校验通过（format/extent/usage，D5 与 D8.2）；
+- graph module（若参与）材质化成功且健康。
+
+#### D10.3 接管后的失败处理（无原版回退）
+
+已接管则**只能在我方路径内处理**：
+
+- `RecreateRequired` / `SurfaceUnavailable` → 换代重建，跳过本帧；
+- 不可恢复失败 → 记入 failure context，本帧呈现黑帧或上一帧内容，并置位
+  **延迟回退**标志：下一个 generation（如 resize）不再接管，由 Minecraft 自建 swapchain 恢复原版路径。
+
+**不变式：已接管即每帧必须有输出。** 不允许出现「已接管但不 present」的状态——那将表现为
+画面冻结或黑屏而无任何诊断线索。
+
+#### D10.4 世界替换的 readiness（每帧级）
+
+仅当 presentation 已接管、graph module 健康、imported generation 当前、相机与帧参数可用时
+才取消 `LevelRenderer.render`；任一不满足则不取消，该帧由 Minecraft 渲染世界并经我方合成
+呈现。此路径自由可逆，不置位延迟回退。
 
 ## Consequences
 
@@ -397,8 +469,9 @@ frame slot 获取成功时才接管；任一条件不满足则不接管，保持
 
 ## Open
 
-- D7 的 GUI alpha 方案，须实测后定案。
-- D8 合成规则是否、何时对 TA 开放。
-- `VulkanGpuSurface` 的具体屏蔽手法与其内部状态一致性保证。
+- **D7 GUI alpha**：由 D9 第 3 步实测定案；在此之前 D8.4 的混合公式不完备。
+- **D2 屏蔽手法**：`VulkanGpuSurface` 的具体屏蔽方式与其内部状态一致性保证，
+  留待实现期（D9 第 1 步）确定。
+- D8 合成规则是否、何时对 TA 开放——**无既定计划**，待真实需求出现时另行裁决。
 - 与 ADR-0005 能力清单的协同：presentation 相关参数(输出分辨率、色彩空间)是否进入
   数据源清单。

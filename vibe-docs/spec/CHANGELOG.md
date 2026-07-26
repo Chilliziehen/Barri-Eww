@@ -25,6 +25,21 @@
   加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
   独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
   测试中原样执行。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— 状态
+  `Proposed` → **`Accepted`**（所有者逐项裁决 D1、D3–D6、D8–D10）。D8/D9/D10 裁决：
+  D8 合成结构固定为一次全屏图形 pass、不对 TA 开放且**不承诺开放机制**，三者 extent 必须
+  相等（MVP 不缩放）、不做色彩空间转换，**混合公式依赖 D7 故 D8 在其定案前不完备**；
+  D9 验证路径由三步改为**四步**，新增「取消世界 + 纯色背景」一步使 D7 的 alpha 语义
+  单独暴露（第 2 步中宿主纹理完全不透明，合成退化为拷贝，不触发 alpha 问题）；
+  D10 **订正初稿**——初稿「不满足则保持原版路径」假定了不存在的运行期回退，实际上阻止
+  宿主创建 swapchain 是 generation 级一次性决定，接管后原版无 swapchain 可用；现拆为两层：
+  presentation 接管为 generation 级且接管后仅支持**延迟回退**（下个 generation 不再接管），
+  世界替换为每帧级可自由回退，并保留「已接管即每帧必须有输出」不变式。
+  D2（屏蔽手法）留待实现期、D7 留待实测，其余条款为已批准决策。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) D5.3 —— 补强
+  保持 GENERAL 的理由：宿主对 main render target 的使用不止 blit，后处理链与截图
+  （`GameRenderer.java:234/:431/:473`）同样假定 GENERAL，转走而不转回将使这些路径进入
+  未定义行为，且症状与渲染主线索无关、极难定位。
 - [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D5 裁决：
   D5.1 仅导入宿主 main render target 的 color texture，不导 depth；D5.2 **订正初稿**——
   宿主 GUI 纹理**不走 P22**（P22 是 BECS imported entry 机制，与 D3「宿主纹理不进 BECS」
