@@ -3,6 +3,7 @@
 - **状态**: Proposed (2026-07-26)
   - **D1 已裁决**：presentation 由 Native 完全接管。
   - **D3 已裁决**：单一交接点(图产出 output image)，契约固化于 §9.17。
+  - **D4 已裁决**：多 primary 同批提交（修正 ADR-0004 D4）、查询面、合成为图形 pass。
   - **D6 已裁决**：独立提交，不注入 Minecraft 的 encoder。
   - 其余条款为待逐项讨论的草案；标注 `待裁决` 或 `待实测` 的条目在批准前不得实现。
 - **决策者**: 项目所有者 (Chilliziehen)、Claude
@@ -140,37 +141,83 @@ swapchain image 与宿主 GUI 纹理**不进入 BECS**。
 两者由同一 RDG 编译器编译)。**此为备选方向，非既定演进路径**——presentation 图化的需求是否
 真实出现尚不确定，不得据此提前引入图组合机制。
 
-### D4. 预录矩阵 `待裁决（须依 D3/D6 重写）`
+### D4. 预录矩阵与查询面 `已裁决`
 
-> 本条初稿写于 D3 裁决之前，其中「合成尾段由 RDG 编译器识别并编译」的表述已与 D3
-> 冲突：合成归 presentation 侧，swapchain image 与宿主 GUI 纹理不进 BECS。以下为
-> 修正后的框架，具体条款待讨论。
+#### D4.1 图工作载体：多 primary 同批提交，不使用 secondary
 
-沿用 ADR-0004 D4 的两级结构：
+**修正 ADR-0004 D4**：图工作不录入 secondary command buffer，而是与 presentation primary
+一同作为多个 **primary** 提交：
 
 ```text
-secondary[frameSlot][lane]      图编译产物，与 imageIndex 无关
-primary[frameSlot][imageIndex]  presentation 侧手写预录
+graphPrimary[frameSlot][lane]          图编译产物，与 imageIndex 无关
+presentationPrimary[frameSlot][imageIndex]
+
+vkQueueSubmit(queue, { graphPrimary[frameSlot][*], presentationPrimary[frameSlot][imageIndex] })
 ```
 
-presentation primary 的固定构成：
+理由：
+
+1. **现有实现已产出 primary**。`CommandBufferRecorder` 的 begin 路径不设
+   `VkCommandBufferInheritanceInfo` 亦不设 `RENDER_PASS_CONTINUE`，测试夹具按
+   `VK_COMMAND_BUFFER_LEVEL_PRIMARY` 分配；截至本 ADR 已有 61 个用例、3000+ 断言建立其上。
+   改用 secondary 需改动 recorder begin 路径与全部夹具，并重新验证 dynamic rendering 在
+   secondary 中的行为。
+2. **排序机制与 D6 同源**：同批内命令缓冲按 submission order 执行，presentation primary
+   起始的 barrier 覆盖同批更早的命令，无需 `vkCmdExecuteCommands`，亦无 inheritance info。
+3. **所有权更清晰**：图拥有自己的 primary，presentation 拥有自己的 primary，提交仅为数组
+   拼接；任一方都不录制对方的命令。
+
+代价：`VulkanPresentationRuntime::submitAndPresentFrame` 的参数由单个 `VkCommandBuffer`
+改为 `std::span<const VkCommandBuffer>`。该改动同样使 standalone 侧天然支持多 lane。
+
+图的 primary 与 `imageIndex` 无关，因此世界渲染命令不随 swapchain image 数量(2–4)复制；
+只有 presentation primary 按 `imageIndex` 展开。
+
+#### D4.2 presentation primary 的固定构成
 
 ```text
 timestamp begin
 barrier hostGuiTexture → 合成读取布局        // 兼作与宿主提交的同步点（D6）
-execute secondary[frameSlot][*]              // 图工作
 barrier graphOutput    → 合成读取布局
-<composite>            → swapchainImage[imageIndex]
+<composite graphics pass> → swapchainImage[imageIndex]
 barrier swapchainImage → PRESENT_SRC
 timestamp end
 ```
 
-只有 primary 按 `imageIndex` 展开；图的 secondary 与 swapchain 无关，因此世界渲染的命令
-不随 swapchain image 数量(2–4)复制。
+#### D4.3 查询面
 
-**待讨论**：presentation 侧预录 primary 时需要向已材质化的模块查询哪些信息——至少是
-按 frameSlot 的 secondary 命令缓冲句柄与 graph output image(§9.17)。该查询面位于 Native
-内部两个子系统之间，不跨 FFM，但同样应为编译期确定的固定形状。
+presentation 对已材质化模块的查询**全部发生在装载期**，结果快照进 presentation 自有的
+定长数组；每帧仅按 `frameSlot` 索引，无查询、无分配。
+
+采用普通 C++ 访问器（`std::span` 传递命令缓冲序列），不做定长 POD ABI 记录——该接口位于
+Native 内部两个子系统之间，既不跨 FFM 也不跨版本边界：
+
+```text
+frameSlotCount()                       // = §9.17 outputCount
+commandBuffers(frameSlot) -> std::span<const VkCommandBuffer>
+outputImage(frameSlot)    -> VkImage
+outputFinalLayout()       -> VkImageLayout      // §9.17 header
+outputFormat() / outputExtent()
+```
+
+依赖方向严格单向：presentation 知晓模块的输出契约，**模块不知晓 presentation 存在**——
+模块内不含 swapchain、宿主类型与合成逻辑。
+
+#### D4.4 output 的 sampled view 由 presentation 构造
+
+§9.17 只暴露 image slot。图为渲染进 output 自有 color-attachment view；合成所需的 sampled
+view 由 presentation 自行创建并拥有，销毁时机随 presentation generation。理由：view 开销
+极低，且避免让图为自身不使用的用途声明 view。
+
+#### D4.5 合成为图形 pass；presentation 不受 §9.8 约束
+
+`vkCmdBlitImage` 无法进行 alpha 混合，而世界在下、宿主 GUI 在上必须混合，故合成必须是
+一次全屏图形 pass（采样两张图像并 blend）。
+
+采样图像必须经 descriptor set（buffer device address 无法取得 sampled image）。**合成管线
+不在图内**（D3 的直接后果），属 presentation 侧手写实现，不经 BECS，因此**不受 §9.8
+「v0.1 管线布局仅 push constants、资源经 device address 到达着色器」的约束**，可自由使用
+descriptor set。为支持合成而向 BECS ABI 增加 descriptor table 是不必要的。
 
 ### D5. 导入契约 `待裁决`
 
@@ -292,7 +339,6 @@ frame slot 获取成功时才接管；任一条件不满足则不接管，保持
 
 ## Open
 
-- D4 依 D3/D6 重写后的具体条款，含 presentation 侧对已材质化模块的查询面形状。
 - D7 的 GUI alpha 方案，须实测后定案。
 - D8 合成规则是否、何时对 TA 开放。
 - `VulkanGpuSurface` 的具体屏蔽手法与其内部状态一致性保证。

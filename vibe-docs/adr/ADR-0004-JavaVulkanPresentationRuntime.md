@@ -55,6 +55,15 @@ Native 不能变成 window system；Java 也不能每帧解释 BECS 或发出逐
 - graph work 在 load/recreation 录入 secondary command buffers，按 frame slot/lane 固定。
 - presentation primary 按 `(frame slot, swapchain image)` 预录：timestamp、execute secondary、
   final copy/transition。
+
+> **2026-07-26 修正（ADR-0006 D4.1 裁决）**：上两条中「secondary command buffers +
+> `vkCmdExecuteCommands`」已被取代。图工作与 presentation 一同作为多个 **primary**
+> 在同一次 `vkQueueSubmit` 中提交；同批内按 submission order 排序，presentation primary
+> 起始的 barrier 覆盖同批更早命令，无需 inheritance info。
+> 修正依据：`CommandBufferRecorder` 实现后产出的即为 primary（begin 路径不设
+> `VkCommandBufferInheritanceInfo`），已有 61 个用例建立其上；改用 secondary 需改动
+> recorder 与全部测试夹具而无对应收益。本条其余内容（按 `(frame slot, swapchain image)`
+> 预录、O(1) 选择、每帧禁止 walk/allocation/recording/symbol lookup）不变。
 - acquire 后只按两个整数 O(1) 选择预录 primary；每帧禁止 BECS walk、graph walk、allocation、
   command recording 或 symbol lookup。
 - 三个场景均是预编译/预加载产物；运行时 scene switch 只选择现成 owner，不构建图。

@@ -443,6 +443,11 @@ Swapchain mode/format/extent/image index、semaphore/fence rotation 与 present 
 宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧独立持有并发出其固定 barrier 集合
 （ADR-0006 D3）。该边界使同一张图可在 standalone、Minecraft 宿主与离屏测试中原样执行。
 
+由此推论：presentation 侧的合成/呈现管线为手写实现，不经 BECS，因而**不受 §9.8「v0.1 管线
+布局仅 push constants、资源经 buffer device address 到达着色器」的约束**——它可自由使用
+descriptor set 采样 graph output 与宿主纹理。为支持 presentation 合成而向 BECS ABI 增加
+descriptor table 是不必要的（ADR-0006 D4.5）。
+
 ---
 
 ## §9.17 GraphOutputTable v0.1（P27）

@@ -25,6 +25,19 @@
   加入 `0x0008`；明确 swapchain image 与宿主 GUI/UI 纹理**不进入 BECS**，由 presentation 侧
   独立持有并发出其固定 barrier 集合，从而使同一张图可在 standalone、Minecraft 宿主与离屏
   测试中原样执行。
+- [修改] [ADR-0004](../adr/ADR-0004-JavaVulkanPresentationRuntime.md) D4 —— 加入
+  2026-07-26 修正记录：图工作由「secondary + `vkCmdExecuteCommands`」改为**多 primary
+  同批提交**（ADR-0006 D4.1 裁决）。依据为 `CommandBufferRecorder` 落地后产出的即是
+  primary（begin 路径不设 inheritance info），已有 61 个用例建立其上；改用 secondary 需
+  改动 recorder 与全部测试夹具而无对应收益。原文保留，以修正记录形式追加，不改写决策轨迹。
+- [修改] §9.16 [CommandStreamFormat.md](CommandStreamFormat.md) —— 明确 presentation 侧
+  合成/呈现管线为手写实现、不经 BECS，因而**不受 §9.8 push-constants-only 约束**，可自由
+  使用 descriptor set；为支持合成而向 BECS 增加 descriptor table 属不必要（ADR-0006 D4.5）。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D4 裁决：
+  D4.1 多 primary 同批提交（`submitAndPresentFrame` 参数改为 `std::span<const VkCommandBuffer>`）；
+  D4.2 presentation primary 固定构成；D4.3 查询面为装载期一次性、普通 C++ 访问器 +
+  `std::span`，依赖方向严格单向（模块不知晓 presentation）；D4.4 合成所需 sampled view
+  由 presentation 自建；D4.5 合成必须为图形 pass（blit 无法 alpha 混合）。
 - [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) —— D6 裁决为
   **独立提交**：Barri-Eww 自行 `vkQueueSubmit`，完全不注入 Minecraft 的
   `VulkanCommandEncoder`，首版即终局。依据为 `Minecraft.java:1308` 的唯一 `submit()`
