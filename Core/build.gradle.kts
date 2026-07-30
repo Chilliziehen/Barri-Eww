@@ -83,9 +83,11 @@ val nativeIntegrationTest = tasks.register<Test>("nativeIntegrationTest") {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test, nativeIntegrationTest)
-    // Only the main-library test suites contribute to the §4.5 coverage report; the demo
-    // source set's demoTest exec is deliberately excluded.
+    mustRunAfter("demoTest")
+    // Linux Vulkan cells run demoTest explicitly; Windows backend-neutral cells leave this
+    // optional execution file absent and never resolve presentation symbols.
     executionData(tasks.test.get(), nativeIntegrationTest.get())
+    executionData(layout.buildDirectory.file("jacoco/demoTest.exec"))
     reports {
         xml.required = true
     }
@@ -93,7 +95,9 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test, nativeIntegrationTest)
+    mustRunAfter("demoTest")
     executionData(tasks.test.get(), nativeIntegrationTest.get())
+    executionData(layout.buildDirectory.file("jacoco/demoTest.exec"))
     violationRules {
         rule {
             limit {

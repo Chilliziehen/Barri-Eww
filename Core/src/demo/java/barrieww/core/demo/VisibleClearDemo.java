@@ -86,6 +86,7 @@ public final class VisibleClearDemo {
     private static void runRenderLoop(long window, Path nativeLibraryPath,
                                       PresentationBootstrapHandles handles) {
         NativePresentationRuntime runtime = null;
+        NativePresentationRuntimeException primaryFrameFailure = null;
         try {
             List<Long> completedFrameNanoseconds = new ArrayList<>();
             long lastReportNanoseconds = System.nanoTime();
@@ -135,10 +136,20 @@ public final class VisibleClearDemo {
                 }
             }
         } catch (NativePresentationRuntimeException runtimeException) {
+            primaryFrameFailure = runtimeException;
             throw new IllegalStateException("Visible demo frame failed", runtimeException);
         } finally {
             if (runtime != null) {
-                runtime.close();
+                try {
+                    runtime.close();
+                } catch (NativePresentationRuntimeException closeFailure) {
+                    if (primaryFrameFailure != null) {
+                        primaryFrameFailure.addSuppressed(closeFailure);
+                    } else {
+                        throw new IllegalStateException(
+                                "Failed to close the presentation runtime", closeFailure);
+                    }
+                }
             }
         }
     }

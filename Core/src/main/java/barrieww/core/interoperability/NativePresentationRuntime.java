@@ -74,6 +74,31 @@ public final class NativePresentationRuntime implements AutoCloseable {
     private final int m_swapchainImageCount;
     private boolean m_isClosed;
 
+    /**
+     * @note ThreadSafety: Thread-confined; construction and all subsequent access occur on the
+     *       opening presentation thread.
+     * Creates the Java owner for one successfully created Native presentation runtime.
+     *
+     * @param Arena libraryArena Confined owner of the library lookup and reusable output storage
+     * @param MethodHandle destroyHandle Non-critical runtime-destroy downcall handle
+     * @param MethodHandle beginHandle Non-critical begin-frame downcall handle
+     * @param MethodHandle submitHandle Non-critical submit-frame downcall handle
+     * @param MethodHandle presentClearHandle Non-critical combined clear-frame downcall handle
+     * @param MethodHandle submitAndPresentClearFrameHandle Non-critical clear-submit downcall
+     *        handle
+     * @param MemorySegment beginResult Reusable begin-frame output storage
+     * @param MemorySegment priorMetrics Reusable prior-frame metrics output storage
+     * @param MemorySegment submitResult Reusable submit-frame output storage
+     * @param long runtimeAddress Native-owned opaque presentation runtime address
+     * @param int selectedFormatValue Selected neutral swapchain format value
+     * @param int selectedPresentModeValue Selected Vulkan present-mode value
+     * @param int selectedSharingModeValue Selected Vulkan sharing-mode value
+     * @param int swapchainImageCount Number of images in the created swapchain
+     * @warning MemoryOwnership: This instance owns libraryArena, all MethodHandles tied to its
+     *          lookup, and all reusable MemorySegments. It owns runtimeAddress and destroys that
+     *          Native runtime before closing libraryArena. The create caller retains every
+     *          borrowed Vulkan bootstrap handle and must keep them alive until close returns.
+     */
     private NativePresentationRuntime(Arena libraryArena, MethodHandle destroyHandle,
                                        MethodHandle beginHandle, MethodHandle submitHandle,
                                        MethodHandle presentClearHandle,
@@ -387,22 +412,30 @@ public final class NativePresentationRuntime implements AutoCloseable {
     /**
      * @note ThreadSafety: Thread-confined; the opening thread closes this once.
      * Destroys the Native runtime and closes the library Arena.
+     * @throws NativePresentationRuntimeException When destroy invocation or operation fails
      * @warning MemoryOwnership: Releases only Native-owned objects; callers retain their
-     *          Vulkan bootstrap handles.
+     *          Vulkan bootstrap handles. The library Arena is closed even when destroy fails.
      */
     @Override
-    public void close() {
+    public void close() throws NativePresentationRuntimeException {
         if (m_isClosed) {
             return;
         }
         m_isClosed = true;
         try {
-            int ignoredResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
-        } catch (Throwable destructionFailure) {
-            // Destruction is best-effort on close; the Arena is released regardless.
-        }
-        if (m_libraryArena.scope().isAlive()) {
-            m_libraryArena.close();
+            int operationResult;
+            try {
+                operationResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
+            } catch (Throwable invocationFailure) {
+                throw invocationException("destroyPresentationRuntime", s_destroySymbolName,
+                        invocationFailure);
+            }
+            requireSuccessfulOperation("destroyPresentationRuntime", s_destroySymbolName,
+                    operationResult, 0);
+        } finally {
+            if (m_libraryArena.scope().isAlive()) {
+                m_libraryArena.close();
+            }
         }
     }
 
@@ -472,6 +505,18 @@ public final class NativePresentationRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * @note ThreadSafety: Thread-confined; resolve only during creation on the thread owning the
+     *       lookup Arena.
+     * Resolves one required Version 1 symbol and fails when the exact symbol is absent.
+     *
+     * @param SymbolLookup symbolLookup Library lookup bound to the runtime's confined Arena
+     * @param String symbolName Exact required Native symbol name
+     * @return MemorySegment Borrowed symbol address segment
+     * @throws IllegalArgumentException When the exact symbol is absent
+     * @warning MemoryOwnership: The returned segment is owned by the Arena backing symbolLookup;
+     *          callers must not retain it beyond that Arena or close it independently.
+     */
     private static MemorySegment findSymbol(SymbolLookup symbolLookup, String symbolName) {
         return symbolLookup.find(symbolName).orElseThrow(() ->
                 new IllegalArgumentException("Native symbol is absent: " + symbolName));

@@ -1,8 +1,18 @@
 package barrieww.core.interoperability;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Constructor;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
@@ -28,5 +38,266 @@ class PresentationRuntimeBindingTests {
                         1280, 720, 2));
         assertEquals(NativePresentationRuntime.s_createSymbolName,
                 loadingException.nativeSymbolName());
+    }
+
+    @Test
+    void closeSurfacesDestroyOperationFailureAndClosesArena() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        MethodHandle destroyHandle = MethodHandles.lookup().findStatic(
+                PresentationRuntimeBindingTests.class, "destroyWithOperationFailure",
+                MethodType.methodType(int.class, long.class));
+        NativePresentationRuntime runtime = createRuntimeForCloseTest(
+                libraryArena, destroyHandle);
+
+        NativePresentationRuntimeException runtimeException = assertThrows(
+                NativePresentationRuntimeException.class, runtime::close);
+
+        assertEquals(NativePresentationRuntime.s_destroySymbolName,
+                runtimeException.nativeSymbolName());
+        assertEquals(4, runtimeException.operationResultCode());
+        assertFalse(libraryArena.scope().isAlive());
+        assertDoesNotThrow(runtime::close);
+    }
+
+    @Test
+    void closeSurfacesDestroyInvocationFailureAndClosesArena() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        MethodHandle destroyHandle = MethodHandles.lookup().findStatic(
+                PresentationRuntimeBindingTests.class, "destroyWithInvocationFailure",
+                MethodType.methodType(int.class, long.class));
+        NativePresentationRuntime runtime = createRuntimeForCloseTest(
+                libraryArena, destroyHandle);
+
+        NativePresentationRuntimeException runtimeException = assertThrows(
+                NativePresentationRuntimeException.class, runtime::close);
+
+        assertEquals(NativePresentationRuntime.s_destroySymbolName,
+                runtimeException.nativeSymbolName());
+        assertEquals(-1, runtimeException.operationResultCode());
+        assertTrue(runtimeException.getMessage().contains("Injected destroy failure"));
+        assertFalse(libraryArena.scope().isAlive());
+        assertDoesNotThrow(runtime::close);
+    }
+
+    @Test
+    void publicFramePathsDecodeJavaOnlyBoundaryResults() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        MethodHandles.Lookup methodLookup = MethodHandles.lookup();
+        MethodHandle destroyHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "destroySuccessfully",
+                MethodType.methodType(int.class, long.class));
+        MethodHandle beginHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "beginFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, int.class, int.class,
+                        MemorySegment.class, MemorySegment.class));
+        MethodHandle submitHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "submitFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, long.class, MemorySegment.class));
+        MethodHandle presentClearHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "presentClearFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, int.class, int.class, float.class,
+                        float.class, float.class, MemorySegment.class, MemorySegment.class,
+                        MemorySegment.class));
+        MethodHandle submitClearHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "submitClearFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, float.class, float.class,
+                        float.class, MemorySegment.class));
+        NativePresentationRuntime runtime = createRuntimeForInvocationTest(libraryArena,
+                destroyHandle, beginHandle, submitHandle, presentClearHandle, submitClearHandle);
+
+        assertEquals(PresentationFrameStatus.SUBOPTIMAL, runtime.beginFrameStatus(1280, 720));
+        PresentationBeginFrame beginFrame = runtime.beginFrame(1280, 720);
+        assertEquals(PresentationFrameStatus.SUBOPTIMAL, beginFrame.status());
+        assertEquals(1, beginFrame.frameSlotIndex());
+        assertEquals(2, beginFrame.imageIndex());
+        assertEquals(3L, beginFrame.frameSequence());
+        assertEquals(4L, beginFrame.swapchainGeneration());
+        assertTrue(beginFrame.priorMetrics().isEmpty());
+        assertEquals(PresentationFrameStatus.RECREATE_REQUIRED,
+                runtime.submitAndPresentFrame(0L));
+        assertEquals(PresentationFrameStatus.SUCCESS,
+                runtime.submitAndPresentClearFrame(0.1f, 0.2f, 0.3f));
+        PresentationClearFrame clearFrame = runtime.presentClearFrame(
+                1280, 720, 0.1f, 0.2f, 0.3f);
+        assertEquals(PresentationFrameStatus.SURFACE_UNAVAILABLE, clearFrame.beginStatus());
+        assertEquals(PresentationFrameStatus.SUBOPTIMAL, clearFrame.submitStatus());
+        assertEquals(37, runtime.selectedFormatValue());
+        assertEquals(1, runtime.selectedPresentModeValue());
+        assertEquals(0, runtime.selectedSharingModeValue());
+        assertEquals(3, runtime.swapchainImageCount());
+        runtime.close();
+        assertFalse(libraryArena.scope().isAlive());
+    }
+
+    /**
+     * Creates a runtime whose destroy handle executes Java-only test behavior.
+     *
+     * @param Arena libraryArena Confined Arena owned by the returned test runtime
+     * @param MethodHandle destroyHandle Java-only destroy behavior
+     * @return NativePresentationRuntime Runtime configured for close testing
+     * @throws Exception When reflective constructor access fails
+     * @warning MemoryOwnership: The returned runtime owns libraryArena and all allocated test
+     *          segments; close releases them. The Java-only MethodHandle owns no native memory.
+     */
+    private static NativePresentationRuntime createRuntimeForCloseTest(
+            Arena libraryArena, MethodHandle destroyHandle) throws Exception {
+        return createRuntimeForInvocationTest(libraryArena, destroyHandle, destroyHandle,
+                destroyHandle, destroyHandle, destroyHandle);
+    }
+
+    /**
+     * Creates a runtime backed entirely by Java-only invocation handles.
+     *
+     * @param Arena libraryArena Confined Arena owned by the returned test runtime
+     * @param MethodHandle destroyHandle Java-only destroy behavior
+     * @param MethodHandle beginHandle Java-only begin-frame behavior
+     * @param MethodHandle submitHandle Java-only submit-frame behavior
+     * @param MethodHandle presentClearHandle Java-only combined clear-frame behavior
+     * @param MethodHandle submitClearHandle Java-only clear-submit behavior
+     * @return NativePresentationRuntime Runtime configured for boundary mapping tests
+     * @throws Exception When reflective constructor access fails
+     * @warning MemoryOwnership: The returned runtime owns libraryArena and all allocated test
+     *          segments. Every MethodHandle invokes Java only and owns no native memory.
+     */
+    private static NativePresentationRuntime createRuntimeForInvocationTest(
+            Arena libraryArena, MethodHandle destroyHandle, MethodHandle beginHandle,
+            MethodHandle submitHandle, MethodHandle presentClearHandle,
+            MethodHandle submitClearHandle) throws Exception {
+        Constructor<NativePresentationRuntime> constructor =
+                NativePresentationRuntime.class.getDeclaredConstructor(
+                        Arena.class, MethodHandle.class, MethodHandle.class, MethodHandle.class,
+                        MethodHandle.class, MethodHandle.class, MemorySegment.class,
+                        MemorySegment.class, MemorySegment.class, long.class, int.class,
+                        int.class, int.class, int.class);
+        constructor.setAccessible(true);
+        MemorySegment beginResult = libraryArena.allocate(40, 8);
+        MemorySegment priorMetrics = libraryArena.allocate(112, 8);
+        MemorySegment submitResult = libraryArena.allocate(8, 4);
+        return constructor.newInstance(libraryArena, destroyHandle, beginHandle, submitHandle,
+                presentClearHandle, submitClearHandle, beginResult, priorMetrics, submitResult,
+                0L, 37, 1, 0, 3);
+    }
+
+    /**
+     * Returns a deterministic non-success destroy operation result.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @return int Internal-failure operation result for the zero test value
+     */
+    private static int destroyWithOperationFailure(long runtimeAddress) {
+        return runtimeAddress == 0L ? 4 : 0;
+    }
+
+    /**
+     * Throws a deterministic Java-side destroy invocation failure.
+     *
+     * @param long runtimeAddress Synthetic runtime value included in the failure message
+     * @return int Never returns
+     * @throws IllegalStateException Always
+     */
+    private static int destroyWithInvocationFailure(long runtimeAddress) {
+        throw new IllegalStateException("Injected destroy failure at " + runtimeAddress);
+    }
+
+    /**
+     * Returns a successful Java-only destroy result.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @return int Success operation result
+     */
+    private static int destroySuccessfully(long runtimeAddress) {
+        return runtimeAddress == 0L ? 0 : 1;
+    }
+
+    /**
+     * Writes a deterministic begin-frame result through Java-only segments.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @param int framebufferWidth Test framebuffer width
+     * @param int framebufferHeight Test framebuffer height
+     * @param MemorySegment beginResult Writable begin-frame output
+     * @param MemorySegment priorMetrics Writable prior-metrics output
+     * @return int Success operation result
+     * @warning MemoryOwnership: The test runtime owns both segments; this method writes them
+     *          synchronously and retains nothing.
+     */
+    private static int beginFrameSuccessfully(long runtimeAddress, int framebufferWidth,
+                                              int framebufferHeight, MemorySegment beginResult,
+                                              MemorySegment priorMetrics) {
+        beginResult.fill((byte) 0);
+        priorMetrics.fill((byte) 0);
+        beginResult.set(ValueLayout.JAVA_INT, 0, 3);
+        beginResult.set(ValueLayout.JAVA_INT, 4, 1);
+        beginResult.set(ValueLayout.JAVA_INT, 8, 2);
+        beginResult.set(ValueLayout.JAVA_LONG, 16, 3L);
+        beginResult.set(ValueLayout.JAVA_LONG, 24, 4L);
+        return runtimeAddress == 0L && framebufferWidth == 1280 && framebufferHeight == 720
+                ? 0 : 1;
+    }
+
+    /**
+     * Writes a deterministic submit-frame result through a Java-only segment.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @param long commandBufferHandle Synthetic command buffer value that is never dereferenced
+     * @param MemorySegment submitResult Writable submit-frame output
+     * @return int Success operation result
+     * @warning MemoryOwnership: The test runtime owns submitResult; this method writes it
+     *          synchronously and retains nothing.
+     */
+    private static int submitFrameSuccessfully(long runtimeAddress, long commandBufferHandle,
+                                               MemorySegment submitResult) {
+        submitResult.fill((byte) 0);
+        submitResult.set(ValueLayout.JAVA_INT, 0, 2);
+        return runtimeAddress == 0L && commandBufferHandle == 0L ? 0 : 1;
+    }
+
+    /**
+     * Writes a deterministic clear-submit result through a Java-only segment.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @param float clearRed Test red clear channel
+     * @param float clearGreen Test green clear channel
+     * @param float clearBlue Test blue clear channel
+     * @param MemorySegment submitResult Writable submit-frame output
+     * @return int Success operation result
+     * @warning MemoryOwnership: The test runtime owns submitResult; this method writes it
+     *          synchronously and retains nothing.
+     */
+    private static int submitClearFrameSuccessfully(long runtimeAddress, float clearRed,
+                                                    float clearGreen, float clearBlue,
+                                                    MemorySegment submitResult) {
+        submitResult.fill((byte) 0);
+        return runtimeAddress == 0L && clearRed == 0.1f && clearGreen == 0.2f
+                && clearBlue == 0.3f ? 0 : 1;
+    }
+
+    /**
+     * Writes deterministic combined clear-frame outputs through Java-only segments.
+     *
+     * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+     * @param int framebufferWidth Test framebuffer width
+     * @param int framebufferHeight Test framebuffer height
+     * @param float clearRed Test red clear channel
+     * @param float clearGreen Test green clear channel
+     * @param float clearBlue Test blue clear channel
+     * @param MemorySegment beginResult Writable begin-frame output
+     * @param MemorySegment priorMetrics Writable prior-metrics output
+     * @param MemorySegment submitResult Writable submit-frame output
+     * @return int Success operation result
+     * @warning MemoryOwnership: The test runtime owns all segments; this method writes them
+     *          synchronously and retains nothing.
+     */
+    private static int presentClearFrameSuccessfully(
+            long runtimeAddress, int framebufferWidth, int framebufferHeight, float clearRed,
+            float clearGreen, float clearBlue, MemorySegment beginResult,
+            MemorySegment priorMetrics, MemorySegment submitResult) {
+        beginResult.fill((byte) 0);
+        priorMetrics.fill((byte) 0);
+        submitResult.fill((byte) 0);
+        beginResult.set(ValueLayout.JAVA_INT, 0, 1);
+        submitResult.set(ValueLayout.JAVA_INT, 0, 3);
+        return runtimeAddress == 0L && framebufferWidth == 1280 && framebufferHeight == 720
+                && clearRed == 0.1f && clearGreen == 0.2f && clearBlue == 0.3f ? 0 : 1;
     }
 }
