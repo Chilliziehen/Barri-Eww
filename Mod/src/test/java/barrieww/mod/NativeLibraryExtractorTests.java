@@ -43,6 +43,15 @@ final class NativeLibraryExtractorTests {
         assertEquals(firstExtractedPath, secondExtractedPath);
         assertTrue(firstExtractedPath.isAbsolute());
         assertEquals(firstExtractedPath.normalize(), firstExtractedPath);
+        Path contentHashDirectory = firstExtractedPath.getParent();
+        Path processScopeDirectory = contentHashDirectory.getParent();
+        assertEquals(
+            Long.toString(ProcessHandle.current().pid()),
+            processScopeDirectory.getFileName().toString());
+        assertEquals(
+            "barrieww-native",
+            processScopeDirectory.getParent().getFileName().toString());
+        assertEquals(64, contentHashDirectory.getFileName().toString().length());
         assertArrayEquals(
             s_testResourceBytes,
             Files.readAllBytes(firstExtractedPath));

@@ -13,9 +13,9 @@ import java.util.Arrays;
 import java.util.HexFormat;
 
 /**
- * @note ThreadSafety: Concurrency-safe. Content-addressed destinations and atomic publication
- * allow concurrent callers and processes to extract the same resource deterministically.
- * Extracts an embedded Native shared library into a content-hash-named temporary directory.
+ * @note ThreadSafety: Concurrency-safe. Each process owns a private scope containing
+ * content-addressed destinations, while atomic publication coordinates threads within that process.
+ * Extracts an embedded Native shared library into a process-private, content-hash-named directory.
  */
 public final class NativeLibraryExtractor {
     private static final String s_hashAlgorithmName = "SHA-256";
@@ -30,7 +30,7 @@ public final class NativeLibraryExtractor {
 
     /**
      * @note ThreadSafety: Concurrency-safe. Concurrent callers publish identical bytes to the same
-     * content-addressed destination without replacing an already published file.
+     * process-private content-addressed destination without replacing an already published file.
      * Extracts one class-path resource beneath the Barri-Eww temporary directory. The returned path
      * is normalized and absolute. The extracted file is retained until process exit so Windows can
      * keep a loaded dynamic library open.
@@ -61,16 +61,21 @@ public final class NativeLibraryExtractor {
 
         String resourceFileName = Path.of(resourceName).getFileName().toString();
         String contentHash = calculateContentHash(resourceBytes);
-        Path extractionDirectory = Path.of(
+        Path processScopeDirectory = Path.of(
             System.getProperty("java.io.tmpdir"),
             "barrieww-native",
+            Long.toString(ProcessHandle.current().pid())).toAbsolutePath().normalize();
+        Path extractionDirectory = processScopeDirectory.resolve(
             contentHash).toAbsolutePath().normalize();
         Path extractedLibraryPath = extractionDirectory.resolve(resourceFileName).normalize();
         Files.createDirectories(extractionDirectory);
 
         if (Files.exists(extractedLibraryPath)) {
             verifyPublishedBytes(extractedLibraryPath, resourceBytes);
-            registerDeletionAtProcessExit(extractionDirectory, extractedLibraryPath);
+            registerDeletionAtProcessExit(
+                processScopeDirectory,
+                extractionDirectory,
+                extractedLibraryPath);
             return extractedLibraryPath;
         }
 
@@ -85,7 +90,10 @@ public final class NativeLibraryExtractor {
             Files.deleteIfExists(temporaryLibraryPath);
         }
 
-        registerDeletionAtProcessExit(extractionDirectory, extractedLibraryPath);
+        registerDeletionAtProcessExit(
+            processScopeDirectory,
+            extractionDirectory,
+            extractedLibraryPath);
         return extractedLibraryPath;
     }
 
@@ -180,12 +188,15 @@ public final class NativeLibraryExtractor {
      * @note ThreadSafety: Thread-safe according to the JVM delete-on-exit registry contract.
      * Registers file-before-directory cleanup ordering for process exit.
      *
+     * @param Path processScopeDirectory Current process private extraction directory
      * @param Path extractionDirectory Content-hash-named extraction directory
      * @param Path extractedLibraryPath Extracted Native library path
      */
     private static void registerDeletionAtProcessExit(
+        Path processScopeDirectory,
         Path extractionDirectory,
         Path extractedLibraryPath) {
+        processScopeDirectory.toFile().deleteOnExit();
         extractionDirectory.toFile().deleteOnExit();
         extractedLibraryPath.toFile().deleteOnExit();
     }

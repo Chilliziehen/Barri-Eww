@@ -1,6 +1,28 @@
 import java.io.File
 import java.nio.file.Path
+import java.util.Locale
 import org.gradle.api.provider.Provider
+
+fun selectNativeResourcePath(
+    operatingSystemName: String,
+    architectureName: String): String {
+    val normalizedOperatingSystemName = operatingSystemName.lowercase(Locale.ROOT)
+    val normalizedArchitectureName = architectureName.lowercase(Locale.ROOT)
+    val isSupportedArchitecture = normalizedArchitectureName == "amd64" ||
+        normalizedArchitectureName == "x86_64"
+    if (!isSupportedArchitecture) {
+        throw GradleException(
+            "Native packaging supports only x86_64 architecture: $normalizedArchitectureName")
+    }
+    return when {
+        normalizedOperatingSystemName.startsWith("windows") ->
+            "barrieww/native/windows-x86_64/BarriEwwNativeFfm.dll"
+        normalizedOperatingSystemName.startsWith("linux") ->
+            "barrieww/native/linux-x86_64/libBarriEwwNativeFfm.so"
+        else -> throw GradleException(
+            "Native packaging supports only Windows and Linux: $normalizedOperatingSystemName")
+    }
+}
 
 plugins {
     id("net.fabricmc.fabric-loom")
@@ -109,21 +131,9 @@ val nativeLibraryFileProvider: Provider<File> = providers.gradleProperty(
     })
 
 val nativeResourcePathProvider: Provider<String> = providers.provider {
-    val operatingSystemName = System.getProperty("os.name").lowercase()
-    val architectureName = System.getProperty("os.arch").lowercase()
-    val isSupportedArchitecture = architectureName == "amd64" || architectureName == "x86_64"
-    if (!isSupportedArchitecture) {
-        throw GradleException(
-            "Native packaging supports only x86_64 architecture: $architectureName")
-    }
-    when {
-        operatingSystemName.startsWith("windows") ->
-            "barrieww/native/windows-x86_64/BarriEwwNativeFfm.dll"
-        operatingSystemName.startsWith("linux") ->
-            "barrieww/native/linux-x86_64/libBarriEwwNativeFfm.so"
-        else -> throw GradleException(
-            "Native packaging supports only Windows and Linux: $operatingSystemName")
-    }
+    selectNativeResourcePath(
+        System.getProperty("os.name"),
+        System.getProperty("os.arch"))
 }
 val validatedNativeLibraryFileProvider = nativeLibraryFileProvider.zip(
     nativeResourcePathProvider) { nativeLibraryFile, nativeResourcePath ->
@@ -180,6 +190,30 @@ tasks.jacocoTestCoverageVerification {
             }
         }
     }
+}
+
+val verifyNativeResourceSelectionLocaleIndependence = tasks.register(
+    "verifyNativeResourceSelectionLocaleIndependence") {
+    doLast {
+        val originalDefaultLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            val nativeResourcePath = selectNativeResourcePath("WINDOWS", "AMD64")
+            if (nativeResourcePath !=
+                "barrieww/native/windows-x86_64/BarriEwwNativeFfm.dll") {
+                throw GradleException(
+                    "Native resource selection changed under the Turkish locale: " +
+                        nativeResourcePath)
+            }
+        } finally {
+            Locale.setDefault(originalDefaultLocale)
+        }
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
+    dependsOn(verifyNativeResourceSelectionLocaleIndependence)
 }
 
 tasks.jar {

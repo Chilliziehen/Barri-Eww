@@ -2,16 +2,21 @@ package barrieww.mod;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
 
 /**
  * @note ThreadSafety: Tests use immutable resource data and content-addressed extraction.
@@ -62,7 +67,20 @@ final class BarriEwwClientInitializerTests {
             nativeLibraryReadiness, "nativeLibraryResource")).isEmpty());
         assertTrue(((Optional<?>) invokeReadinessAccessor(
             nativeLibraryReadiness, "extractionException")).isEmpty());
-        invokeReadinessLogging(nativeLibraryReadiness);
+        List<String> loggingMethodNames = new ArrayList<>();
+        List<Object[]> loggingArguments = new ArrayList<>();
+        Logger logger = createCapturingLogger(loggingMethodNames, loggingArguments);
+
+        invokeReadinessLogging(logger, nativeLibraryReadiness);
+
+        assertEquals(List.of("warn"), loggingMethodNames);
+        assertEquals(1, loggingArguments.size());
+        Object[] warningArguments = loggingArguments.getFirst();
+        assertEquals(3, warningArguments.length);
+        assertTrue(((String) warningArguments[0]).contains("operating system"));
+        assertEquals("macOS", warningArguments[1]);
+        assertEquals("x86_64", warningArguments[2]);
+        assertTrue(List.of(warningArguments).stream().noneMatch(Throwable.class::isInstance));
     }
 
     /**
@@ -92,7 +110,11 @@ final class BarriEwwClientInitializerTests {
         Path extractedLibraryPath = assertInstanceOf(Path.class, nativeLibraryPath.orElseThrow());
         assertTrue(extractedLibraryPath.isAbsolute());
         assertEquals(4L, Files.size(extractedLibraryPath));
-        invokeReadinessLogging(nativeLibraryReadiness);
+        List<String> loggingMethodNames = new ArrayList<>();
+        List<Object[]> loggingArguments = new ArrayList<>();
+        Logger logger = createCapturingLogger(loggingMethodNames, loggingArguments);
+        invokeReadinessLogging(logger, nativeLibraryReadiness);
+        assertEquals(List.of("info"), loggingMethodNames);
     }
 
     /**
@@ -124,6 +146,22 @@ final class BarriEwwClientInitializerTests {
             extractionException.orElseThrow());
         assertTrue(checkedExtractionException.getMessage().contains(
             "barrieww/native/windows-x86_64/BarriEwwNativeFfm.dll"));
+        List<String> loggingMethodNames = new ArrayList<>();
+        List<Object[]> loggingArguments = new ArrayList<>();
+        Logger logger = createCapturingLogger(loggingMethodNames, loggingArguments);
+
+        invokeReadinessLogging(logger, nativeLibraryReadiness);
+
+        assertEquals(List.of("warn"), loggingMethodNames);
+        assertEquals(1, loggingArguments.size());
+        Object[] warningArguments = loggingArguments.getFirst();
+        assertEquals(2, warningArguments.length);
+        String warningMessage = assertInstanceOf(String.class, warningArguments[0]);
+        assertTrue(warningMessage.contains("Windows 11"));
+        assertTrue(warningMessage.contains("amd64"));
+        assertTrue(warningMessage.contains(
+            "barrieww/native/windows-x86_64/BarriEwwNativeFfm.dll"));
+        assertSame(checkedExtractionException, warningArguments[1]);
     }
 
     /**
@@ -191,16 +229,45 @@ final class BarriEwwClientInitializerTests {
      * is delegated to the established SLF4J implementation.
      * Invokes production readiness logging to cover success and unsupported warning behavior.
      *
+     * @param Logger logger Logger receiving exactly one readiness outcome
      * @param Object nativeLibraryReadiness Private immutable readiness result
      * @throws ReflectiveOperationException When the logging method cannot be invoked
      */
-    private static void invokeReadinessLogging(Object nativeLibraryReadiness)
+    private static void invokeReadinessLogging(
+        Logger logger,
+        Object nativeLibraryReadiness)
         throws ReflectiveOperationException {
         Method readinessLoggingMethod = BarriEwwClientInitializer.class.getDeclaredMethod(
             "logNativeLibraryReadiness",
+            Logger.class,
             nativeLibraryReadiness.getClass());
         readinessLoggingMethod.setAccessible(true);
-        readinessLoggingMethod.invoke(null, nativeLibraryReadiness);
+        readinessLoggingMethod.invoke(null, logger, nativeLibraryReadiness);
+    }
+
+    /**
+     * @note ThreadSafety: Not thread-safe. Each test owns and mutates its capture lists from one
+     * thread.
+     * Creates an SLF4J proxy that records logging method names and exact invocation arguments.
+     *
+     * @param List<String> loggingMethodNames Destination for invoked logging method names
+     * @param List<Object[]> loggingArguments Destination for exact logging invocation arguments
+     * @return Logger Capturing logger proxy
+     */
+    private static Logger createCapturingLogger(
+        List<String> loggingMethodNames,
+        List<Object[]> loggingArguments) {
+        return (Logger) Proxy.newProxyInstance(
+            BarriEwwClientInitializerTests.class.getClassLoader(),
+            new Class<?>[] {Logger.class},
+            (loggerProxy, loggingMethod, methodArguments) -> {
+                if (loggingMethod.getName().equals("warn") ||
+                    loggingMethod.getName().equals("info")) {
+                    loggingMethodNames.add(loggingMethod.getName());
+                    loggingArguments.add(methodArguments.clone());
+                }
+                return null;
+            });
     }
 
     /**

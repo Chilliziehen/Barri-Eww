@@ -25,7 +25,9 @@ public final class BarriEwwClientInitializer implements ClientModInitializer {
      */
     @Override
     public void onInitializeClient() {
-        logNativeLibraryReadiness(NativeLibraryReadinessHolder.s_nativeLibraryReadiness);
+        logNativeLibraryReadiness(
+            s_logger,
+            NativeLibraryReadinessHolder.s_nativeLibraryReadiness);
     }
 
     /**
@@ -33,13 +35,15 @@ public final class BarriEwwClientInitializer implements ClientModInitializer {
      * synchronization are delegated to the established SLF4J implementation.
      * Logs exactly one readiness outcome, preserving checked extraction failure context when present.
      *
+     * @param Logger logger Logger receiving exactly one readiness outcome
      * @param NativeLibraryReadiness nativeLibraryReadiness Immutable one-time readiness result
      */
-    private static void logNativeLibraryReadiness(
+    static void logNativeLibraryReadiness(
+        Logger logger,
         NativeLibraryReadiness nativeLibraryReadiness) {
         Optional<Path> nativeLibraryPath = nativeLibraryReadiness.nativeLibraryPath();
         if (nativeLibraryPath.isPresent()) {
-            s_logger.info("Barri-Eww Native library is ready at {}", nativeLibraryPath.orElseThrow());
+            logger.info("Barri-Eww Native library is ready at {}", nativeLibraryPath.orElseThrow());
             return;
         }
 
@@ -50,11 +54,11 @@ public final class BarriEwwClientInitializer implements ClientModInitializer {
                 "', architecture '" + nativeLibraryReadiness.architectureName() +
                 "', resource '" + nativeLibraryReadiness.nativeLibraryResource().orElseThrow() +
                 "'; presentation remains unchanged";
-            s_logger.warn(warningMessage, extractionException.orElseThrow());
+            logger.warn(warningMessage, extractionException.orElseThrow());
             return;
         }
 
-        s_logger.warn(
+        logger.warn(
             "Barri-Eww Native library is unavailable for operating system '{}' and architecture '{}'; " +
                 "presentation remains unchanged",
             nativeLibraryReadiness.operatingSystemName(),
