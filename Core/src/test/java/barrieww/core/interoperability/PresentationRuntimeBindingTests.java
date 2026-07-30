@@ -98,12 +98,13 @@ class PresentationRuntimeBindingTests {
                 MethodType.methodType(int.class, long.class, int.class, int.class, float.class,
                         float.class, float.class, MemorySegment.class, MemorySegment.class,
                         MemorySegment.class));
-        MethodHandle submitClearHandle = methodLookup.findStatic(
-                PresentationRuntimeBindingTests.class, "submitClearFrameSuccessfully",
+        MethodHandle submitAndPresentClearFrameHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "submitAndPresentClearFrameSuccessfully",
                 MethodType.methodType(int.class, long.class, float.class, float.class,
                         float.class, MemorySegment.class));
         NativePresentationRuntime runtime = createRuntimeForInvocationTest(libraryArena,
-                destroyHandle, beginHandle, submitHandle, presentClearHandle, submitClearHandle);
+                destroyHandle, beginHandle, submitHandle, presentClearHandle,
+                submitAndPresentClearFrameHandle);
 
         assertEquals(PresentationFrameStatus.SUBOPTIMAL, runtime.beginFrameStatus(1280, 720));
         PresentationBeginFrame beginFrame = runtime.beginFrame(1280, 720);
@@ -153,7 +154,7 @@ class PresentationRuntimeBindingTests {
      * @param MethodHandle beginHandle Java-only begin-frame behavior
      * @param MethodHandle submitHandle Java-only submit-frame behavior
      * @param MethodHandle presentClearHandle Java-only combined clear-frame behavior
-     * @param MethodHandle submitClearHandle Java-only clear-submit behavior
+     * @param MethodHandle submitAndPresentClearFrameHandle Java-only clear-submit behavior
      * @return NativePresentationRuntime Runtime configured for boundary mapping tests
      * @throws Exception When reflective constructor access fails
      * @warning MemoryOwnership: The returned runtime owns libraryArena and all allocated test
@@ -162,7 +163,7 @@ class PresentationRuntimeBindingTests {
     private static NativePresentationRuntime createRuntimeForInvocationTest(
             Arena libraryArena, MethodHandle destroyHandle, MethodHandle beginHandle,
             MethodHandle submitHandle, MethodHandle presentClearHandle,
-            MethodHandle submitClearHandle) throws Exception {
+            MethodHandle submitAndPresentClearFrameHandle) throws Exception {
         Constructor<NativePresentationRuntime> constructor =
                 NativePresentationRuntime.class.getDeclaredConstructor(
                         Arena.class, MethodHandle.class, MethodHandle.class, MethodHandle.class,
@@ -174,8 +175,8 @@ class PresentationRuntimeBindingTests {
         MemorySegment priorMetrics = libraryArena.allocate(112, 8);
         MemorySegment submitResult = libraryArena.allocate(8, 4);
         return constructor.newInstance(libraryArena, destroyHandle, beginHandle, submitHandle,
-                presentClearHandle, submitClearHandle, beginResult, priorMetrics, submitResult,
-                0L, 37, 1, 0, 3);
+                presentClearHandle, submitAndPresentClearFrameHandle, beginResult, priorMetrics,
+                submitResult, 0L, 37, 1, 0, 3);
     }
 
     /**
@@ -264,9 +265,9 @@ class PresentationRuntimeBindingTests {
      * @warning MemoryOwnership: The test runtime owns submitResult; this method writes it
      *          synchronously and retains nothing.
      */
-    private static int submitClearFrameSuccessfully(long runtimeAddress, float clearRed,
-                                                    float clearGreen, float clearBlue,
-                                                    MemorySegment submitResult) {
+    private static int submitAndPresentClearFrameSuccessfully(
+            long runtimeAddress, float clearRed, float clearGreen, float clearBlue,
+            MemorySegment submitResult) {
         submitResult.fill((byte) 0);
         return runtimeAddress == 0L && clearRed == 0.1f && clearGreen == 0.2f
                 && clearBlue == 0.3f ? 0 : 1;
