@@ -105,10 +105,7 @@ tasks.jacocoTestCoverageVerification {
     }
 }
 
-// ── Visible demo (ADR-0004): Java LWJGL/GLFW bootstrap + presentation FFM binding. ──
-// The window-dependent presentation runtime binding and the GLFW app live here, not in the
-// main library, so they are integration/orchestration glue outside the §4.5 main-library
-// coverage gate (jacoco reports over the main source set only).
+// ── Visible demo (ADR-0004): Java LWJGL/GLFW bootstrap around the Core presentation binding. ──
 val lwjglVersion = "3.3.4"
 val lwjglNatives = when {
     org.gradle.internal.os.OperatingSystem.current().isWindows -> "natives-windows"

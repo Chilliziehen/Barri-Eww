@@ -13,6 +13,12 @@ import org.junit.jupiter.api.Test;
 class PresentationRuntimeBindingTests {
 
     @Test
+    void submitAndPresentClearFrameSymbolNameMatchesVersionOneContract() {
+        assertEquals("barriEwwSubmitAndPresentClearFrameVersion1",
+                NativePresentationRuntime.s_submitAndPresentClearFrameSymbolName);
+    }
+
+    @Test
     void createRejectsARelativeLibraryPath() {
         PresentationBootstrapHandles handles = new PresentationBootstrapHandles(
                 1L, 2L, 3L, 4L, 5L, 5L, 0, 0);
