@@ -116,6 +116,13 @@ public:
     [[nodiscard]] SubmitFrameResult submitAndPresentFrame(VkCommandBuffer commandBuffer);
 
     /**
+     * @brief Records a clear for the already-open frame, then submits and presents it.
+     * @param clearColor The RGB clear color (alpha is forced to 1)
+     * @return SubmitFrameResult Submission status, with VK_NOT_READY when no frame is open
+     */
+    [[nodiscard]] SubmitFrameResult submitAndPresentClearFrame(const float clearColor[3]);
+
+    /**
      * @brief Begins a frame, records a clear of the acquired swapchain image to the given
      *        color (transition Undefined -> TransferDestination -> clear -> Present), submits
      *        and presents it. This is the baseline visible milestone (ADR-0004 D5.1).

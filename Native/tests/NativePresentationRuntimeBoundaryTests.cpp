@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -32,6 +33,7 @@ std::uint32_t g_submitCallCount = 0u;
 std::uint32_t g_presentCallCount = 0u;
 std::uint32_t g_clearImageCallCount = 0u;
 std::uint32_t g_recordedCommandBufferCount = 0u;
+std::array<float, 4> g_observedClearColor{};
 
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
@@ -53,6 +55,7 @@ void resetPresentationState() {
     g_presentCallCount = 0u;
     g_clearImageCallCount = 0u;
     g_recordedCommandBufferCount = 0u;
+    g_observedClearColor = {};
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -349,9 +352,10 @@ extern "C" void VKAPI_CALL vkCmdClearColorImage(
     static_cast<void>(commandBuffer);
     static_cast<void>(image);
     static_cast<void>(imageLayout);
-    static_cast<void>(clearColor);
     static_cast<void>(rangeCount);
     static_cast<void>(ranges);
+    g_observedClearColor = {clearColor->float32[0], clearColor->float32[1],
+                            clearColor->float32[2], clearColor->float32[3]};
     ++g_clearImageCallCount;
 }
 
@@ -500,7 +504,7 @@ TEST_CASE("Presentation frame reports surface unavailable on zero extent",
 }
 
 TEST_CASE("Presentation frame rejects submit without an open frame and null results",
-          "[presentationRuntime]") {
+           "[presentationRuntime]") {
     resetPresentationState();
     const std::uint64_t runtimeAddress = openRuntime();
     barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
@@ -509,8 +513,40 @@ TEST_CASE("Presentation frame rejects submit without an open frame and null resu
             == NativePresentationRuntimeOperationResult::InvalidArgument);
     REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, nullptr)
             == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
     REQUIRE(barriEwwBeginPresentationFrameVersion1(0u, 8u, 8u, nullptr, nullptr)
             == NativePresentationRuntimeOperationResult::InvalidArgument);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear submission records the requested color for an open frame",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(submitResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    REQUIRE(g_observedClearColor == std::array{0.1f, 0.3f, 0.7f, 1.0f});
+    REQUIRE(g_clearImageCallCount == 1u);
+    REQUIRE(g_submitCallCount == 1u);
+    REQUIRE(g_presentCallCount == 1u);
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);

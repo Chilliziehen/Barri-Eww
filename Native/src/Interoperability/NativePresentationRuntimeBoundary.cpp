@@ -182,6 +182,36 @@ barriEwwSubmitPresentationFrameVersion1(
 }
 
 extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentClearFrameVersion1(
+    std::uint64_t runtimeAddress, float clearRed, float clearGreen, float clearBlue,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (submitResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *submitResult = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        if (!runtime->isFrameOpen()) {
+            return NativePresentationRuntimeOperationResult::InvalidArgument;
+        }
+        const float clearColor[3] = {clearRed, clearGreen, clearBlue};
+        const auto frameResult = runtime->submitAndPresentClearFrame(clearColor);
+        submitResult->frameStatusValue = static_cast<std::uint32_t>(frameResult.status);
+        submitResult->vulkanResult = frameResult.vulkanResult;
+        return NativePresentationRuntimeOperationResult::Success;
+    } catch (...) {
+        *submitResult = {};
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
 barriEwwPresentClearFrameVersion1(
     std::uint64_t runtimeAddress, std::uint32_t framebufferWidth,
     std::uint32_t framebufferHeight, float clearRed, float clearGreen, float clearBlue,
