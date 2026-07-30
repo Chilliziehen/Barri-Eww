@@ -1,5 +1,6 @@
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
@@ -190,7 +191,10 @@ barriEwwSubmitAndPresentClearFrameVersion1(
         return NativePresentationRuntimeOperationResult::InvalidArgument;
     }
     *submitResult = {};
-    if (runtimeAddress == 0u) {
+    if (runtimeAddress == 0u || !std::isfinite(clearRed) || clearRed < 0.0f
+        || clearRed > 1.0f || !std::isfinite(clearGreen) || clearGreen < 0.0f
+        || clearGreen > 1.0f || !std::isfinite(clearBlue) || clearBlue < 0.0f
+        || clearBlue > 1.0f) {
         return NativePresentationRuntimeOperationResult::InvalidArgument;
     }
 
