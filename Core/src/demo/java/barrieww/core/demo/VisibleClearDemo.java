@@ -86,7 +86,7 @@ public final class VisibleClearDemo {
     private static void runRenderLoop(long window, Path nativeLibraryPath,
                                       PresentationBootstrapHandles handles) {
         NativePresentationRuntime runtime = null;
-        NativePresentationRuntimeException primaryFrameFailure = null;
+        Throwable primaryFailure = null;
         try {
             List<Long> completedFrameNanoseconds = new ArrayList<>();
             long lastReportNanoseconds = System.nanoTime();
@@ -136,22 +136,40 @@ public final class VisibleClearDemo {
                 }
             }
         } catch (NativePresentationRuntimeException runtimeException) {
-            primaryFrameFailure = runtimeException;
-            throw new IllegalStateException("Visible demo frame failed", runtimeException);
+            IllegalStateException propagatedFailure =
+                    new IllegalStateException("Visible demo frame failed", runtimeException);
+            primaryFailure = propagatedFailure;
+            throw propagatedFailure;
+        } catch (RuntimeException | Error propagatedFailure) {
+            primaryFailure = propagatedFailure;
+            throw propagatedFailure;
         } finally {
             if (runtime != null) {
                 try {
                     runtime.close();
                 } catch (NativePresentationRuntimeException closeFailure) {
-                    if (primaryFrameFailure != null) {
-                        primaryFrameFailure.addSuppressed(closeFailure);
-                    } else {
-                        throw new IllegalStateException(
-                                "Failed to close the presentation runtime", closeFailure);
-                    }
+                    handlePresentationRuntimeCloseFailure(primaryFailure, closeFailure);
                 }
             }
         }
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; call during visible-demo teardown on the main thread.
+     * Preserves an existing propagated failure by attaching close failure as suppressed, or
+     * surfaces close failure when teardown has no primary failure.
+     *
+     * @param Throwable primaryFailure Propagated render failure, or null when none exists
+     * @param NativePresentationRuntimeException closeFailure Checked runtime close failure
+     * @throws IllegalStateException When closeFailure is the only failure
+     */
+    static void handlePresentationRuntimeCloseFailure(
+            Throwable primaryFailure, NativePresentationRuntimeException closeFailure) {
+        if (primaryFailure != null) {
+            primaryFailure.addSuppressed(closeFailure);
+            return;
+        }
+        throw new IllegalStateException("Failed to close the presentation runtime", closeFailure);
     }
 
     private static NativePresentationRuntime openRuntime(Path nativeLibraryPath,

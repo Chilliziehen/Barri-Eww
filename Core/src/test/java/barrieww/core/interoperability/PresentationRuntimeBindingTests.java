@@ -8,12 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.nio.file.Path;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -130,6 +132,91 @@ class PresentationRuntimeBindingTests {
         assertFalse(libraryArena.scope().isAlive());
     }
 
+    @Test
+    void repeatedStatusCallsReuseIdenticalOutputSegments() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        FrameInvocationObserver invocationObserver = new FrameInvocationObserver();
+        NativePresentationRuntime runtime = createRuntimeForFrameObservationTest(
+                libraryArena, invocationObserver);
+
+        runtime.beginFrameStatus(1280, 720);
+        runtime.beginFrameStatus(1280, 720);
+        runtime.submitAndPresentClearFrame(0.1f, 0.2f, 0.3f);
+        runtime.submitAndPresentClearFrame(0.1f, 0.2f, 0.3f);
+
+        assertTrue(invocationObserver.m_firstBeginResultAddress != 0L);
+        assertTrue(invocationObserver.m_firstPriorMetricsAddress != 0L);
+        assertTrue(invocationObserver.m_firstSubmitResultAddress != 0L);
+        assertEquals(invocationObserver.m_firstBeginResultAddress,
+                invocationObserver.m_secondBeginResultAddress);
+        assertEquals(invocationObserver.m_firstPriorMetricsAddress,
+                invocationObserver.m_secondPriorMetricsAddress);
+        assertEquals(invocationObserver.m_firstSubmitResultAddress,
+                invocationObserver.m_secondSubmitResultAddress);
+        runtime.close();
+    }
+
+    @Test
+    void nativeClearedInvalidMetricsDoNotLeakPriorOptionalValue() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        FrameInvocationObserver invocationObserver = new FrameInvocationObserver();
+        invocationObserver.m_shouldAlternateMetricsValidity = true;
+        NativePresentationRuntime runtime = createRuntimeForFrameObservationTest(
+                libraryArena, invocationObserver);
+
+        PresentationBeginFrame validMetricsFrame = runtime.beginFrame(1280, 720);
+        PresentationBeginFrame invalidMetricsFrame = runtime.beginFrame(1280, 720);
+
+        assertTrue(validMetricsFrame.priorMetrics().isPresent());
+        assertEquals(91L, validMetricsFrame.priorMetrics().orElseThrow().frameSequence());
+        assertTrue(invalidMetricsFrame.priorMetrics().isEmpty());
+        runtime.close();
+    }
+
+    @Test
+    void operationFailuresReadRawVulkanResultsFromExactOffsets() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        FrameInvocationObserver invocationObserver = new FrameInvocationObserver();
+        invocationObserver.m_beginOperationResult = 3;
+        NativePresentationRuntime runtime = createRuntimeForFrameObservationTest(
+                libraryArena, invocationObserver);
+
+        NativePresentationRuntimeException beginFailure = assertThrows(
+                NativePresentationRuntimeException.class,
+                () -> runtime.beginFrameStatus(1280, 720));
+        assertEquals(3, beginFailure.operationResultCode());
+        assertEquals(-1001, beginFailure.vulkanResult());
+        assertEquals(NativePresentationRuntime.s_beginFrameSymbolName,
+                beginFailure.nativeSymbolName());
+
+        invocationObserver.m_beginOperationResult = 0;
+        invocationObserver.m_submitAndPresentClearFrameOperationResult = 3;
+        NativePresentationRuntimeException submitFailure = assertThrows(
+                NativePresentationRuntimeException.class,
+                () -> runtime.submitAndPresentClearFrame(0.1f, 0.2f, 0.3f));
+        assertEquals(3, submitFailure.operationResultCode());
+        assertEquals(-1002, submitFailure.vulkanResult());
+        assertEquals(NativePresentationRuntime.s_submitAndPresentClearFrameSymbolName,
+                submitFailure.nativeSymbolName());
+        runtime.close();
+    }
+
+    @Test
+    void missingSymbolFailureNamesExactRequestedSymbol() {
+        Path nativeLibraryPath = Path.of("missing-presentation-library").toAbsolutePath();
+        SymbolLookup missingSymbolLookup = symbolName -> Optional.empty();
+
+        NativeLibraryLoadingException loadingException = assertThrows(
+                NativeLibraryLoadingException.class,
+                () -> NativePresentationRuntime.findSymbol(missingSymbolLookup,
+                        nativeLibraryPath,
+                        NativePresentationRuntime.s_submitAndPresentClearFrameSymbolName));
+
+        assertEquals(nativeLibraryPath, loadingException.nativeLibraryPath());
+        assertEquals(NativePresentationRuntime.s_submitAndPresentClearFrameSymbolName,
+                loadingException.nativeSymbolName());
+    }
+
     /**
      * Creates a runtime whose destroy handle executes Java-only test behavior.
      *
@@ -154,7 +241,8 @@ class PresentationRuntimeBindingTests {
      * @param MethodHandle beginHandle Java-only begin-frame behavior
      * @param MethodHandle submitHandle Java-only submit-frame behavior
      * @param MethodHandle presentClearHandle Java-only combined clear-frame behavior
-     * @param MethodHandle submitAndPresentClearFrameHandle Java-only clear-submit behavior
+     * @param MethodHandle submitAndPresentClearFrameHandle Java-only clear-submit-and-present
+     *        behavior
      * @return NativePresentationRuntime Runtime configured for boundary mapping tests
      * @throws Exception When reflective constructor access fails
      * @warning MemoryOwnership: The returned runtime owns libraryArena and all allocated test
@@ -177,6 +265,43 @@ class PresentationRuntimeBindingTests {
         return constructor.newInstance(libraryArena, destroyHandle, beginHandle, submitHandle,
                 presentClearHandle, submitAndPresentClearFrameHandle, beginResult, priorMetrics,
                 submitResult, 0L, 37, 1, 0, 3);
+    }
+
+    /**
+     * Creates a runtime whose begin and clear-submit-and-present handles observe reusable output
+     * storage.
+     *
+     * @param Arena libraryArena Confined Arena owned by the returned test runtime
+     * @param FrameInvocationObserver invocationObserver Java-only frame invocation observer
+     * @return NativePresentationRuntime Runtime configured for output-storage tests
+     * @throws Exception When MethodHandle or reflective constructor access fails
+     * @warning MemoryOwnership: The returned runtime owns libraryArena and its test segments;
+     *          invocationObserver only records scalar addresses and retains no MemorySegment.
+     */
+    private static NativePresentationRuntime createRuntimeForFrameObservationTest(
+            Arena libraryArena, FrameInvocationObserver invocationObserver) throws Exception {
+        MethodHandles.Lookup methodLookup = MethodHandles.lookup();
+        MethodHandle destroyHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "destroySuccessfully",
+                MethodType.methodType(int.class, long.class));
+        MethodHandle beginHandle = methodLookup.findVirtual(
+                FrameInvocationObserver.class, "beginFrame",
+                MethodType.methodType(int.class, long.class, int.class, int.class,
+                        MemorySegment.class, MemorySegment.class)).bindTo(invocationObserver);
+        MethodHandle submitHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "submitFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, long.class, MemorySegment.class));
+        MethodHandle presentClearHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "presentClearFrameSuccessfully",
+                MethodType.methodType(int.class, long.class, int.class, int.class, float.class,
+                        float.class, float.class, MemorySegment.class, MemorySegment.class,
+                        MemorySegment.class));
+        MethodHandle submitAndPresentClearFrameHandle = methodLookup.findVirtual(
+                FrameInvocationObserver.class, "submitAndPresentClearFrame",
+                MethodType.methodType(int.class, long.class, float.class, float.class,
+                        float.class, MemorySegment.class)).bindTo(invocationObserver);
+        return createRuntimeForInvocationTest(libraryArena, destroyHandle, beginHandle,
+                submitHandle, presentClearHandle, submitAndPresentClearFrameHandle);
     }
 
     /**
@@ -300,5 +425,89 @@ class PresentationRuntimeBindingTests {
         submitResult.set(ValueLayout.JAVA_INT, 0, 3);
         return runtimeAddress == 0L && framebufferWidth == 1280 && framebufferHeight == 720
                 && clearRed == 0.1f && clearGreen == 0.2f && clearBlue == 0.3f ? 0 : 1;
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; one test thread owns each instance.
+     * Observes Java-only frame invocations without retaining MemorySegments.
+     * @warning MemoryOwnership: Stores only scalar addresses. The test runtime owns every
+     *          observed MemorySegment and closes their confined Arena.
+     */
+    private static final class FrameInvocationObserver {
+        private long m_firstBeginResultAddress;
+        private long m_secondBeginResultAddress;
+        private long m_firstPriorMetricsAddress;
+        private long m_secondPriorMetricsAddress;
+        private long m_firstSubmitResultAddress;
+        private long m_secondSubmitResultAddress;
+        private int m_beginInvocationCount;
+        private int m_submitAndPresentClearFrameInvocationCount;
+        private int m_beginOperationResult;
+        private int m_submitAndPresentClearFrameOperationResult;
+        private boolean m_shouldAlternateMetricsValidity;
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke serially from the owning test thread.
+         * Writes and observes one begin-frame result.
+         *
+         * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+         * @param int framebufferWidth Test framebuffer width
+         * @param int framebufferHeight Test framebuffer height
+         * @param MemorySegment beginResult Writable reusable begin-frame output
+         * @param MemorySegment priorMetrics Writable reusable prior-metrics output
+         * @return int Configured operation result
+         * @warning MemoryOwnership: The test runtime owns both segments; this method records
+         *          their scalar addresses, writes synchronously and retains no segment.
+         */
+        private int beginFrame(long runtimeAddress, int framebufferWidth, int framebufferHeight,
+                               MemorySegment beginResult, MemorySegment priorMetrics) {
+            beginResult.fill((byte) 0);
+            priorMetrics.fill((byte) 0);
+            if (m_beginInvocationCount == 0) {
+                m_firstBeginResultAddress = beginResult.address();
+                m_firstPriorMetricsAddress = priorMetrics.address();
+            } else if (m_beginInvocationCount == 1) {
+                m_secondBeginResultAddress = beginResult.address();
+                m_secondPriorMetricsAddress = priorMetrics.address();
+            }
+            if (m_shouldAlternateMetricsValidity && m_beginInvocationCount == 0) {
+                beginResult.set(ValueLayout.JAVA_INT, 12, 1);
+                priorMetrics.set(ValueLayout.JAVA_LONG, 0, 91L);
+            }
+            beginResult.set(ValueLayout.JAVA_INT, 32, -1001);
+            beginResult.set(ValueLayout.JAVA_INT, 36, -2001);
+            ++m_beginInvocationCount;
+            return runtimeAddress == 0L && framebufferWidth == 1280 && framebufferHeight == 720
+                    ? m_beginOperationResult : 1;
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke serially from the owning test thread.
+         * Writes and observes one clear-submit-and-present result.
+         *
+         * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+         * @param float clearRed Test red clear channel
+         * @param float clearGreen Test green clear channel
+         * @param float clearBlue Test blue clear channel
+         * @param MemorySegment submitResult Writable reusable submit output
+         * @return int Configured operation result
+         * @warning MemoryOwnership: The test runtime owns submitResult; this method records its
+         *          scalar address, writes synchronously and retains no segment.
+         */
+        private int submitAndPresentClearFrame(long runtimeAddress, float clearRed,
+                                               float clearGreen, float clearBlue,
+                                               MemorySegment submitResult) {
+            submitResult.fill((byte) 0);
+            if (m_submitAndPresentClearFrameInvocationCount == 0) {
+                m_firstSubmitResultAddress = submitResult.address();
+            } else if (m_submitAndPresentClearFrameInvocationCount == 1) {
+                m_secondSubmitResultAddress = submitResult.address();
+            }
+            submitResult.set(ValueLayout.JAVA_INT, 4, -1002);
+            ++m_submitAndPresentClearFrameInvocationCount;
+            return runtimeAddress == 0L && clearRed == 0.1f && clearGreen == 0.2f
+                    && clearBlue == 0.3f
+                    ? m_submitAndPresentClearFrameOperationResult : 1;
+        }
     }
 }

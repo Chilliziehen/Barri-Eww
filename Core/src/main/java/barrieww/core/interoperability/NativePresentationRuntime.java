@@ -168,22 +168,30 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     SymbolLookup.libraryLookup(absoluteLibraryPath, libraryArena);
             Linker linker = Linker.nativeLinker();
             createHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_createSymbolName), s_createDescriptor);
+                    findSymbol(symbolLookup, absoluteLibraryPath, s_createSymbolName),
+                    s_createDescriptor);
             destroyHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_destroySymbolName), s_destroyDescriptor);
+                    findSymbol(symbolLookup, absoluteLibraryPath, s_destroySymbolName),
+                    s_destroyDescriptor);
             beginHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_beginFrameSymbolName), s_beginDescriptor);
+                    findSymbol(symbolLookup, absoluteLibraryPath, s_beginFrameSymbolName),
+                    s_beginDescriptor);
             submitHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_submitFrameSymbolName), s_submitDescriptor);
+                    findSymbol(symbolLookup, absoluteLibraryPath, s_submitFrameSymbolName),
+                    s_submitDescriptor);
             presentClearHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_presentClearFrameSymbolName),
+                    findSymbol(symbolLookup, absoluteLibraryPath, s_presentClearFrameSymbolName),
                     s_presentClearDescriptor);
             submitAndPresentClearFrameHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, s_submitAndPresentClearFrameSymbolName),
+                    findSymbol(symbolLookup, absoluteLibraryPath,
+                            s_submitAndPresentClearFrameSymbolName),
                     s_submitAndPresentClearFrameDescriptor);
             beginResult = libraryArena.allocate(s_beginResultByteSize, 8);
             priorMetrics = libraryArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
             submitResult = libraryArena.allocate(s_submitResultByteSize, 4);
+        } catch (NativeLibraryLoadingException loadingFailure) {
+            libraryArena.close();
+            throw loadingFailure;
         } catch (Throwable loadingFailure) {
             libraryArena.close();
             throw new NativeLibraryLoadingException(
@@ -511,14 +519,29 @@ public final class NativePresentationRuntime implements AutoCloseable {
      * Resolves one required Version 1 symbol and fails when the exact symbol is absent.
      *
      * @param SymbolLookup symbolLookup Library lookup bound to the runtime's confined Arena
+     * @param Path nativeLibraryPath Absolute path owning the symbol lookup
      * @param String symbolName Exact required Native symbol name
      * @return MemorySegment Borrowed symbol address segment
-     * @throws IllegalArgumentException When the exact symbol is absent
+     * @throws NativeLibraryLoadingException When lookup fails or the exact symbol is absent
      * @warning MemoryOwnership: The returned segment is owned by the Arena backing symbolLookup;
      *          callers must not retain it beyond that Arena or close it independently.
      */
-    private static MemorySegment findSymbol(SymbolLookup symbolLookup, String symbolName) {
-        return symbolLookup.find(symbolName).orElseThrow(() ->
-                new IllegalArgumentException("Native symbol is absent: " + symbolName));
+    static MemorySegment findSymbol(SymbolLookup symbolLookup, Path nativeLibraryPath,
+                                    String symbolName) throws NativeLibraryLoadingException {
+        Optional<MemorySegment> symbol;
+        try {
+            symbol = symbolLookup.find(symbolName);
+        } catch (Throwable lookupFailure) {
+            throw new NativeLibraryLoadingException(
+                    "Failed to resolve Native symbol " + symbolName + " from "
+                            + nativeLibraryPath,
+                    nativeLibraryPath, symbolName, lookupFailure);
+        }
+        if (symbol.isEmpty()) {
+            throw new NativeLibraryLoadingException(
+                    "Native symbol is absent: " + symbolName + " in " + nativeLibraryPath,
+                    nativeLibraryPath, symbolName, null);
+        }
+        return symbol.orElseThrow();
     }
 }
