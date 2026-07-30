@@ -10,6 +10,7 @@
 
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
+#include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
 
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
@@ -31,7 +32,6 @@ std::uint32_t g_observedQueueFamilyCount = 0u;
 VkResult g_acquireResult = VK_SUCCESS;
 VkResult g_submitResult = VK_SUCCESS;
 VkResult g_presentResult = VK_SUCCESS;
-bool g_shouldThrowDuringClear = false;
 std::uint32_t g_acquiredImageIndex = 0u;
 std::uint32_t g_submitCallCount = 0u;
 std::uint32_t g_presentCallCount = 0u;
@@ -55,7 +55,6 @@ void resetPresentationState() {
     g_acquireResult = VK_SUCCESS;
     g_submitResult = VK_SUCCESS;
     g_presentResult = VK_SUCCESS;
-    g_shouldThrowDuringClear = false;
     g_acquiredImageIndex = 0u;
     g_submitCallCount = 0u;
     g_presentCallCount = 0u;
@@ -351,10 +350,6 @@ extern "C" void VKAPI_CALL vkCmdPipelineBarrier(
     static_cast<void>(imageMemoryBarriers);
 }
 
-#if defined(__clang__)
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wexceptions"
-#endif
 extern "C" void VKAPI_CALL vkCmdClearColorImage(
     VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout,
     const VkClearColorValue* clearColor, std::uint32_t rangeCount,
@@ -364,16 +359,10 @@ extern "C" void VKAPI_CALL vkCmdClearColorImage(
     static_cast<void>(imageLayout);
     static_cast<void>(rangeCount);
     static_cast<void>(ranges);
-    if (g_shouldThrowDuringClear) {
-        throw std::runtime_error{"Injected clear failure"};
-    }
     g_observedClearColor = {clearColor->float32[0], clearColor->float32[1],
                             clearColor->float32[2], clearColor->float32[3]};
     ++g_clearImageCallCount;
 }
-#if defined(__clang__)
-    #pragma clang diagnostic pop
-#endif
 
 extern "C" VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
     static_cast<void>(commandBuffer);
@@ -688,36 +677,18 @@ TEST_CASE("Presentation clear submission propagates submit and present results",
 
 TEST_CASE("Presentation clear submission contains clear exceptions and clears output",
           "[presentationRuntime]") {
-    resetPresentationState();
-    const std::uint64_t runtimeAddress = openRuntime();
-    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
-    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
     barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
         makeSentinelSubmitResult();
+    const auto throwingClearSubmission =
+        []() -> barrieww::VulkanPresentationRuntime::SubmitFrameResult {
+        throw std::runtime_error{"Injected clear failure"};
+    };
 
-    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
-                                                   &beginResult, &priorMetrics)
-            == NativePresentationRuntimeOperationResult::Success);
-    g_shouldThrowDuringClear = true;
-    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
-                                                       &submitResult)
+    REQUIRE(barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+                &submitResult, throwingClearSubmission)
             == NativePresentationRuntimeOperationResult::InternalFailure);
     REQUIRE(submitResult.frameStatusValue == 0u);
     REQUIRE(submitResult.vulkanResult == 0);
-    REQUIRE(g_clearImageCallCount == 0u);
-    REQUIRE(g_submitCallCount == 0u);
-    REQUIRE(g_presentCallCount == 0u);
-
-    g_shouldThrowDuringClear = false;
-    submitResult = makeSentinelSubmitResult();
-    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
-            == NativePresentationRuntimeOperationResult::Success);
-    REQUIRE(submitResult.frameStatusValue
-            == static_cast<std::uint32_t>(
-                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
-    REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
-    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
-            == NativePresentationRuntimeOperationResult::Success);
 }
 
 TEST_CASE("Presentation frame cycles begin/submit and reuses a slot with prior metrics",

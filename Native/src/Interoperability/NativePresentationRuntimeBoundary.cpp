@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
+#include "NativePresentationRuntimeBoundaryImplementation.hpp"
 
 namespace {
 
@@ -205,10 +206,11 @@ barriEwwSubmitAndPresentClearFrameVersion1(
             return NativePresentationRuntimeOperationResult::InvalidArgument;
         }
         const float clearColor[3] = {clearRed, clearGreen, clearBlue};
-        const auto frameResult = runtime->submitAndPresentClearFrame(clearColor);
-        submitResult->frameStatusValue = static_cast<std::uint32_t>(frameResult.status);
-        submitResult->vulkanResult = frameResult.vulkanResult;
-        return NativePresentationRuntimeOperationResult::Success;
+        return barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+            submitResult,
+            [runtime, &clearColor] {
+                return runtime->submitAndPresentClearFrame(clearColor);
+            });
     } catch (...) {
         *submitResult = {};
         return NativePresentationRuntimeOperationResult::InternalFailure;
