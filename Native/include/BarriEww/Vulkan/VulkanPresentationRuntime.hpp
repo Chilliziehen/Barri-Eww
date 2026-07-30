@@ -117,7 +117,7 @@ public:
 
     /**
      * @brief Records a clear for the already-open frame, then submits and presents it.
-     * @param clearColor The RGB clear color (alpha is forced to 1)
+     * @param const float clearColor[3] The RGB clear color (alpha is forced to 1)
      * @return SubmitFrameResult Submission status, with VK_NOT_READY when no frame is open
      */
     [[nodiscard]] SubmitFrameResult submitAndPresentClearFrame(const float clearColor[3]);
