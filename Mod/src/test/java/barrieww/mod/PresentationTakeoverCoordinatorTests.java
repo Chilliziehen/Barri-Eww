@@ -201,9 +201,9 @@ final class PresentationTakeoverCoordinatorTests {
         }
     }
 
-    /** Verifies fatal begin retries retain the runtime and present black before delayed fallback. */
+    /** Verifies fatal begin state makes no further Native calls before delayed fallback drains. */
     @Test
-    void checkedBeginFailureRetainsRuntimeAndNextSuccessfulFramePresentsBlack() {
+    void checkedBeginFailureStopsNativeCallsUntilConfigureDrainsRuntime() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
@@ -219,18 +219,17 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.isTakenOver());
         assertTrue(coordinator.requiresReconfiguration());
         assertEquals(0, runtime.m_closeCount);
+        assertEquals(1, runtime.m_beginCount);
+        assertEquals(0, runtime.m_presentCount);
 
         assertDoesNotThrow(coordinator::beginFrame);
+        assertDoesNotThrow(coordinator::presentFrame);
+        assertDoesNotThrow(coordinator::beginFrame);
+        assertDoesNotThrow(coordinator::presentFrame);
+
+        assertEquals(1, runtime.m_beginCount);
+        assertEquals(0, runtime.m_presentCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
-
-        runtime.m_beginFailure = null;
-        coordinator.beginFrame();
-        coordinator.presentFrame();
-
-        assertEquals(1, runtime.m_presentCount);
-        assertEquals(0.0f, runtime.m_clearRed);
-        assertEquals(0.0f, runtime.m_clearGreen);
-        assertEquals(0.0f, runtime.m_clearBlue);
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
         assertEquals(1, runtime.m_closeCount);
@@ -238,9 +237,9 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(1, runtimeFactory.m_createCount);
     }
 
-    /** Verifies fatal submit retries retain the runtime and present black before delayed fallback. */
+    /** Verifies fatal submit state makes no further Native calls before delayed fallback drains. */
     @Test
-    void checkedSubmitFailureRetainsRuntimeAndNextSuccessfulFramePresentsBlack() {
+    void checkedSubmitFailureStopsNativeCallsUntilConfigureDrainsRuntime() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException submitFailure = runtimeFailure("submit");
@@ -258,15 +257,15 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.requiresReconfiguration());
         assertEquals(1, runtime.m_presentCount);
         assertEquals(0, runtime.m_closeCount);
+        assertEquals(1, runtime.m_beginCount);
 
-        runtime.m_submitFailure = null;
+        coordinator.beginFrame();
+        coordinator.presentFrame();
         coordinator.beginFrame();
         coordinator.presentFrame();
 
-        assertEquals(2, runtime.m_presentCount);
-        assertEquals(0.0f, runtime.m_clearRed);
-        assertEquals(0.0f, runtime.m_clearGreen);
-        assertEquals(0.0f, runtime.m_clearBlue);
+        assertEquals(1, runtime.m_beginCount);
+        assertEquals(1, runtime.m_presentCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
         assertEquals(1, runtime.m_closeCount);
@@ -292,10 +291,32 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.configure(readyInputs(1024, 768)));
 
         assertEquals(1, runtime.m_closeCount);
-        assertSame(closeFailure, beginFailure.getSuppressed()[0]);
+        assertSame(beginFailure, closeFailure.getSuppressed()[0]);
+        assertEquals(0, beginFailure.getSuppressed().length);
         assertTrue(coordinator.isTakenOver());
         assertEquals(1, runtimeFactory.m_createCount);
+        verify(logger).error(any(String.class),
+            org.mockito.ArgumentMatchers.same(closeFailure));
         verify(logger, times(2)).error(any(String.class), any(Throwable.class));
+    }
+
+    /** Verifies identical frame and close failures never trigger Java self-suppression. */
+    @Test
+    void identicalFrameAndConfigureCloseFailureAvoidsSelfSuppression() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        NativePresentationRuntimeException sharedFailure = runtimeFailure("shared");
+        runtime.m_beginFailure = sharedFailure;
+        runtime.m_closeFailure = sharedFailure;
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(readyInputs(800, 600)));
+        coordinator.beginFrame();
+
+        assertDoesNotThrow(() -> assertTrue(coordinator.configure(readyInputs(1024, 768))));
+
+        assertEquals(0, sharedFailure.getSuppressed().length);
+        assertTrue(coordinator.isTakenOver());
     }
 
     /** Verifies resize close failure preserves interception and never creates a second swapchain. */
@@ -341,21 +362,26 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.isTakenOver());
     }
 
-    /** Verifies explicit close clears state, propagates context and remains idempotent. */
+    /** Verifies explicit close surfaces its failure with the prior frame failure suppressed. */
     @Test
-    void explicitCloseFailurePropagatesOnceAndLeavesCoordinatorClosed() {
+    void explicitCloseFailureSuppressesPriorFrameFailureAndRemainsIdempotent() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
         NativePresentationRuntimeException closeFailure = runtimeFailure("close");
+        runtime.m_beginFailure = beginFailure;
         runtime.m_closeFailure = closeFailure;
         runtimeFactory.m_nextRuntime = runtime;
         PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        coordinator.beginFrame();
 
         assertSame(closeFailure, assertThrows(
             NativePresentationRuntimeException.class, coordinator::close));
         assertDoesNotThrow(coordinator::close);
 
+        assertSame(beginFailure, closeFailure.getSuppressed()[0]);
+        assertEquals(0, beginFailure.getSuppressed().length);
         assertEquals(1, runtime.m_closeCount);
         assertFalse(coordinator.isTakenOver());
     }
@@ -513,6 +539,7 @@ final class PresentationTakeoverCoordinatorTests {
         private NativePresentationRuntimeException m_beginFailure;
         private NativePresentationRuntimeException m_submitFailure;
         private NativePresentationRuntimeException m_closeFailure;
+        private int m_beginCount;
         private int m_presentCount;
         private int m_closeCount;
         private float m_clearRed;
@@ -547,6 +574,7 @@ final class PresentationTakeoverCoordinatorTests {
             int framebufferWidth,
             int framebufferHeight) throws NativePresentationRuntimeException {
             m_events.add("begin:" + m_name + ":" + framebufferWidth + "x" + framebufferHeight);
+            m_beginCount++;
             if (m_beginFailure != null) {
                 throw m_beginFailure;
             }

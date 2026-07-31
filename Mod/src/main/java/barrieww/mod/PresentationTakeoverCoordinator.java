@@ -28,7 +28,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     private boolean m_isFrameOpen;
     private boolean m_requiresReconfiguration;
     private boolean m_isTakeoverPermanentlyDisabled;
-    private boolean m_isFatalFallbackBlack;
+    private boolean m_isGenerationFatal;
     private boolean m_isTerminallyIntercepting;
     private NativePresentationRuntimeException m_primaryFrameFailure;
 
@@ -72,8 +72,8 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             try {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                if (m_primaryFrameFailure != null) {
-                    m_primaryFrameFailure.addSuppressed(closeFailure);
+                if (m_primaryFrameFailure != null && closeFailure != m_primaryFrameFailure) {
+                    closeFailure.addSuppressed(m_primaryFrameFailure);
                 }
                 m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
@@ -88,7 +88,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
         m_isTakenOver = false;
         m_requiresReconfiguration = false;
-        m_isFatalFallbackBlack = false;
+        m_isGenerationFatal = false;
         m_primaryFrameFailure = null;
 
         if (m_isTakeoverPermanentlyDisabled || inputs == null || !inputs.isReady()) {
@@ -119,11 +119,12 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined hot path; call once before backend frame work.
-     * Acquires a frame only for an active takeover and contains checked Core failures.
+     * Acquires a frame only for an active healthy takeover and contains checked Core failures.
+     * A fatal generation retains its last presented image without making another Native call.
      * @warning MemoryOwnership: Uses reusable runtime-owned storage and transfers no ownership.
      */
     public void beginFrame() {
-        if (!m_isTakenOver || m_runtime == null) {
+        if (!m_isTakenOver || m_isGenerationFatal || m_runtime == null) {
             return;
         }
 
@@ -147,21 +148,19 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined hot path; call once after backend frame work.
-     * Submits the fixed clear frame only when takeover acquired an open frame and contains checked
-     * Core failures.
+     * Submits the fixed clear frame only when a healthy takeover acquired an open frame and contains
+     * checked Core failures. A fatal generation retains its last presented image without another
+     * Native call.
      * @warning MemoryOwnership: Uses reusable runtime-owned storage and transfers no ownership.
      */
     public void presentFrame() {
-        if (!m_isTakenOver || !m_isFrameOpen || m_runtime == null) {
+        if (!m_isTakenOver || m_isGenerationFatal || !m_isFrameOpen || m_runtime == null) {
             return;
         }
 
         try {
-            float clearRed = m_isFatalFallbackBlack ? 0.0f : s_clearRed;
-            float clearGreen = m_isFatalFallbackBlack ? 0.0f : s_clearGreen;
-            float clearBlue = m_isFatalFallbackBlack ? 0.0f : s_clearBlue;
-            PresentationFrameStatus frameStatus =
-                m_runtime.submitAndPresentClearFrame(clearRed, clearGreen, clearBlue);
+            PresentationFrameStatus frameStatus = m_runtime.submitAndPresentClearFrame(
+                s_clearRed, s_clearGreen, s_clearBlue);
             if (frameStatus != PresentationFrameStatus.SUCCESS) {
                 m_requiresReconfiguration = true;
             }
@@ -197,15 +196,15 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_isTakenOver = false;
         m_isFrameOpen = false;
         m_requiresReconfiguration = false;
-        m_isFatalFallbackBlack = false;
+        m_isGenerationFatal = false;
         m_isTerminallyIntercepting = false;
         m_primaryFrameFailure = null;
         if (runtime != null) {
             try {
                 runtime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                if (primaryFrameFailure != null) {
-                    primaryFrameFailure.addSuppressed(closeFailure);
+                if (primaryFrameFailure != null && closeFailure != primaryFrameFailure) {
+                    closeFailure.addSuppressed(primaryFrameFailure);
                 }
                 throw closeFailure;
             }
@@ -214,8 +213,8 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined slow failure path.
-     * Records the first checked frame failure, retains the runtime for black fallback frames and
-     * delays vanilla fallback until configure can drain the generation.
+     * Records the first checked frame failure, marks the generation fatal without further Native
+     * calls and delays vanilla fallback until configure can drain the retained runtime.
      *
      * @param String message Failure operation context
      * @param NativePresentationRuntimeException frameFailure Primary checked Core failure
@@ -227,7 +226,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_isFrameOpen = false;
         m_requiresReconfiguration = true;
         m_isTakeoverPermanentlyDisabled = true;
-        m_isFatalFallbackBlack = true;
+        m_isGenerationFatal = true;
         if (m_primaryFrameFailure == null) {
             m_primaryFrameFailure = frameFailure;
             logRuntimeFailure(message, frameFailure);
