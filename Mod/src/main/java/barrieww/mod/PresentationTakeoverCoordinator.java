@@ -74,7 +74,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
                 addSuppressedFailure(closeFailure, m_primaryFrameFailure);
-                m_runtime = oldRuntime;
+                m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
                 m_isTakenOver = true;
                 m_requiresReconfiguration = false;
@@ -222,16 +222,23 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined; call serially during surface teardown.
-     * Closes the owned runtime and clears interception state only after destruction succeeds.
+     * Consumes the owned runtime and clears interception state before its sole close attempt.
      *
      * @throws NativePresentationRuntimeException When Core reports a destroy failure
-     * @warning MemoryOwnership: A close failure retains the runtime and all coordinator ownership
-     * state for retry. Success releases the runtime and clears interception state.
+     * @warning MemoryOwnership: The Native destroy boundary consumes the runtime address regardless
+     * of reported outcome, so this coordinator drops the runtime before close and never retries it.
      */
     @Override
     public void close() throws NativePresentationRuntimeException {
         PresentationRuntime runtime = m_runtime;
         NativePresentationRuntimeException primaryFrameFailure = m_primaryFrameFailure;
+        m_runtime = null;
+        m_isTakenOver = false;
+        m_isFrameOpen = false;
+        m_requiresReconfiguration = false;
+        m_isGenerationFatal = false;
+        m_isTerminallyIntercepting = false;
+        m_primaryFrameFailure = null;
         if (runtime != null) {
             try {
                 runtime.close();
@@ -240,13 +247,6 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
                 throw closeFailure;
             }
         }
-        m_runtime = null;
-        m_isTakenOver = false;
-        m_isFrameOpen = false;
-        m_requiresReconfiguration = false;
-        m_isGenerationFatal = false;
-        m_isTerminallyIntercepting = false;
-        m_primaryFrameFailure = null;
     }
 
     /**
@@ -292,7 +292,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             candidateRuntime.close();
         } catch (NativePresentationRuntimeException closeFailure) {
             addSuppressedFailure(closeFailure, primeFailure);
-            m_runtime = candidateRuntime;
+            m_runtime = null;
             m_isTakenOver = true;
             m_requiresReconfiguration = false;
             m_isTerminallyIntercepting = true;

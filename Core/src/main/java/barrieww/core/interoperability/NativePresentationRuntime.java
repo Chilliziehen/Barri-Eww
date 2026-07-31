@@ -419,28 +419,32 @@ public final class NativePresentationRuntime implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Thread-confined; the opening thread closes this once.
-     * Destroys the Native runtime and closes the library Arena.
+     * Attempts Native destruction exactly once and closes the library Arena regardless of outcome.
      * @throws NativePresentationRuntimeException When destroy invocation or operation fails
-     * @warning MemoryOwnership: Releases only Native-owned objects; callers retain their Vulkan
-     *          bootstrap handles. A destroy failure retains the runtime and library Arena for retry.
+     * @warning MemoryOwnership: The destroy boundary finalizes runtimeAddress ownership once
+     * invoked; a returned failure or invocation Throwable must never retry that invalid or uncertain
+     * address. This method marks the runtime closed and releases its Arena after the sole attempt.
      */
     @Override
     public void close() throws NativePresentationRuntimeException {
         if (m_isClosed) {
             return;
         }
-        int operationResult;
-        try {
-            operationResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
-        } catch (Throwable invocationFailure) {
-            throw invocationException("destroyPresentationRuntime", s_destroySymbolName,
-                    invocationFailure);
-        }
-        requireSuccessfulOperation("destroyPresentationRuntime", s_destroySymbolName,
-                operationResult, 0);
         m_isClosed = true;
-        if (m_libraryArena.scope().isAlive()) {
-            m_libraryArena.close();
+        try {
+            int operationResult;
+            try {
+                operationResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
+            } catch (Throwable invocationFailure) {
+                throw invocationException("destroyPresentationRuntime", s_destroySymbolName,
+                        invocationFailure);
+            }
+            requireSuccessfulOperation("destroyPresentationRuntime", s_destroySymbolName,
+                    operationResult, 0);
+        } finally {
+            if (m_libraryArena.scope().isAlive()) {
+                m_libraryArena.close();
+            }
         }
     }
 

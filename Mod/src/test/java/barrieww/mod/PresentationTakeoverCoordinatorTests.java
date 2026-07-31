@@ -202,9 +202,8 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(1, runtime.m_closeCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
 
-        runtime.m_closeFailure = null;
         assertDoesNotThrow(coordinator::close);
-        assertEquals(2, runtime.m_closeCount);
+        assertEquals(1, runtime.m_closeCount);
         assertFalse(coordinator.isTakenOver());
     }
 
@@ -534,9 +533,8 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(1, runtime.m_closeCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
 
-        runtime.m_closeFailure = null;
         assertDoesNotThrow(coordinator::close);
-        assertEquals(2, runtime.m_closeCount);
+        assertEquals(1, runtime.m_closeCount);
         assertFalse(coordinator.isTakenOver());
     }
 
@@ -556,9 +554,9 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.isTakenOver());
     }
 
-    /** Verifies explicit close retains ownership after failure and succeeds on retry. */
+    /** Verifies explicit close failure finalizes ownership and remains idempotent. */
     @Test
-    void explicitCloseFailureRetainsOwnershipAndSucceedsOnRetry() {
+    void explicitCloseFailureFinalizesOwnershipAndRemainsIdempotent() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
@@ -572,37 +570,15 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertSame(closeFailure, assertThrows(
             NativePresentationRuntimeException.class, coordinator::close));
-        assertTrue(coordinator.isTakenOver());
         assertEquals(1, runtime.m_closeCount);
 
-        runtime.m_closeFailure = null;
         assertDoesNotThrow(coordinator::close);
         assertDoesNotThrow(coordinator::close);
 
         assertSame(beginFailure, closeFailure.getSuppressed()[0]);
         assertEquals(0, beginFailure.getSuppressed().length);
-        assertEquals(2, runtime.m_closeCount);
+        assertEquals(1, runtime.m_closeCount);
         assertFalse(coordinator.isTakenOver());
-    }
-
-    /** Verifies persistent explicit close failure retains the same runtime for every retry. */
-    @Test
-    void persistentExplicitCloseFailureRetainsRuntimeAndState() {
-        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
-        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
-        NativePresentationRuntimeException closeFailure = runtimeFailure("close");
-        runtimeFactory.m_nextRuntime = runtime;
-        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
-        assertTrue(coordinator.configure(readyInputs(800, 600)));
-        runtime.m_closeFailure = closeFailure;
-
-        assertSame(closeFailure, assertThrows(
-            NativePresentationRuntimeException.class, coordinator::close));
-        assertSame(closeFailure, assertThrows(
-            NativePresentationRuntimeException.class, coordinator::close));
-
-        assertEquals(2, runtime.m_closeCount);
-        assertTrue(coordinator.isTakenOver());
     }
 
     /** Verifies the Core adapter delegates semantic statuses and close without remapping. */

@@ -43,12 +43,12 @@ class PresentationRuntimeBindingTests {
     }
 
     @Test
-    void closeRetainsOwnershipAfterOperationFailureAndSucceedsOnRetry() throws Exception {
+    void closeFinalizesOwnershipAfterOperationFailureWithoutRetry() throws Exception {
         Arena libraryArena = Arena.ofConfined();
-        DestroyRetryObserver destroyRetryObserver = new DestroyRetryObserver(false);
+        DestroyAttemptObserver destroyAttemptObserver = new DestroyAttemptObserver(false, 4);
         MethodHandle destroyHandle = MethodHandles.lookup().findVirtual(
-                DestroyRetryObserver.class, "destroy",
-                MethodType.methodType(int.class, long.class)).bindTo(destroyRetryObserver);
+                DestroyAttemptObserver.class, "destroy",
+                MethodType.methodType(int.class, long.class)).bindTo(destroyAttemptObserver);
         NativePresentationRuntime runtime = createRuntimeForCloseTest(
                 libraryArena, destroyHandle);
 
@@ -59,26 +59,21 @@ class PresentationRuntimeBindingTests {
                 runtimeException.nativeSymbolName());
         assertEquals(4, runtimeException.operationResultCode());
         assertEquals(0, runtimeException.vulkanResult());
-        assertTrue(libraryArena.scope().isAlive());
-        assertEquals(1, destroyRetryObserver.m_invocationCount);
-        assertEquals(0L, destroyRetryObserver.m_firstRuntimeAddress);
-
-        assertDoesNotThrow(runtime::close);
-        assertEquals(2, destroyRetryObserver.m_invocationCount);
-        assertEquals(0L, destroyRetryObserver.m_secondRuntimeAddress);
         assertFalse(libraryArena.scope().isAlive());
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
+        assertEquals(0L, destroyAttemptObserver.m_runtimeAddress);
 
         assertDoesNotThrow(runtime::close);
-        assertEquals(2, destroyRetryObserver.m_invocationCount);
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
     }
 
     @Test
-    void closeRetainsOwnershipAfterInvocationFailureAndSucceedsOnRetry() throws Exception {
+    void closeFinalizesOwnershipAfterInvocationFailureWithoutRetry() throws Exception {
         Arena libraryArena = Arena.ofConfined();
-        DestroyRetryObserver destroyRetryObserver = new DestroyRetryObserver(true);
+        DestroyAttemptObserver destroyAttemptObserver = new DestroyAttemptObserver(true, 0);
         MethodHandle destroyHandle = MethodHandles.lookup().findVirtual(
-                DestroyRetryObserver.class, "destroy",
-                MethodType.methodType(int.class, long.class)).bindTo(destroyRetryObserver);
+                DestroyAttemptObserver.class, "destroy",
+                MethodType.methodType(int.class, long.class)).bindTo(destroyAttemptObserver);
         NativePresentationRuntime runtime = createRuntimeForCloseTest(
                 libraryArena, destroyHandle);
 
@@ -90,17 +85,31 @@ class PresentationRuntimeBindingTests {
         assertEquals(-1, runtimeException.operationResultCode());
         assertEquals(0, runtimeException.vulkanResult());
         assertTrue(runtimeException.getMessage().contains("Injected destroy failure"));
-        assertTrue(libraryArena.scope().isAlive());
-        assertEquals(1, destroyRetryObserver.m_invocationCount);
-        assertEquals(0L, destroyRetryObserver.m_firstRuntimeAddress);
-
-        assertDoesNotThrow(runtime::close);
-        assertEquals(2, destroyRetryObserver.m_invocationCount);
-        assertEquals(0L, destroyRetryObserver.m_secondRuntimeAddress);
         assertFalse(libraryArena.scope().isAlive());
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
+        assertEquals(0L, destroyAttemptObserver.m_runtimeAddress);
 
         assertDoesNotThrow(runtime::close);
-        assertEquals(2, destroyRetryObserver.m_invocationCount);
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
+    }
+
+    @Test
+    void closeFinalizesOwnershipAfterSuccessWithoutRetry() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        DestroyAttemptObserver destroyAttemptObserver = new DestroyAttemptObserver(false, 0);
+        MethodHandle destroyHandle = MethodHandles.lookup().findVirtual(
+                DestroyAttemptObserver.class, "destroy",
+                MethodType.methodType(int.class, long.class)).bindTo(destroyAttemptObserver);
+        NativePresentationRuntime runtime = createRuntimeForCloseTest(
+                libraryArena, destroyHandle);
+
+        assertDoesNotThrow(runtime::close);
+
+        assertFalse(libraryArena.scope().isAlive());
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
+        assertEquals(0L, destroyAttemptObserver.m_runtimeAddress);
+        assertDoesNotThrow(runtime::close);
+        assertEquals(1, destroyAttemptObserver.m_invocationCount);
     }
 
     @Test
@@ -336,35 +345,32 @@ class PresentationRuntimeBindingTests {
         return runtimeAddress == 0L ? 0 : 1;
     }
 
-    /** Records one deterministic destroy failure followed by success for retry tests. */
-    private static final class DestroyRetryObserver {
-        private final boolean m_throwsOnFirstInvocation;
+    /** Records one deterministic destroy attempt for lifetime-finalization tests. */
+    private static final class DestroyAttemptObserver {
+        private final boolean m_throwsOnInvocation;
+        private final int m_operationResult;
         private int m_invocationCount;
-        private long m_firstRuntimeAddress;
-        private long m_secondRuntimeAddress;
+        private long m_runtimeAddress;
 
-        private DestroyRetryObserver(boolean throwsOnFirstInvocation) {
-            m_throwsOnFirstInvocation = throwsOnFirstInvocation;
+        private DestroyAttemptObserver(boolean throwsOnInvocation, int operationResult) {
+            m_throwsOnInvocation = throwsOnInvocation;
+            m_operationResult = operationResult;
         }
 
         /**
-         * Records the runtime identity and fails only the first destroy invocation.
+         * Records the runtime identity and returns or throws the configured destroy outcome.
          *
          * @param long runtimeAddress Synthetic runtime value that is never dereferenced
-         * @return int Internal failure on the first operation-result path, otherwise success
+         * @return int Configured operation result when invocation does not throw
          */
         private int destroy(long runtimeAddress) {
             m_invocationCount++;
-            if (m_invocationCount == 1) {
-                m_firstRuntimeAddress = runtimeAddress;
-                if (m_throwsOnFirstInvocation) {
-                    throw new IllegalStateException(
-                            "Injected destroy failure at " + runtimeAddress);
-                }
-                return 4;
+            m_runtimeAddress = runtimeAddress;
+            if (m_throwsOnInvocation) {
+                throw new IllegalStateException(
+                        "Injected destroy failure at " + runtimeAddress);
             }
-            m_secondRuntimeAddress = runtimeAddress;
-            return 0;
+            return m_operationResult;
         }
     }
 
