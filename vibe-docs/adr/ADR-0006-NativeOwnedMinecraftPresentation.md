@@ -98,7 +98,7 @@ D9 第 1 步严格在 `VulkanGpuSurface` 后端层注入，不取消外层 `GpuS
 | acquire | `VulkanGpuSurface.acquireNextTexture` | Native `beginFrame` 后取消后端 acquire |
 | blit | `VulkanGpuSurface.blitFromTexture` | taken-over generation 中取消为空操作 |
 | present | `VulkanGpuSurface.present` | Native 清色并 present 后取消后端 present |
-| teardown | `VulkanGpuSurface.close` | 在 vanilla teardown 前关闭 Native coordinator，不取消 vanilla close |
+| teardown | `VulkanGpuSurface.close` | 在 vanilla teardown 前关闭 Native coordinator；首次失败做一次 bounded retry，持续失败则在 vanilla close body 前抛出并阻止销毁 borrowed Vulkan owners |
 
 外层 `GpuSurface` 先调用后端、再更新自身状态：configure 后保存 configuration，acquire 后置
 `hasImageAcquired=true` / `hasBlittedTexture=false`，空 blit 后置 `hasBlittedTexture=true`，present
@@ -110,6 +110,13 @@ configure 取消属于 generation 决策，且只发生在 coordinator 已创建
 present 一个 Native priming 帧之后。readiness 不完整或安全关闭旧 generation 后 replacement
 失败时，本次不取消，允许 vanilla 创建 swapchain；旧 generation 关闭失败、Native 所有权不确定
 时继续取消，避免同一 surface 上出现双 swapchain。
+
+一旦任一安全 `false` 返回允许 vanilla 在该 surface 上创建 swapchain，coordinator 永久关闭该
+surface 的后续 takeover 尝试；未来 `configure` 不再创建 Native runtime。teardown destroy 失败时
+Core 与 coordinator 保留 owner 供重试；一次 bounded retry 仍失败则 Mixin 记录 ERROR 并抛出持久化
+escalation，重复 close callback 只重抛同一对象，不再次 destroy 或记录日志。该失败策略刻意阻止
+Minecraft 继续销毁仍被 Native runtime 借用的 device/surface/queue，并由 per-surface Mixin 保留
+coordinator 强引用直至进程终止；由于 bounded retry 已耗尽，重复 callback 不承担恢复职责。
 
 MC26.2 的 resize 顺序已实测并由字节码确认：`Minecraft.runTick` 先以新 window extent 调用后端
 `configure`，`GameRenderer.render` 随后才把 `mainRenderTarget` resize 到新 extent，且该 resize

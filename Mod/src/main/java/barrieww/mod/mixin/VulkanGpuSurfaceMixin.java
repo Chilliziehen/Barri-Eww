@@ -52,6 +52,9 @@ public abstract class VulkanGpuSurfaceMixin {
     @Unique
     private PresentationTakeoverCoordinator barrieww$m_presentationTakeoverCoordinator;
 
+    @Unique
+    private IllegalStateException barrieww$m_closeEscalation;
+
     /**
      * @note ThreadSafety: Called once at constructor TAIL on Minecraft's render initialization thread.
      * Retains the non-destructive borrowed-device log and creates one coordinator only after Native
@@ -196,8 +199,8 @@ public abstract class VulkanGpuSurfaceMixin {
 
     /**
      * @note ThreadSafety: Render-thread-confined teardown at backend close HEAD.
-     * Closes the coordinator before Minecraft destroys surface-related objects, contains one checked
-     * Core close failure with complete context, and never suppresses vanilla teardown.
+     * Closes the coordinator before Minecraft destroys surface-related objects. Retries one checked
+     * Core close failure once and prevents vanilla teardown when Native ownership remains live.
      *
      * @param CallbackInfo callbackInformation Non-cancellable Mixin callback metadata
      * @warning MemoryOwnership: Releases coordinator-owned runtime generations before borrowed
@@ -205,6 +208,9 @@ public abstract class VulkanGpuSurfaceMixin {
      */
     @Inject(method = "close()V", at = @At("HEAD"))
     private void barrieww$closePresentationTakeover(CallbackInfo callbackInformation) {
+        if (barrieww$m_closeEscalation != null) {
+            throw barrieww$m_closeEscalation;
+        }
         PresentationTakeoverCoordinator coordinator =
             barrieww$m_presentationTakeoverCoordinator;
         if (coordinator == null) {
@@ -216,13 +222,44 @@ public abstract class VulkanGpuSurfaceMixin {
             coordinator.close();
             barrieww$m_logger.info(
                 "Presentation takeover closed before Minecraft Vulkan surface teardown");
-        } catch (NativePresentationRuntimeException closeFailure) {
-            barrieww$m_logger.error(
-                "Presentation takeover close failed; Native symbol='"
-                    + closeFailure.nativeSymbolName()
-                    + "', operation result=" + closeFailure.operationResultCode()
-                    + ", Vulkan result=" + closeFailure.vulkanResult(),
-                closeFailure);
+            return;
+        } catch (NativePresentationRuntimeException firstCloseFailure) {
+            try {
+                coordinator.close();
+                barrieww$m_logger.warn(
+                    "Presentation takeover close recovered on bounded retry; Native symbol='"
+                        + firstCloseFailure.nativeSymbolName()
+                        + "', operation result=" + firstCloseFailure.operationResultCode()
+                        + ", Vulkan result=" + firstCloseFailure.vulkanResult(),
+                    firstCloseFailure);
+                return;
+            } catch (NativePresentationRuntimeException secondCloseFailure) {
+                if (secondCloseFailure != firstCloseFailure) {
+                    boolean hasFirstFailureContext = false;
+                    for (Throwable suppressedFailure : secondCloseFailure.getSuppressed()) {
+                        if (suppressedFailure == firstCloseFailure) {
+                            hasFirstFailureContext = true;
+                            break;
+                        }
+                    }
+                    if (!hasFirstFailureContext) {
+                        secondCloseFailure.addSuppressed(firstCloseFailure);
+                    }
+                }
+                IllegalStateException closeEscalation = new IllegalStateException(
+                    "Persistent presentation takeover close failure prevents Minecraft Vulkan "
+                        + "surface teardown",
+                    secondCloseFailure);
+                barrieww$m_presentationTakeoverCoordinator = coordinator;
+                barrieww$m_closeEscalation = closeEscalation;
+                barrieww$m_logger.error(
+                    "Presentation takeover close failed after bounded retry; Native symbol='"
+                        + secondCloseFailure.nativeSymbolName()
+                        + "', operation result=" + secondCloseFailure.operationResultCode()
+                        + ", Vulkan result=" + secondCloseFailure.vulkanResult(),
+                    secondCloseFailure);
+                throw closeEscalation;
+            }
         }
     }
 }

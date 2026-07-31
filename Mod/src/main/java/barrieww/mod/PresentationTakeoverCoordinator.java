@@ -73,10 +73,8 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             try {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                if (m_primaryFrameFailure != null && closeFailure != m_primaryFrameFailure) {
-                    closeFailure.addSuppressed(m_primaryFrameFailure);
-                }
-                m_runtime = null;
+                addSuppressedFailure(closeFailure, m_primaryFrameFailure);
+                m_runtime = oldRuntime;
                 m_isTakeoverPermanentlyDisabled = true;
                 m_isTakenOver = true;
                 m_requiresReconfiguration = false;
@@ -92,7 +90,11 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_isGenerationFatal = false;
         m_primaryFrameFailure = null;
 
-        if (m_isTakeoverPermanentlyDisabled || inputs == null || !inputs.isReady()) {
+        if (m_isTakeoverPermanentlyDisabled) {
+            return false;
+        }
+        if (inputs == null || !inputs.isReady()) {
+            m_isTakeoverPermanentlyDisabled = true;
             return false;
         }
 
@@ -220,15 +222,24 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined; call serially during surface teardown.
-     * Clears interception state and closes the owned runtime exactly once.
+     * Closes the owned runtime and clears interception state only after destruction succeeds.
      *
      * @throws NativePresentationRuntimeException When Core reports a destroy failure
-     * @warning MemoryOwnership: Releases the current runtime and retains no Native ownership.
+     * @warning MemoryOwnership: A close failure retains the runtime and all coordinator ownership
+     * state for retry. Success releases the runtime and clears interception state.
      */
     @Override
     public void close() throws NativePresentationRuntimeException {
         PresentationRuntime runtime = m_runtime;
         NativePresentationRuntimeException primaryFrameFailure = m_primaryFrameFailure;
+        if (runtime != null) {
+            try {
+                runtime.close();
+            } catch (NativePresentationRuntimeException closeFailure) {
+                addSuppressedFailure(closeFailure, primaryFrameFailure);
+                throw closeFailure;
+            }
+        }
         m_runtime = null;
         m_isTakenOver = false;
         m_isFrameOpen = false;
@@ -236,16 +247,6 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_isGenerationFatal = false;
         m_isTerminallyIntercepting = false;
         m_primaryFrameFailure = null;
-        if (runtime != null) {
-            try {
-                runtime.close();
-            } catch (NativePresentationRuntimeException closeFailure) {
-                if (primaryFrameFailure != null && closeFailure != primaryFrameFailure) {
-                    closeFailure.addSuppressed(primaryFrameFailure);
-                }
-                throw closeFailure;
-            }
-        }
     }
 
     /**
@@ -290,9 +291,8 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         try {
             candidateRuntime.close();
         } catch (NativePresentationRuntimeException closeFailure) {
-            if (primeFailure != null && closeFailure != primeFailure) {
-                closeFailure.addSuppressed(primeFailure);
-            }
+            addSuppressedFailure(closeFailure, primeFailure);
+            m_runtime = candidateRuntime;
             m_isTakenOver = true;
             m_requiresReconfiguration = false;
             m_isTerminallyIntercepting = true;
@@ -303,6 +303,26 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             logRuntimeFailure(failureMessage, primeFailure);
         }
         return false;
+    }
+
+    /**
+     * Attaches distinct failure context once so repeated destroy attempts do not duplicate it.
+     *
+     * @param NativePresentationRuntimeException primaryFailure Failure propagated to the caller
+     * @param NativePresentationRuntimeException contextualFailure Earlier related failure, or null
+     */
+    private static void addSuppressedFailure(
+        NativePresentationRuntimeException primaryFailure,
+        NativePresentationRuntimeException contextualFailure) {
+        if (contextualFailure == null || contextualFailure == primaryFailure) {
+            return;
+        }
+        for (Throwable suppressedFailure : primaryFailure.getSuppressed()) {
+            if (suppressedFailure == contextualFailure) {
+                return;
+            }
+        }
+        primaryFailure.addSuppressed(contextualFailure);
     }
 
     /**

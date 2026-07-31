@@ -421,29 +421,26 @@ public final class NativePresentationRuntime implements AutoCloseable {
      * @note ThreadSafety: Thread-confined; the opening thread closes this once.
      * Destroys the Native runtime and closes the library Arena.
      * @throws NativePresentationRuntimeException When destroy invocation or operation fails
-     * @warning MemoryOwnership: Releases only Native-owned objects; callers retain their
-     *          Vulkan bootstrap handles. The library Arena is closed even when destroy fails.
+     * @warning MemoryOwnership: Releases only Native-owned objects; callers retain their Vulkan
+     *          bootstrap handles. A destroy failure retains the runtime and library Arena for retry.
      */
     @Override
     public void close() throws NativePresentationRuntimeException {
         if (m_isClosed) {
             return;
         }
-        m_isClosed = true;
+        int operationResult;
         try {
-            int operationResult;
-            try {
-                operationResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
-            } catch (Throwable invocationFailure) {
-                throw invocationException("destroyPresentationRuntime", s_destroySymbolName,
-                        invocationFailure);
-            }
-            requireSuccessfulOperation("destroyPresentationRuntime", s_destroySymbolName,
-                    operationResult, 0);
-        } finally {
-            if (m_libraryArena.scope().isAlive()) {
-                m_libraryArena.close();
-            }
+            operationResult = (int) m_destroyHandle.invokeExact(m_runtimeAddress);
+        } catch (Throwable invocationFailure) {
+            throw invocationException("destroyPresentationRuntime", s_destroySymbolName,
+                    invocationFailure);
+        }
+        requireSuccessfulOperation("destroyPresentationRuntime", s_destroySymbolName,
+                operationResult, 0);
+        m_isClosed = true;
+        if (m_libraryArena.scope().isAlive()) {
+            m_libraryArena.close();
         }
     }
 

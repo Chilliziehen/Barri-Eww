@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.same;
@@ -47,6 +48,7 @@ final class VulkanGpuSurfaceMixinTests {
     private static final String s_coordinatorFieldName =
         "barrieww$m_presentationTakeoverCoordinator";
     private static final String s_loggerFieldName = "barrieww$m_logger";
+    private static final String s_closeEscalationFieldName = "barrieww$m_closeEscalation";
 
     /**
      * @note ThreadSafety: Not concurrency-safe because scoped static adapters are replaced.
@@ -397,12 +399,12 @@ final class VulkanGpuSurfaceMixinTests {
 
     /**
      * @note ThreadSafety: Reflection mutates one test-owned mixin instance and logger mock.
-     * Contains one checked close failure with complete Core context in exactly one ERROR log.
+     * Recovers one checked close failure with one bounded retry and exactly one WARN log.
      *
      * @throws Exception When injected callback state cannot be inspected or close stubbing fails
      */
     @Test
-    void closeContainsCheckedFailureWithCompleteErrorContext() throws Exception {
+    void closeRecoversFirstFailureWithOneRetryAndWarning() throws Exception {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
         Logger logger = mock(Logger.class);
@@ -410,7 +412,7 @@ final class VulkanGpuSurfaceMixinTests {
             new NativePresentationRuntimeException("destroy failed", "destroySymbol", 7, -4);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
         setField(surfaceMixin, s_loggerFieldName, logger);
-        org.mockito.Mockito.doThrow(closeFailure).when(coordinator).close();
+        org.mockito.Mockito.doThrow(closeFailure).doNothing().when(coordinator).close();
 
         CallbackInfo callbackInformation = mock(CallbackInfo.class);
         invokeNoArgumentCallback(
@@ -418,12 +420,89 @@ final class VulkanGpuSurfaceMixinTests {
         invokeNoArgumentCallback(
             surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
 
-        verify(logger).error(
-            contains("Native symbol='destroySymbol', operation result=7, Vulkan result=-4"),
+        verify(logger).warn(
+            contains("recovered on bounded retry"),
             same(closeFailure));
-        verify(coordinator, org.mockito.Mockito.times(1)).close();
+        verify(coordinator, org.mockito.Mockito.times(2)).close();
         verifyNoMoreInteractions(logger);
         assertNull(getField(surfaceMixin, s_coordinatorFieldName));
+        assertNull(getField(surfaceMixin, s_closeEscalationFieldName));
+    }
+
+    /**
+     * @note ThreadSafety: Reflection mutates one test-owned mixin instance and logger mock.
+     * Escalates two distinct close failures once and rethrows the stored escalation on repetition.
+     *
+     * @throws Exception When injected callback state cannot be inspected or close stubbing fails
+     */
+    @Test
+    void closeEscalatesPersistentFailureBeforeVanillaTeardown() throws Exception {
+        VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
+        NativePresentationRuntimeException firstFailure =
+            new NativePresentationRuntimeException("first", "firstSymbol", 7, -4);
+        NativePresentationRuntimeException secondFailure =
+            new NativePresentationRuntimeException("second", "secondSymbol", 8, -5);
+        setField(surfaceMixin, s_coordinatorFieldName, coordinator);
+        setField(surfaceMixin, s_loggerFieldName, logger);
+        org.mockito.Mockito.doThrow(firstFailure).doThrow(secondFailure)
+            .when(coordinator).close();
+        CallbackInfo callbackInformation = mock(CallbackInfo.class);
+
+        InvocationTargetException firstInvocation = assertThrows(
+            InvocationTargetException.class,
+            () -> invokeNoArgumentCallback(
+                surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation));
+        IllegalStateException escalation =
+            (IllegalStateException) firstInvocation.getCause();
+        InvocationTargetException repeatedInvocation = assertThrows(
+            InvocationTargetException.class,
+            () -> invokeNoArgumentCallback(
+                surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation));
+
+        assertSame(escalation, repeatedInvocation.getCause());
+        assertSame(secondFailure, escalation.getCause());
+        assertSame(firstFailure, secondFailure.getSuppressed()[0]);
+        assertSame(escalation, getField(surfaceMixin, s_closeEscalationFieldName));
+        verify(logger).error(
+            contains("Native symbol='secondSymbol', operation result=8, Vulkan result=-5"),
+            same(secondFailure));
+        verify(coordinator, org.mockito.Mockito.times(2)).close();
+        verifyNoMoreInteractions(logger);
+        assertSame(coordinator, getField(surfaceMixin, s_coordinatorFieldName));
+    }
+
+    /**
+     * @note ThreadSafety: Reflection mutates one test-owned mixin instance and logger mock.
+     * Avoids Java self-suppression when both bounded close attempts throw the same failure object.
+     *
+     * @throws Exception When injected callback state cannot be inspected or close stubbing fails
+     */
+    @Test
+    void closeEscalationAvoidsSelfSuppressionForIdenticalFailures() throws Exception {
+        VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
+        NativePresentationRuntimeException sharedFailure =
+            new NativePresentationRuntimeException("shared", "destroySymbol", 7, -4);
+        setField(surfaceMixin, s_coordinatorFieldName, coordinator);
+        setField(surfaceMixin, s_loggerFieldName, logger);
+        org.mockito.Mockito.doThrow(sharedFailure).when(coordinator).close();
+
+        InvocationTargetException invocationFailure = assertThrows(
+            InvocationTargetException.class,
+            () -> invokeNoArgumentCallback(surfaceMixin,
+                "barrieww$closePresentationTakeover", mock(CallbackInfo.class)));
+
+        assertSame(sharedFailure, invocationFailure.getCause().getCause());
+        assertEquals(0, sharedFailure.getSuppressed().length);
+        verify(logger).error(
+            contains("Native symbol='destroySymbol', operation result=7, Vulkan result=-4"),
+            same(sharedFailure));
+        verify(coordinator, org.mockito.Mockito.times(2)).close();
+        verifyNoMoreInteractions(logger);
+        assertSame(coordinator, getField(surfaceMixin, s_coordinatorFieldName));
     }
 
     /**
