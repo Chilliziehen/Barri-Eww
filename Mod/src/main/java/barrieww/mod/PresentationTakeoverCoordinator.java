@@ -28,6 +28,9 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     private boolean m_isFrameOpen;
     private boolean m_requiresReconfiguration;
     private boolean m_isTakeoverPermanentlyDisabled;
+    private boolean m_isFatalFallbackBlack;
+    private boolean m_isTerminallyIntercepting;
+    private NativePresentationRuntimeException m_primaryFrameFailure;
 
     /**
      * @note ThreadSafety: Construction and all subsequent use occur on one render thread.
@@ -48,28 +51,45 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     /**
      * @note ThreadSafety: Render-thread-confined and non-reentrant.
      * Drains the preceding runtime, then attempts takeover only when all generation inputs are ready.
-     * A false return commits the current configure call to vanilla presentation.
+     * A false return commits the current configure call to vanilla presentation. If old runtime
+     * destruction fails, true preserves terminal interception because creating a second swapchain
+     * while Native ownership may remain active is unsafe.
      *
      * @param PresentationGenerationInputs inputs Immutable configure inputs, or null when unavailable
-     * @return boolean True only after a replacement runtime was created successfully
-     * @warning MemoryOwnership: Closes any preceding owned runtime before creating its replacement.
+     * @return boolean True after successful replacement or while terminal interception must prevent
+     * a second swapchain; false when the current configure must proceed with vanilla presentation
+     * @warning MemoryOwnership: Closes any preceding owned runtime before replacement. Failed
+     * destruction enters terminal interception because Native ownership may remain active.
      */
     public boolean configure(PresentationGenerationInputs inputs) {
         m_isFrameOpen = false;
-        m_isTakenOver = false;
-        m_requiresReconfiguration = false;
+        if (m_isTerminallyIntercepting) {
+            return true;
+        }
 
         PresentationRuntime oldRuntime = m_runtime;
-        m_runtime = null;
         if (oldRuntime != null) {
             try {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
+                if (m_primaryFrameFailure != null) {
+                    m_primaryFrameFailure.addSuppressed(closeFailure);
+                }
+                m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
+                m_isTakenOver = true;
+                m_requiresReconfiguration = true;
+                m_isTerminallyIntercepting = true;
                 logRuntimeFailure("Presentation runtime generation drain failed", closeFailure);
-                return false;
+                return true;
             }
+            m_runtime = null;
         }
+
+        m_isTakenOver = false;
+        m_requiresReconfiguration = false;
+        m_isFatalFallbackBlack = false;
+        m_primaryFrameFailure = null;
 
         if (m_isTakeoverPermanentlyDisabled || inputs == null || !inputs.isReady()) {
             return false;
@@ -137,8 +157,11 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         }
 
         try {
-            PresentationFrameStatus frameStatus = m_runtime.submitAndPresentClearFrame(
-                s_clearRed, s_clearGreen, s_clearBlue);
+            float clearRed = m_isFatalFallbackBlack ? 0.0f : s_clearRed;
+            float clearGreen = m_isFatalFallbackBlack ? 0.0f : s_clearGreen;
+            float clearBlue = m_isFatalFallbackBlack ? 0.0f : s_clearBlue;
+            PresentationFrameStatus frameStatus =
+                m_runtime.submitAndPresentClearFrame(clearRed, clearGreen, clearBlue);
             if (frameStatus != PresentationFrameStatus.SUCCESS) {
                 m_requiresReconfiguration = true;
             }
@@ -169,22 +192,34 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     @Override
     public void close() throws NativePresentationRuntimeException {
         PresentationRuntime runtime = m_runtime;
+        NativePresentationRuntimeException primaryFrameFailure = m_primaryFrameFailure;
         m_runtime = null;
         m_isTakenOver = false;
         m_isFrameOpen = false;
         m_requiresReconfiguration = false;
+        m_isFatalFallbackBlack = false;
+        m_isTerminallyIntercepting = false;
+        m_primaryFrameFailure = null;
         if (runtime != null) {
-            runtime.close();
+            try {
+                runtime.close();
+            } catch (NativePresentationRuntimeException closeFailure) {
+                if (primaryFrameFailure != null) {
+                    primaryFrameFailure.addSuppressed(closeFailure);
+                }
+                throw closeFailure;
+            }
         }
     }
 
     /**
      * @note ThreadSafety: Render-thread-confined slow failure path.
-     * Contains a checked frame failure, drains the runtime and delays fallback until configure.
+     * Records the first checked frame failure, retains the runtime for black fallback frames and
+     * delays vanilla fallback until configure can drain the generation.
      *
      * @param String message Failure operation context
      * @param NativePresentationRuntimeException frameFailure Primary checked Core failure
-     * @warning MemoryOwnership: Closes the failed owned runtime and retains no Native ownership.
+     * @warning MemoryOwnership: Retains the owned runtime until configure or explicit close.
      */
     private void handleFrameFailure(
         String message,
@@ -192,16 +227,11 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_isFrameOpen = false;
         m_requiresReconfiguration = true;
         m_isTakeoverPermanentlyDisabled = true;
-        PresentationRuntime failedRuntime = m_runtime;
-        m_runtime = null;
-        if (failedRuntime != null) {
-            try {
-                failedRuntime.close();
-            } catch (NativePresentationRuntimeException closeFailure) {
-                frameFailure.addSuppressed(closeFailure);
-            }
+        m_isFatalFallbackBlack = true;
+        if (m_primaryFrameFailure == null) {
+            m_primaryFrameFailure = frameFailure;
+            logRuntimeFailure(message, frameFailure);
         }
-        logRuntimeFailure(message, frameFailure);
     }
 
     /**
