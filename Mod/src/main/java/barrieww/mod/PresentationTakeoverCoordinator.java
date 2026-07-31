@@ -294,7 +294,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
                 closeFailure.addSuppressed(primeFailure);
             }
             m_isTakenOver = true;
-            m_requiresReconfiguration = true;
+            m_requiresReconfiguration = false;
             m_isTerminallyIntercepting = true;
             logRuntimeFailure("Presentation candidate destruction failed", closeFailure);
             return true;

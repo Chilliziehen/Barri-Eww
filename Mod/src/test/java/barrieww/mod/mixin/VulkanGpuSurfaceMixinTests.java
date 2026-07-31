@@ -384,11 +384,14 @@ final class VulkanGpuSurfaceMixinTests {
 
         invokeNoArgumentCallback(
             surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
+        invokeNoArgumentCallback(
+            surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
 
         verify(coordinator, org.mockito.Mockito.times(1)).close();
         verify(logger).info(
             "Presentation takeover closed before Minecraft Vulkan surface teardown");
         verifyNoMoreInteractions(logger);
+        assertNull(getField(surfaceMixin, s_coordinatorFieldName));
         verify(callbackInformation, never()).cancel();
     }
 
@@ -409,14 +412,18 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, s_loggerFieldName, logger);
         org.mockito.Mockito.doThrow(closeFailure).when(coordinator).close();
 
+        CallbackInfo callbackInformation = mock(CallbackInfo.class);
         invokeNoArgumentCallback(
-            surfaceMixin, "barrieww$closePresentationTakeover", mock(CallbackInfo.class));
+            surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
+        invokeNoArgumentCallback(
+            surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
 
         verify(logger).error(
             contains("Native symbol='destroySymbol', operation result=7, Vulkan result=-4"),
             same(closeFailure));
         verify(coordinator, org.mockito.Mockito.times(1)).close();
         verifyNoMoreInteractions(logger);
+        assertNull(getField(surfaceMixin, s_coordinatorFieldName));
     }
 
     /**

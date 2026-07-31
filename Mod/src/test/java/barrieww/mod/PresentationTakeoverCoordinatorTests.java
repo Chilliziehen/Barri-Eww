@@ -165,7 +165,7 @@ final class PresentationTakeoverCoordinatorTests {
         verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(submitFailure));
     }
 
-    /** Verifies failed candidate close surfaces the prime failure as suppressed context. */
+    /** Verifies failed candidate close enters stable terminal interception with suppression. */
     @Test
     void checkedPrimeFailureCloseFailureEntersTerminalInterceptionWithSuppression() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
@@ -183,8 +183,16 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertSame(submitFailure, closeFailure.getSuppressed()[0]);
         assertTrue(coordinator.isTakenOver());
-        assertTrue(coordinator.requiresReconfiguration());
+        assertFalse(coordinator.requiresReconfiguration());
+        assertEquals(1, runtimeFactory.m_createCount);
+        assertEquals(1, runtime.m_closeCount);
         verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(closeFailure));
+
+        assertTrue(coordinator.configure(readyInputs(1024, 768)));
+        assertFalse(coordinator.requiresReconfiguration());
+        assertEquals(1, runtimeFactory.m_createCount);
+        assertEquals(1, runtime.m_closeCount);
+        verify(logger, times(1)).error(any(String.class), any(Throwable.class));
     }
 
     /** Verifies suboptimal prime status commits takeover while requesting reconfiguration. */

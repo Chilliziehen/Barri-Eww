@@ -454,6 +454,34 @@ Mixin/Vulkan/presentation runtime 错误，且
 | `task6-quality-restore-after-minimize.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
 | `task6-quality-restore-after-focus.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
 
+Release FFM 的 durable command/provenance record 如下。构建目录为
+`C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality`，
+不使用仓库内 build directory：
+
+```text
+cmake -S D:\Repositories\ComputerGraphics\Barri-Eww\Native -B C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality -DCMAKE_BUILD_TYPE=Release -DBARRIEWW_BACKEND_VULKAN=ON -DTHREADED_RECORDING=ON -DBARRIEWW_BUILD_TESTS=ON -DBARRIEWW_ENABLE_COVERAGE=OFF
+cmake --build C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality --config Release --target BarriEwwNativeFfm
+```
+
+产物
+`C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality\ffm\BarriEwwNativeFfm.dll`
+的 SHA-256 为
+`4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0`。
+可见复验使用的完整运行语义为：
+
+```text
+Mod\gradlew.bat runClient -PbarriewwCoreLibraryPath="D:\Repositories\ComputerGraphics\Barri-Eww\Core\build\libs\BarriEwwCore-0.1.0.jar" -PbarriewwNativeLibraryPath="C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality\ffm\BarriEwwNativeFfm.dll" -PbarriewwConfiguration=release -PbarriewwBackend=vulkan -PbarriewwThreadedRecording=on --no-daemon
+```
+
+`latest.log` 记录的打包后提取路径为
+`C:\Users\30367\AppData\Local\Temp\barrieww-native\60328\4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0\BarriEwwNativeFfm.dll`，
+证明提取目录使用与打包 DLL 相同的 hash
+`4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0`。最终
+`latest.log` SHA-256 为
+`7e15aae5dd1d1a49d5be1928b476c865953b67edbfb26421bc115c594a9401b5`，上述
+close-before-surface INFO 行计数为 `1`。本段跟踪文本是 durable command/provenance record；
+DLL、截图与运行日志按设计保持未跟踪。
+
 CI 自动化只覆盖 coordinator terminal 状态、Mixin 的 configure 镜像、close 调用次数与
 INFO/ERROR 互斥、测试和覆盖率门禁；它不宣称自动验证 OS 窗口生命周期或屏幕像素。
 

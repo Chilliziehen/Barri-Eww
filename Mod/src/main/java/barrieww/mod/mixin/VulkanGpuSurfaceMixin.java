@@ -210,6 +210,7 @@ public abstract class VulkanGpuSurfaceMixin {
         if (coordinator == null) {
             return;
         }
+        barrieww$m_presentationTakeoverCoordinator = null;
 
         try {
             coordinator.close();
