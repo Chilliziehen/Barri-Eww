@@ -64,6 +64,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     public boolean configure(PresentationGenerationInputs inputs) {
         m_isFrameOpen = false;
         if (m_isTerminallyIntercepting) {
+            m_requiresReconfiguration = false;
             return true;
         }
 
@@ -78,7 +79,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
                 m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
                 m_isTakenOver = true;
-                m_requiresReconfiguration = true;
+                m_requiresReconfiguration = false;
                 m_isTerminallyIntercepting = true;
                 logRuntimeFailure("Presentation runtime generation drain failed", closeFailure);
                 return true;

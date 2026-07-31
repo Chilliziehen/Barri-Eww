@@ -423,6 +423,40 @@ graph output、宿主 GUI 纹理与 swapchain image 的 extent 必须**完全相
 拷贝，**不触发 alpha 问题**。若省略第 3 步，D7 的 alpha 语义与图自身的正确性将在第 4 步
 同时引入而相互混淆。第 3 步的成本仅为把第 2 步的世界来源换成 clear。
 
+#### D9.1 2026-07-31 owner-approved step 1 empirical record
+
+本记录是 Windows 真实窗口的**经验验收**，不是 CI 自动化结果。Native clear 输入为线性
+`(0.08, 0.72, 0.93)`；按标准分段 raw-linear → sRGB 转换并量化到 8-bit 后，预期像素为
+`RGB(80, 221, 247)`。owner-approved 验收记录如下：
+
+| 状态 | client extent | samples | mean RGB | expected match |
+| ---- | ------------- | ------- | -------- | -------------- |
+| 初始 | `854x480` | 11,360 | `(80, 221, 247)` | 100% |
+| resize 1 | `1100x700` | 21,528 | `(80, 221, 247)` | 100% |
+| resize 2 | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+| minimize 5 s / restore | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+| focus away / back | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+
+验收过程按 Minecraft PID 关联真实 HWND，启用 per-monitor-v2 DPI awareness，以
+`PrintWindow(PW_RENDERFULLCONTENT)` 获取窗口位图，再用 `GetClientRect` 与
+`ClientToScreen` 精确裁出 client；依次执行两个 client resize、最小化 5 秒后恢复、聚焦到
+真实 `cmd.exe` HWND 后再聚焦回 Minecraft，最后正常关闭窗口并检查 `latest.log`。日志中无
+Mixin/Vulkan/presentation runtime 错误，且
+`Presentation takeover closed before Minecraft Vulkan surface teardown` 恰好出现一次。
+
+2026-07-31 Release/Vulkan/threaded-on 复验截图 SHA-256（截图本身为未跟踪验收产物，不提交）：
+
+| 截图 | SHA-256 |
+| ---- | ------- |
+| `task6-quality-initial-854x480.png` | `7fa843a8b51a8e93eef868c82c9eb7d92891d9c3e6078e5541c1b94448746f39` |
+| `task6-quality-resize-1100x700.png` | `9bd04ec5b4ca78c626282114e306b2d93494211012fb99d234db49ee8b48c6d4` |
+| `task6-quality-resize-760x520.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+| `task6-quality-restore-after-minimize.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+| `task6-quality-restore-after-focus.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+
+CI 自动化只覆盖 coordinator terminal 状态、Mixin 的 configure 镜像、close 调用次数与
+INFO/ERROR 互斥、测试和覆盖率门禁；它不宣称自动验证 OS 窗口生命周期或屏幕像素。
+
 ### D10. Readiness 与回退 `已裁决`
 
 #### D10.1 两层结构，回退能力不同

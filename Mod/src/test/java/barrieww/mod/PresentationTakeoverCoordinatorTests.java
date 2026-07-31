@@ -494,13 +494,14 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.configure(readyInputs(1024, 768)));
 
         assertTrue(coordinator.isTakenOver());
-        assertTrue(coordinator.requiresReconfiguration());
+        assertFalse(coordinator.requiresReconfiguration());
         assertEquals(1, runtimeFactory.m_createCount);
         assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
             "close:first"), runtimeFactory.m_events);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
 
         assertTrue(coordinator.configure(readyInputs(1280, 720)));
+        assertFalse(coordinator.requiresReconfiguration());
         assertEquals(1, runtimeFactory.m_createCount);
         assertEquals(1, runtime.m_closeCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));

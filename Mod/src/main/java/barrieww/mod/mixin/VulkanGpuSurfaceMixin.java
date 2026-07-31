@@ -213,6 +213,8 @@ public abstract class VulkanGpuSurfaceMixin {
 
         try {
             coordinator.close();
+            barrieww$m_logger.info(
+                "Presentation takeover closed before Minecraft Vulkan surface teardown");
         } catch (NativePresentationRuntimeException closeFailure) {
             barrieww$m_logger.error(
                 "Presentation takeover close failed; Native symbol='"

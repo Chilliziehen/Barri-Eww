@@ -174,13 +174,13 @@ final class VulkanGpuSurfaceMixinTests {
 
     /**
      * @note ThreadSafety: Not concurrency-safe because scoped static adapters are replaced.
-     * Allows vanilla configure and propagates required reconfiguration after coordinator rejection.
+     * Allows vanilla configure and mirrors the coordinator's safe non-suboptimal fallback state.
      *
      * @throws ReflectiveOperationException When injected callback state cannot be inspected
      * @warning MemoryOwnership: All handles and callback state are test-owned or borrowed mocks.
      */
     @Test
-    void configureAllowsVanillaFallbackAndPropagatesSuboptimalState()
+    void configureAllowsVanillaFallbackWithoutSchedulingReconfiguration()
         throws ReflectiveOperationException {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         VulkanDevice surfaceDevice = mock(VulkanDevice.class);
@@ -190,7 +190,7 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
         when(coordinator.configure(org.mockito.ArgumentMatchers.any())).thenReturn(false);
-        when(coordinator.requiresReconfiguration()).thenReturn(true);
+        when(coordinator.requiresReconfiguration()).thenReturn(false);
 
         try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
                  mockStatic(MinecraftVulkanBootstrapHandles.class);
@@ -211,7 +211,46 @@ final class VulkanGpuSurfaceMixinTests {
             assertNull(inputsCaptor.getValue().bootstrapHandles());
             assertFalse(inputsCaptor.getValue().isHostColorTextureReady());
             assertFalse(callbackInformation.isCancelled());
-            assertTrue((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
+            assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Not concurrency-safe because scoped static adapters are replaced.
+     * Cancels vanilla configure for terminal interception without scheduling a stale recreation.
+     *
+     * @throws ReflectiveOperationException When injected callback state cannot be inspected
+     * @warning MemoryOwnership: All handles and callback state are test-owned or borrowed mocks.
+     */
+    @Test
+    void configureTerminalInterceptionDoesNotScheduleReconfiguration()
+        throws ReflectiveOperationException {
+        VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
+        VulkanDevice surfaceDevice = mock(VulkanDevice.class);
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        CallbackInfo callbackInformation = new CallbackInfo("configure", true);
+        setField(surfaceMixin, "m_device", surfaceDevice);
+        setField(surfaceMixin, "m_surface", 4L);
+        setField(surfaceMixin, "m_swapchainSuboptimal", true);
+        setField(surfaceMixin, s_coordinatorFieldName, coordinator);
+        when(coordinator.configure(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(coordinator.requiresReconfiguration()).thenReturn(false);
+
+        try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
+                 mockStatic(MinecraftVulkanBootstrapHandles.class);
+             MockedStatic<MinecraftClearTakeoverReadiness> textureReadiness =
+                 mockStatic(MinecraftClearTakeoverReadiness.class)) {
+            handlesAdapter.when(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
+                surfaceDevice,
+                4L)).thenReturn(Optional.of(bootstrapHandles()));
+            textureReadiness.when(
+                MinecraftClearTakeoverReadiness::isMinecraftColorTextureReady)
+                .thenReturn(true);
+
+            invokeConfigure(surfaceMixin, configuration(), callbackInformation);
+
+            assertTrue(callbackInformation.isCancelled());
+            assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
         }
     }
 
@@ -338,13 +377,18 @@ final class VulkanGpuSurfaceMixinTests {
     void closeReleasesCoordinatorWithoutCancellingVanilla() throws Exception {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
         CallbackInfo callbackInformation = mock(CallbackInfo.class);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
+        setField(surfaceMixin, s_loggerFieldName, logger);
 
         invokeNoArgumentCallback(
             surfaceMixin, "barrieww$closePresentationTakeover", callbackInformation);
 
-        verify(coordinator).close();
+        verify(coordinator, org.mockito.Mockito.times(1)).close();
+        verify(logger).info(
+            "Presentation takeover closed before Minecraft Vulkan surface teardown");
+        verifyNoMoreInteractions(logger);
         verify(callbackInformation, never()).cancel();
     }
 
@@ -371,6 +415,7 @@ final class VulkanGpuSurfaceMixinTests {
         verify(logger).error(
             contains("Native symbol='destroySymbol', operation result=7, Vulkan result=-4"),
             same(closeFailure));
+        verify(coordinator, org.mockito.Mockito.times(1)).close();
         verifyNoMoreInteractions(logger);
     }
 
