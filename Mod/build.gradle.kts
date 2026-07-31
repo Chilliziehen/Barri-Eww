@@ -3,6 +3,8 @@ import java.nio.file.Path
 import java.util.Locale
 import org.gradle.api.provider.Provider
 
+val mockitoAgent = configurations.create("mockitoAgent")
+
 fun selectNativeResourcePath(
     operatingSystemName: String,
     architectureName: String): String {
@@ -82,6 +84,8 @@ dependencies {
     implementation(coreLibraryFiles)
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.mockito:mockito-core:5.18.0")
+    mockitoAgent("org.mockito:mockito-core:5.18.0") { isTransitive = false }
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -163,6 +167,9 @@ tasks.withType<JavaCompile>().configureEach {
 tasks.test {
     useJUnitPlatform()
     workingDir(layout.buildDirectory)
+    jvmArgs(
+        "--enable-native-access=ALL-UNNAMED",
+        "-javaagent:${mockitoAgent.asPath}")
 }
 
 tasks.processResources {
@@ -174,10 +181,6 @@ tasks.processResources {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
-    classDirectories.setFrom(sourceSets.main.get().output.classesDirs.asFileTree.matching {
-        exclude("barrieww/mod/mixin/**")
-        exclude("barrieww/mod/MinecraftVulkanBootstrapHandles.class")
-    })
     reports {
         xml.required = true
     }
@@ -185,10 +188,6 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test)
-    classDirectories.setFrom(sourceSets.main.get().output.classesDirs.asFileTree.matching {
-        exclude("barrieww/mod/mixin/**")
-        exclude("barrieww/mod/MinecraftVulkanBootstrapHandles.class")
-    })
     violationRules {
         rule {
             limit {
