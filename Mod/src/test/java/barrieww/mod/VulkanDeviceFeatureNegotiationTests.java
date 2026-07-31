@@ -1,18 +1,20 @@
 package barrieww.mod;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 
@@ -31,12 +33,10 @@ final class VulkanDeviceFeatureNegotiationTests {
         s_testFeatureStructure,
         "bufferDeviceAddress",
         12L);
-
-    /** Resets process-wide capability publication after each test. */
-    @AfterEach
-    void resetCapabilityState() {
-        VulkanDeviceCapabilityState.resetForTests();
-    }
+    private static final VulkanFeature s_independentFeature = new VulkanFeature(
+        s_testFeatureStructure,
+        "independentFeature",
+        16L);
 
     /** Verifies supported bufferDeviceAddress is added to a copied feature set exactly once. */
     @Test
@@ -81,6 +81,58 @@ final class VulkanDeviceFeatureNegotiationTests {
         assertFalse(negotiation.isBufferDeviceAddressNegotiated());
     }
 
+    /** Verifies support-query RuntimeException is contained as one contextual readiness warning. */
+    @Test
+    void supportQueryRuntimeExceptionReturnsDisabledImmutableFeatures() {
+        List<String> loggingMethodNames = new ArrayList<>();
+        List<Object[]> loggingArguments = new ArrayList<>();
+        Logger logger = createCapturingLogger(loggingMethodNames, loggingArguments);
+        Set<VulkanFeature> incomingFeatures = Set.of(s_dynamicRenderingFeature);
+        RuntimeException supportQueryException = new IllegalStateException("query unavailable");
+
+        VulkanDeviceFeatureNegotiation.DeviceFeatureNegotiation negotiation =
+            assertDoesNotThrow(() -> VulkanDeviceFeatureNegotiation.negotiate(
+                Set.of(s_dynamicRenderingFeature),
+                incomingFeatures,
+                s_bufferDeviceAddressFeature,
+                () -> {
+                    throw supportQueryException;
+                },
+                logger));
+
+        assertEquals(incomingFeatures, negotiation.negotiatedFeatures());
+        assertFalse(negotiation.isBufferDeviceAddressNegotiated());
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> negotiation.negotiatedFeatures().add(s_bufferDeviceAddressFeature));
+        assertEquals(List.of("warn"), loggingMethodNames);
+        assertEquals(1, loggingArguments.size());
+        assertEquals(supportQueryException, loggingArguments.getFirst()[1]);
+    }
+
+    /** Verifies the immutable result remains independent from later incoming-set mutation. */
+    @Test
+    void negotiatedFeaturesAreImmutableAndIndependent() {
+        Set<VulkanFeature> incomingFeatures = new HashSet<>();
+        incomingFeatures.add(s_dynamicRenderingFeature);
+
+        VulkanDeviceFeatureNegotiation.DeviceFeatureNegotiation negotiation =
+            VulkanDeviceFeatureNegotiation.negotiate(
+                Set.of(s_dynamicRenderingFeature),
+                incomingFeatures,
+                s_bufferDeviceAddressFeature,
+                () -> true,
+                createCapturingLogger(new ArrayList<>(), new ArrayList<>()));
+        incomingFeatures.add(s_independentFeature);
+
+        assertEquals(
+            Set.of(s_dynamicRenderingFeature, s_bufferDeviceAddressFeature),
+            negotiation.negotiatedFeatures());
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> negotiation.negotiatedFeatures().add(s_independentFeature));
+    }
+
     /** Verifies missing dynamicRendering contains readiness without querying device support. */
     @Test
     void missingDynamicRenderingWarnsOnceWithoutSupportQuery() {
@@ -116,14 +168,18 @@ final class VulkanDeviceFeatureNegotiationTests {
         List<Object[]> loggingArguments = new ArrayList<>();
         Logger logger = createCapturingLogger(loggingMethodNames, loggingArguments);
 
-        VulkanDeviceFeatureNegotiation.publishCapability(41L, true, logger);
+        try {
+            VulkanDeviceFeatureNegotiation.publishCapability(41L, true, logger);
 
-        assertTrue(VulkanDeviceCapabilityState.isBufferDeviceAddressEnabled(41L));
-        assertFalse(VulkanDeviceCapabilityState.isBufferDeviceAddressEnabled(42L));
-        assertEquals(List.of("info"), loggingMethodNames);
-        assertEquals(1, loggingArguments.size());
-        assertEquals(true, loggingArguments.getFirst()[1]);
-        assertEquals("29", loggingArguments.getFirst()[2]);
+            assertTrue(VulkanDeviceCapabilityState.isBufferDeviceAddressEnabled(41L));
+            assertFalse(VulkanDeviceCapabilityState.isBufferDeviceAddressEnabled(42L));
+            assertEquals(List.of("info"), loggingMethodNames);
+            assertEquals(1, loggingArguments.size());
+            assertEquals(true, loggingArguments.getFirst()[1]);
+            assertEquals("29", loggingArguments.getFirst()[2]);
+        } finally {
+            VulkanDeviceCapabilityState.clearIfOwned(41L);
+        }
     }
 
     /**

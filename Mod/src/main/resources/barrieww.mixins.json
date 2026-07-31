@@ -6,6 +6,7 @@
   "client": [
     "GpuDeviceAccessor",
     "VulkanBackendMixin",
+    "VulkanDeviceMixin",
     "VulkanGpuSurfaceMixin"
   ],
   "injectors": {

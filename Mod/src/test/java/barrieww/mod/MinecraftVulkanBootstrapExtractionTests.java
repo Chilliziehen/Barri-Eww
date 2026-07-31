@@ -18,7 +18,6 @@ import com.mojang.blaze3d.vulkan.VulkanInstance;
 import com.mojang.blaze3d.vulkan.VulkanQueue;
 import java.util.Optional;
 import net.minecraft.SharedConstants;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkDevice;
@@ -37,12 +36,6 @@ final class MinecraftVulkanBootstrapExtractionTests {
     @BeforeAll
     static void initializeMinecraftVersion() {
         SharedConstants.tryDetectVersion();
-    }
-
-    /** Resets process-wide capability publication after each extraction test. */
-    @AfterEach
-    void resetCapabilityState() {
-        VulkanDeviceCapabilityState.resetForTests();
     }
 
     /** Verifies unavailable RenderSystem readiness returns empty without touching the surface device. */
@@ -94,14 +87,18 @@ final class MinecraftVulkanBootstrapExtractionTests {
         GpuDevice gpuDevice = createAccessibleGpuDevice(surfaceDevice);
         VulkanDeviceCapabilityState.publish(3L, true);
 
-        Optional<PresentationBootstrapHandles> bootstrapHandles = extract(
-            gpuDevice,
-            surfaceDevice);
+        try {
+            Optional<PresentationBootstrapHandles> bootstrapHandles = extract(
+                gpuDevice,
+                surfaceDevice);
 
-        assertEquals(
-            Optional.of(new PresentationBootstrapHandles(
-                1L, 2L, 3L, 4L, 5L, 5L, 6, 6)),
-            bootstrapHandles);
+            assertEquals(
+                Optional.of(new PresentationBootstrapHandles(
+                    1L, 2L, 3L, 4L, 5L, 5L, 6, 6)),
+                bootstrapHandles);
+        } finally {
+            VulkanDeviceCapabilityState.clearIfOwned(3L);
+        }
     }
 
     /** Verifies matching wrappers remain unavailable when capability state names another device. */
@@ -111,7 +108,11 @@ final class MinecraftVulkanBootstrapExtractionTests {
         GpuDevice gpuDevice = createAccessibleGpuDevice(surfaceDevice);
         VulkanDeviceCapabilityState.publish(7L, true);
 
-        assertTrue(extract(gpuDevice, surfaceDevice).isEmpty());
+        try {
+            assertTrue(extract(gpuDevice, surfaceDevice).isEmpty());
+        } finally {
+            VulkanDeviceCapabilityState.clearIfOwned(7L);
+        }
     }
 
     /**

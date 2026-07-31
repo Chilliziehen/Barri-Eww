@@ -53,14 +53,15 @@ public final class VulkanDeviceFeatureNegotiation {
      * @note ThreadSafety: Concurrency-safe when supplied feature sets, query, and logger support
      * concurrent use. This method does not mutate caller-owned feature sets.
      * Copies incoming features, contains missing dynamicRendering readiness, and conditionally adds
-     * bufferDeviceAddress when the supplied support query succeeds.
+     * bufferDeviceAddress when the supplied support query succeeds. RuntimeException from the
+     * optional query is contained as unavailable readiness; Error is not intercepted.
      *
      * @param Set<VulkanFeature> requiredFeatures Minecraft's required device features
      * @param Set<VulkanFeature> incomingFeatures Features selected for this device creation
      * @param VulkanFeature bufferDeviceAddressFeature Feature descriptor to add when supported
      * @param BooleanSupplier featureSupportQuery Deferred physical-device feature support query
      * @param Logger logger Logger receiving one contextual readiness warning when required
-     * @return DeviceFeatureNegotiation Copied negotiated features and capability result
+     * @return DeviceFeatureNegotiation Immutable copied negotiated features and capability result
      */
     static DeviceFeatureNegotiation negotiate(
         Set<VulkanFeature> requiredFeatures,
@@ -81,21 +82,30 @@ public final class VulkanDeviceFeatureNegotiation {
                     + "bufferDeviceAddress negotiation disabled",
                 isDynamicRenderingRequired,
                 isDynamicRenderingIncoming);
-            return new DeviceFeatureNegotiation(negotiatedFeatures, false);
+            return new DeviceFeatureNegotiation(Set.copyOf(negotiatedFeatures), false);
         }
 
-        boolean isBufferDeviceAddressNegotiated = featureSupportQuery.getAsBoolean();
+        boolean isBufferDeviceAddressNegotiated;
+        try {
+            isBufferDeviceAddressNegotiated = featureSupportQuery.getAsBoolean();
+        } catch (RuntimeException featureSupportException) {
+            logger.warn(
+                "Minecraft Vulkan bufferDeviceAddress support query failed; negotiation disabled",
+                featureSupportException);
+            return new DeviceFeatureNegotiation(Set.copyOf(negotiatedFeatures), false);
+        }
         if (isBufferDeviceAddressNegotiated) {
             negotiatedFeatures.add(bufferDeviceAddressFeature);
         }
         return new DeviceFeatureNegotiation(
-            negotiatedFeatures,
+            Set.copyOf(negotiatedFeatures),
             isBufferDeviceAddressNegotiated);
     }
 
     /**
-     * @note ThreadSafety: Called once on the serialized device-creation thread after vkCreateDevice.
-     * Publishes and logs the capability result for the exact created logical device.
+     * @note ThreadSafety: Called once on the serialized device-creation thread after Minecraft's
+     * complete Vulkan device factory returns successfully.
+     * Publishes and logs the capability result for the exact initialized logical device.
      *
      * @param long logicalDeviceAddress Native address of the created logical Vulkan device
      * @param boolean isBufferDeviceAddressNegotiated Whether feature negotiation succeeded

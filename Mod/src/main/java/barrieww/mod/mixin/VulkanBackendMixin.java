@@ -1,15 +1,18 @@
 package barrieww.mod.mixin;
 
 import barrieww.mod.VulkanDeviceFeatureNegotiation;
+import com.mojang.blaze3d.systems.GpuDevice;
+import com.mojang.blaze3d.systems.GpuDeviceBackend;
 import com.mojang.blaze3d.vulkan.VulkanBackend;
+import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import java.util.Set;
-import org.lwjgl.vulkan.VkDevice;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArgs;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 /**
@@ -46,27 +49,29 @@ public abstract class VulkanBackendMixin {
     }
 
     /**
-     * @note ThreadSafety: Called once on the serialized device-creation thread after vkCreateDevice
-     * succeeds and before VMA creation begins.
-     * Publishes and logs the capability result for the exact created logical device.
+     * @note ThreadSafety: Called once on the serialized device-creation thread only after the outer
+     * Minecraft factory has successfully created VMA, VulkanDevice, and GpuDevice.
+     * Publishes the capability result for the actual returned Vulkan backend logical device.
      *
-     * @param VkDevice logicalDevice Successfully created Minecraft logical Vulkan device
-     * @return VkDevice The unchanged logical device passed to Minecraft's VMA factory
+     * @param CallbackInfoReturnable<GpuDevice> callbackInformation Completed factory return metadata
      */
-    @ModifyArg(
+    @Inject(
         method = "createDevice(JLcom/mojang/blaze3d/shaders/ShaderSource;"
             + "Lcom/mojang/blaze3d/shaders/GpuDebugOptions;Ljava/lang/Runnable;)"
             + "Lcom/mojang/blaze3d/systems/GpuDevice;",
-        at = @At(
-            value = "INVOKE",
-            target = "Lcom/mojang/blaze3d/vulkan/VulkanBackend;createVma("
-                + "Lorg/lwjgl/vulkan/VkDevice;)J"),
-        index = 0)
-    private VkDevice barrieww$publishBufferDeviceAddressCapability(VkDevice logicalDevice) {
-        long logicalDeviceAddress = logicalDevice.address();
+        at = @At("RETURN"))
+    private void barrieww$publishCreatedDeviceCapability(
+        CallbackInfoReturnable<GpuDevice> callbackInformation) {
+        GpuDevice gpuDevice = callbackInformation.getReturnValue();
+        if (!(gpuDevice instanceof GpuDeviceAccessor gpuDeviceAccessor)) {
+            return;
+        }
+        GpuDeviceBackend gpuDeviceBackend = gpuDeviceAccessor.barrieww$getBackend();
+        if (!(gpuDeviceBackend instanceof VulkanDevice vulkanDevice)) {
+            return;
+        }
         VulkanDeviceFeatureNegotiation.publishCapability(
-            logicalDeviceAddress,
+            vulkanDevice.vkDevice().address(),
             m_isBufferDeviceAddressNegotiated);
-        return logicalDevice;
     }
 }
