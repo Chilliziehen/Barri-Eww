@@ -50,16 +50,16 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Render-thread-confined and non-reentrant.
-     * Drains the preceding runtime, then attempts takeover only when all generation inputs are ready.
-     * A false return commits the current configure call to vanilla presentation. If old runtime
-     * destruction fails, true preserves terminal interception because creating a second swapchain
-     * while Native ownership may remain active is unsafe.
+     * Drains the preceding runtime, then creates and primes a candidate with one presented color
+     * frame before publishing takeover. A false return commits the current configure call to
+     * vanilla presentation. If runtime destruction fails, true preserves terminal interception
+     * because creating a second swapchain while Native ownership may remain active is unsafe.
      *
      * @param PresentationGenerationInputs inputs Immutable configure inputs, or null when unavailable
      * @return boolean True after successful replacement or while terminal interception must prevent
      * a second swapchain; false when the current configure must proceed with vanilla presentation
-     * @warning MemoryOwnership: Closes any preceding owned runtime before replacement. Failed
-     * destruction enters terminal interception because Native ownership may remain active.
+     * @warning MemoryOwnership: Closes any preceding runtime before candidate creation. Candidate
+     * ownership transfers only after priming; rejection closes it before vanilla presentation.
      */
     public boolean configure(PresentationGenerationInputs inputs) {
         m_isFrameOpen = false;
@@ -95,17 +95,13 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             return false;
         }
 
+        PresentationRuntime candidateRuntime;
         try {
-            PresentationRuntime replacementRuntime = m_runtimeFactory.create(
+            candidateRuntime = m_runtimeFactory.create(
                 inputs.bootstrapHandles(),
                 inputs.framebufferWidth(),
                 inputs.framebufferHeight(),
                 s_framesInFlightCount);
-            m_runtime = replacementRuntime;
-            m_framebufferWidth = inputs.framebufferWidth();
-            m_framebufferHeight = inputs.framebufferHeight();
-            m_isTakenOver = true;
-            return true;
         } catch (NativeLibraryLoadingException loadingFailure) {
             m_isTakeoverPermanentlyDisabled = true;
             logLoadingFailure("Presentation runtime creation failed", loadingFailure);
@@ -115,6 +111,46 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             logRuntimeFailure("Presentation runtime creation failed", creationFailure);
             return false;
         }
+
+        boolean candidateRequiresReconfiguration = false;
+        PresentationFrameStatus beginStatus;
+        try {
+            beginStatus = candidateRuntime.beginFrameStatus(
+                inputs.framebufferWidth(), inputs.framebufferHeight());
+        } catch (NativePresentationRuntimeException beginFailure) {
+            return rejectCandidateRuntime(
+                candidateRuntime, "Presentation candidate acquisition failed", beginFailure);
+        }
+        if (beginStatus == PresentationFrameStatus.SURFACE_UNAVAILABLE
+            || beginStatus == PresentationFrameStatus.RECREATE_REQUIRED) {
+            return rejectCandidateRuntime(candidateRuntime, null, null);
+        }
+        if (beginStatus == PresentationFrameStatus.SUBOPTIMAL) {
+            candidateRequiresReconfiguration = true;
+        }
+
+        PresentationFrameStatus submitStatus;
+        try {
+            submitStatus = candidateRuntime.submitAndPresentClearFrame(
+                s_clearRed, s_clearGreen, s_clearBlue);
+        } catch (NativePresentationRuntimeException submitFailure) {
+            return rejectCandidateRuntime(
+                candidateRuntime, "Presentation candidate submission failed", submitFailure);
+        }
+        if (submitStatus == PresentationFrameStatus.SURFACE_UNAVAILABLE
+            || submitStatus == PresentationFrameStatus.RECREATE_REQUIRED) {
+            return rejectCandidateRuntime(candidateRuntime, null, null);
+        }
+        if (submitStatus == PresentationFrameStatus.SUBOPTIMAL) {
+            candidateRequiresReconfiguration = true;
+        }
+
+        m_runtime = candidateRuntime;
+        m_framebufferWidth = inputs.framebufferWidth();
+        m_framebufferHeight = inputs.framebufferHeight();
+        m_isTakenOver = true;
+        m_requiresReconfiguration = candidateRequiresReconfiguration;
+        return true;
     }
 
     /**
@@ -231,6 +267,41 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             m_primaryFrameFailure = frameFailure;
             logRuntimeFailure(message, frameFailure);
         }
+    }
+
+    /**
+     * @note ThreadSafety: Render-thread-confined configure slow path.
+     * Closes an uncommitted candidate and either permits vanilla configure or preserves terminal
+     * interception when candidate destruction is uncertain.
+     *
+     * @param PresentationRuntime candidateRuntime Uncommitted candidate runtime to close
+     * @param String failureMessage Prime operation context, or null for an ordinary status rejection
+     * @param NativePresentationRuntimeException primeFailure Checked prime failure, or null
+     * @return boolean False after successful candidate close; true for terminal interception
+     * @warning MemoryOwnership: Releases candidate ownership before false; a close failure leaves
+     * Native ownership uncertain and therefore prevents vanilla swapchain creation.
+     */
+    private boolean rejectCandidateRuntime(
+        PresentationRuntime candidateRuntime,
+        String failureMessage,
+        NativePresentationRuntimeException primeFailure) {
+        m_isTakeoverPermanentlyDisabled = true;
+        try {
+            candidateRuntime.close();
+        } catch (NativePresentationRuntimeException closeFailure) {
+            if (primeFailure != null && closeFailure != primeFailure) {
+                closeFailure.addSuppressed(primeFailure);
+            }
+            m_isTakenOver = true;
+            m_requiresReconfiguration = true;
+            m_isTerminallyIntercepting = true;
+            logRuntimeFailure("Presentation candidate destruction failed", closeFailure);
+            return true;
+        }
+        if (primeFailure != null) {
+            logRuntimeFailure(failureMessage, primeFailure);
+        }
+        return false;
     }
 
     /**

@@ -56,7 +56,7 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.isTakenOver());
     }
 
-    /** Verifies the first ready generation creates one two-frame runtime and takes ownership. */
+    /** Verifies configure primes one frame before committing the first ready generation. */
     @Test
     void readyInitialGenerationCreatesRuntimeOnce() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
@@ -69,8 +69,142 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(1, runtimeFactory.m_createCount);
         assertEquals(2, runtimeFactory.m_framesInFlightCount);
         assertEquals(s_bootstrapHandles, runtimeFactory.m_bootstrapHandles);
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first"),
+            runtimeFactory.m_events);
+        assertEquals(1, runtime.m_beginCount);
+        assertEquals(1, runtime.m_presentCount);
+        assertEquals(0.08f, runtime.m_clearRed);
+        assertEquals(0.72f, runtime.m_clearGreen);
+        assertEquals(0.93f, runtime.m_clearBlue);
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.requiresReconfiguration());
+    }
+
+    /** Verifies unavailable prime acquisition closes the candidate without submitting. */
+    @Test
+    void unavailablePrimeBeginClosesCandidateAndReturnsFalse() {
+        for (PresentationFrameStatus beginStatus : List.of(
+            PresentationFrameStatus.SURFACE_UNAVAILABLE,
+            PresentationFrameStatus.RECREATE_REQUIRED)) {
+            RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+            RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+            runtime.m_beginStatus = beginStatus;
+            runtimeFactory.m_nextRuntime = runtime;
+            PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+
+            assertFalse(coordinator.configure(readyInputs(800, 600)));
+
+            assertEquals(List.of(
+                "create:candidate", "begin:candidate:800x600", "close:candidate"),
+                runtimeFactory.m_events);
+            assertEquals(0, runtime.m_presentCount);
+            assertEquals(1, runtime.m_closeCount);
+            assertFalse(coordinator.isTakenOver());
+        }
+    }
+
+    /** Verifies unavailable prime submission closes the candidate and returns false. */
+    @Test
+    void unavailablePrimeSubmitClosesCandidateAndReturnsFalse() {
+        for (PresentationFrameStatus submitStatus : List.of(
+            PresentationFrameStatus.SURFACE_UNAVAILABLE,
+            PresentationFrameStatus.RECREATE_REQUIRED)) {
+            RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+            RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+            runtime.m_submitStatus = submitStatus;
+            runtimeFactory.m_nextRuntime = runtime;
+            PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+
+            assertFalse(coordinator.configure(readyInputs(800, 600)));
+
+            assertEquals(List.of("create:candidate", "begin:candidate:800x600",
+                "submit:candidate", "close:candidate"), runtimeFactory.m_events);
+            assertEquals(1, runtime.m_presentCount);
+            assertEquals(1, runtime.m_closeCount);
+            assertFalse(coordinator.isTakenOver());
+        }
+    }
+
+    /** Verifies a checked prime begin failure closes the candidate and preserves context. */
+    @Test
+    void checkedPrimeBeginFailureClosesCandidateAndReturnsFalse() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+        NativePresentationRuntimeException beginFailure = runtimeFailure("primeBegin");
+        runtime.m_beginFailure = beginFailure;
+        runtimeFactory.m_nextRuntime = runtime;
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+
+        assertFalse(coordinator.configure(readyInputs(800, 600)));
+
+        assertEquals(1, runtime.m_closeCount);
+        assertEquals(0, runtime.m_presentCount);
+        assertFalse(coordinator.isTakenOver());
+        verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(beginFailure));
+    }
+
+    /** Verifies a checked prime submit failure closes the candidate and preserves context. */
+    @Test
+    void checkedPrimeSubmitFailureClosesCandidateAndReturnsFalse() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+        NativePresentationRuntimeException submitFailure = runtimeFailure("primeSubmit");
+        runtime.m_submitFailure = submitFailure;
+        runtimeFactory.m_nextRuntime = runtime;
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+
+        assertFalse(coordinator.configure(readyInputs(800, 600)));
+
+        assertEquals(1, runtime.m_closeCount);
+        assertEquals(1, runtime.m_presentCount);
+        assertFalse(coordinator.isTakenOver());
+        verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(submitFailure));
+    }
+
+    /** Verifies failed candidate close surfaces the prime failure as suppressed context. */
+    @Test
+    void checkedPrimeFailureCloseFailureEntersTerminalInterceptionWithSuppression() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+        NativePresentationRuntimeException submitFailure = runtimeFailure("primeSubmit");
+        NativePresentationRuntimeException closeFailure = runtimeFailure("candidateClose");
+        runtime.m_submitFailure = submitFailure;
+        runtime.m_closeFailure = closeFailure;
+        runtimeFactory.m_nextRuntime = runtime;
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+
+        assertTrue(coordinator.configure(readyInputs(800, 600)));
+
+        assertSame(submitFailure, closeFailure.getSuppressed()[0]);
+        assertTrue(coordinator.isTakenOver());
+        assertTrue(coordinator.requiresReconfiguration());
+        verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(closeFailure));
+    }
+
+    /** Verifies suboptimal prime status commits takeover while requesting reconfiguration. */
+    @Test
+    void suboptimalPrimeCommitsAndRequestsReconfiguration() {
+        for (boolean isBeginSuboptimal : List.of(true, false)) {
+            RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+            RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
+            runtime.m_beginStatus = isBeginSuboptimal
+                ? PresentationFrameStatus.SUBOPTIMAL : PresentationFrameStatus.SUCCESS;
+            runtime.m_submitStatus = isBeginSuboptimal
+                ? PresentationFrameStatus.SUCCESS : PresentationFrameStatus.SUBOPTIMAL;
+            runtimeFactory.m_nextRuntime = runtime;
+            PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+
+            assertTrue(coordinator.configure(readyInputs(800, 600)));
+
+            assertTrue(coordinator.isTakenOver());
+            assertTrue(coordinator.requiresReconfiguration());
+        }
     }
 
     /** Verifies resize drains the old generation before replacement creation. */
@@ -84,9 +218,32 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertTrue(coordinator.configure(readyInputs(1024, 768)));
 
-        assertEquals(List.of("create:first", "close:first", "create:second"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+            "close:first", "create:second", "begin:second:1024x768", "submit:second"),
             runtimeFactory.m_events);
         assertTrue(coordinator.isTakenOver());
+    }
+
+    /** Verifies resize candidate rejection permits vanilla only after the old runtime closes. */
+    @Test
+    void resizePrimeFailureClosesOldAndCandidateBeforeReturningFalse() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime firstRuntime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtimeFactory.m_nextRuntime = firstRuntime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(readyInputs(800, 600)));
+        RecordingRuntime secondRuntime = new RecordingRuntime("second", runtimeFactory.m_events);
+        secondRuntime.m_submitStatus = PresentationFrameStatus.RECREATE_REQUIRED;
+        runtimeFactory.m_nextRuntime = secondRuntime;
+
+        assertFalse(coordinator.configure(readyInputs(1024, 768)));
+
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+            "close:first", "create:second", "begin:second:1024x768", "submit:second",
+            "close:second"), runtimeFactory.m_events);
+        assertEquals(1, firstRuntime.m_closeCount);
+        assertEquals(1, secondRuntime.m_closeCount);
+        assertFalse(coordinator.isTakenOver());
     }
 
     /** Verifies failed replacement leaves configure in the vanilla generation state. */
@@ -100,7 +257,8 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
 
-        assertEquals(List.of("create:first", "close:first", "create:failure"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+            "close:first", "create:failure"),
             runtimeFactory.m_events);
         assertFalse(coordinator.isTakenOver());
         assertDoesNotThrow(coordinator::beginFrame);
@@ -119,7 +277,8 @@ final class PresentationTakeoverCoordinatorTests {
         coordinator.beginFrame();
         coordinator.presentFrame();
 
-        assertEquals(List.of("create:first", "begin:first:800x600", "present:first"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+            "begin:first:800x600", "submit:first"),
             runtimeFactory.m_events);
         assertEquals(0.08f, runtime.m_clearRed);
         assertEquals(0.72f, runtime.m_clearGreen);
@@ -138,7 +297,7 @@ final class PresentationTakeoverCoordinatorTests {
 
         coordinator.presentFrame();
 
-        assertEquals(0, runtime.m_presentCount);
+        assertEquals(1, runtime.m_presentCount);
     }
 
     /** Verifies suboptimal acquisition remains open and requests a later reconfiguration. */
@@ -154,7 +313,7 @@ final class PresentationTakeoverCoordinatorTests {
         coordinator.beginFrame();
         coordinator.presentFrame();
 
-        assertEquals(1, runtime.m_presentCount);
+        assertEquals(2, runtime.m_presentCount);
         assertTrue(coordinator.requiresReconfiguration());
     }
 
@@ -166,15 +325,15 @@ final class PresentationTakeoverCoordinatorTests {
             PresentationFrameStatus.RECREATE_REQUIRED)) {
             RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
             RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
-            runtime.m_beginStatus = beginStatus;
             runtimeFactory.m_nextRuntime = runtime;
             PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
             assertTrue(coordinator.configure(readyInputs(800, 600)));
+            runtime.m_beginStatus = beginStatus;
 
             coordinator.beginFrame();
             coordinator.presentFrame();
 
-            assertEquals(0, runtime.m_presentCount);
+            assertEquals(1, runtime.m_presentCount);
             assertTrue(coordinator.requiresReconfiguration());
             assertTrue(coordinator.isTakenOver());
         }
@@ -189,10 +348,10 @@ final class PresentationTakeoverCoordinatorTests {
             PresentationFrameStatus.SURFACE_UNAVAILABLE)) {
             RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
             RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
-            runtime.m_submitStatus = submitStatus;
             runtimeFactory.m_nextRuntime = runtime;
             PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
             assertTrue(coordinator.configure(readyInputs(800, 600)));
+            runtime.m_submitStatus = submitStatus;
 
             coordinator.beginFrame();
             coordinator.presentFrame();
@@ -207,28 +366,28 @@ final class PresentationTakeoverCoordinatorTests {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
-        runtime.m_beginFailure = beginFailure;
         runtimeFactory.m_nextRuntime = runtime;
         Logger logger = mock(Logger.class);
         PresentationTakeoverCoordinator coordinator =
             new PresentationTakeoverCoordinator(runtimeFactory, logger);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_beginFailure = beginFailure;
 
         assertDoesNotThrow(coordinator::beginFrame);
 
         assertTrue(coordinator.isTakenOver());
         assertTrue(coordinator.requiresReconfiguration());
         assertEquals(0, runtime.m_closeCount);
-        assertEquals(1, runtime.m_beginCount);
-        assertEquals(0, runtime.m_presentCount);
+        assertEquals(2, runtime.m_beginCount);
+        assertEquals(1, runtime.m_presentCount);
 
         assertDoesNotThrow(coordinator::beginFrame);
         assertDoesNotThrow(coordinator::presentFrame);
         assertDoesNotThrow(coordinator::beginFrame);
         assertDoesNotThrow(coordinator::presentFrame);
 
-        assertEquals(1, runtime.m_beginCount);
-        assertEquals(0, runtime.m_presentCount);
+        assertEquals(2, runtime.m_beginCount);
+        assertEquals(1, runtime.m_presentCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
@@ -243,29 +402,29 @@ final class PresentationTakeoverCoordinatorTests {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException submitFailure = runtimeFailure("submit");
-        runtime.m_submitFailure = submitFailure;
         runtimeFactory.m_nextRuntime = runtime;
         Logger logger = mock(Logger.class);
         PresentationTakeoverCoordinator coordinator =
             new PresentationTakeoverCoordinator(runtimeFactory, logger);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_submitFailure = submitFailure;
         coordinator.beginFrame();
 
         assertDoesNotThrow(coordinator::presentFrame);
 
         assertTrue(coordinator.isTakenOver());
         assertTrue(coordinator.requiresReconfiguration());
-        assertEquals(1, runtime.m_presentCount);
+        assertEquals(2, runtime.m_presentCount);
         assertEquals(0, runtime.m_closeCount);
-        assertEquals(1, runtime.m_beginCount);
+        assertEquals(2, runtime.m_beginCount);
 
         coordinator.beginFrame();
         coordinator.presentFrame();
         coordinator.beginFrame();
         coordinator.presentFrame();
 
-        assertEquals(1, runtime.m_beginCount);
-        assertEquals(1, runtime.m_presentCount);
+        assertEquals(2, runtime.m_beginCount);
+        assertEquals(2, runtime.m_presentCount);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
         assertEquals(1, runtime.m_closeCount);
@@ -279,13 +438,13 @@ final class PresentationTakeoverCoordinatorTests {
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
         NativePresentationRuntimeException closeFailure = runtimeFailure("close");
-        runtime.m_beginFailure = beginFailure;
-        runtime.m_closeFailure = closeFailure;
         runtimeFactory.m_nextRuntime = runtime;
         Logger logger = mock(Logger.class);
         PresentationTakeoverCoordinator coordinator =
             new PresentationTakeoverCoordinator(runtimeFactory, logger);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_beginFailure = beginFailure;
+        runtime.m_closeFailure = closeFailure;
 
         coordinator.beginFrame();
         assertTrue(coordinator.configure(readyInputs(1024, 768)));
@@ -306,11 +465,11 @@ final class PresentationTakeoverCoordinatorTests {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException sharedFailure = runtimeFailure("shared");
-        runtime.m_beginFailure = sharedFailure;
-        runtime.m_closeFailure = sharedFailure;
         runtimeFactory.m_nextRuntime = runtime;
         PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_beginFailure = sharedFailure;
+        runtime.m_closeFailure = sharedFailure;
         coordinator.beginFrame();
 
         assertDoesNotThrow(() -> assertTrue(coordinator.configure(readyInputs(1024, 768))));
@@ -337,7 +496,8 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.isTakenOver());
         assertTrue(coordinator.requiresReconfiguration());
         assertEquals(1, runtimeFactory.m_createCount);
-        assertEquals(List.of("create:first", "close:first"), runtimeFactory.m_events);
+        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+            "close:first"), runtimeFactory.m_events);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
 
         assertTrue(coordinator.configure(readyInputs(1280, 720)));
@@ -369,11 +529,11 @@ final class PresentationTakeoverCoordinatorTests {
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException beginFailure = runtimeFailure("begin");
         NativePresentationRuntimeException closeFailure = runtimeFailure("close");
-        runtime.m_beginFailure = beginFailure;
-        runtime.m_closeFailure = closeFailure;
         runtimeFactory.m_nextRuntime = runtime;
         PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
         assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_beginFailure = beginFailure;
+        runtime.m_closeFailure = closeFailure;
         coordinator.beginFrame();
 
         assertSame(closeFailure, assertThrows(
@@ -597,7 +757,7 @@ final class PresentationTakeoverCoordinatorTests {
             float clearRed,
             float clearGreen,
             float clearBlue) throws NativePresentationRuntimeException {
-            m_events.add("present:" + m_name);
+            m_events.add("submit:" + m_name);
             m_presentCount++;
             m_clearRed = clearRed;
             m_clearGreen = clearGreen;
