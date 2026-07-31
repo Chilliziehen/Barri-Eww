@@ -174,6 +174,10 @@ tasks.processResources {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
+    classDirectories.setFrom(sourceSets.main.get().output.classesDirs.asFileTree.matching {
+        exclude("barrieww/mod/mixin/**")
+        exclude("barrieww/mod/MinecraftVulkanBootstrapHandles.class")
+    })
     reports {
         xml.required = true
     }
@@ -181,6 +185,10 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test)
+    classDirectories.setFrom(sourceSets.main.get().output.classesDirs.asFileTree.matching {
+        exclude("barrieww/mod/mixin/**")
+        exclude("barrieww/mod/MinecraftVulkanBootstrapHandles.class")
+    })
     violationRules {
         rule {
             limit {

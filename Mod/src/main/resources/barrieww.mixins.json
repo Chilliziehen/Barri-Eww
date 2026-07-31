@@ -3,7 +3,11 @@
   "minVersion": "0.8",
   "package": "barrieww.mod.mixin",
   "compatibilityLevel": "JAVA_25",
-  "client": [],
+  "client": [
+    "GpuDeviceAccessor",
+    "VulkanBackendMixin",
+    "VulkanGpuSurfaceMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   }
