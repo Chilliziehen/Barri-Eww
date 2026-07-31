@@ -177,6 +177,13 @@ tasks.processResources {
     filesMatching("fabric.mod.json") {
         expand("version" to modVersionValue)
     }
+    if (providers.gradleProperty("barriewwNativeLibraryPath").isPresent) {
+        from(validatedNativeLibraryFileProvider) {
+            into(nativeResourcePathProvider.map { nativeResourcePath ->
+                nativeResourcePath.substringBeforeLast('/')
+            })
+        }
+    }
 }
 
 tasks.jacocoTestReport {
@@ -228,11 +235,6 @@ tasks.jar {
     inputs.property("buildConfiguration", buildConfigurationProvider)
     inputs.property("renderingBackend", renderingBackendProvider)
     inputs.property("threadedRecording", threadedRecordingProvider)
-    from(validatedNativeLibraryFileProvider) {
-        into(nativeResourcePathProvider.map { nativeResourcePath ->
-            nativeResourcePath.substringBeforeLast('/')
-        })
-    }
     from(coreLibraryFileProvider.map { coreLibraryFile -> zipTree(coreLibraryFile) }) {
         exclude("META-INF/MANIFEST.MF")
     }
@@ -260,4 +262,8 @@ loom {
             jvmArguments.add("--enable-native-access=ALL-UNNAMED")
         }
     }
+}
+
+tasks.named<JavaExec>("runClient") {
+    args("--graphicsBackend", "vulkan")
 }

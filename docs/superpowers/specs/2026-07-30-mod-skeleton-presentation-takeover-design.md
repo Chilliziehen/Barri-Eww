@@ -137,15 +137,26 @@ Before intercepting each `configure`, the coordinator verifies:
 - required device capability negotiation succeeded;
 - borrowed instance/device/surface/queue handles are nonzero;
 - graphics and present use the same queue and family;
-- the host main color texture has the expected color format, matching extent, and
-  sampled/copy-source usage required by the accepted final architecture;
+- the host main color texture and view are nonnull and have a color format,
+  copy-source/texture-binding usage, positive single-layer two-dimensional shape, and
+  one valid base mip;
 - the embedded Native library is loaded and a Native runtime can be created for the
   requested nonzero extent.
 
+The D9 step 1 clear path does not import or read the host texture, so its readiness is
+deliberately independent of the requested configure extent. MC26.2 calls backend
+`configure` with the new window extent before `GameRenderer.render` resizes
+`mainRenderTarget`; there is no second backend configure after that resize. Native
+runtime creation therefore uses the requested configuration extent while the static
+host check may observe the preceding positive texture extent. D9 step 2 and later must
+add exact imported-texture extent validation after target resize or an equivalent host
+generation notification; this staged rule does not weaken ADR-0006 D8.2 composition.
+
 On initial configuration there is no Minecraft swapchain. On resize, the coordinator
-first closes the old Native runtime, then attempts to create the replacement. Success
-cancels Minecraft `configure`; failure allows that same invocation to continue, so
-Minecraft creates the replacement swapchain and owns the new generation.
+first closes the old Native runtime, then attempts to create the replacement from the
+new configuration extent. Success cancels Minecraft `configure`; failure allows that
+same invocation to continue, so Minecraft creates the replacement swapchain and owns
+the new generation.
 
 `SurfaceUnavailable` and `RecreateRequired` mark the backend suboptimal and skip the
 unavailable frame as allowed by ADR-0006 D10. An unrecoverable post-takeover failure

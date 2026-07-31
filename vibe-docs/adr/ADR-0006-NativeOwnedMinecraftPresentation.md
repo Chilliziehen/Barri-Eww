@@ -1,8 +1,8 @@
 # ADR-0006: Native-owned Minecraft presentation
 
-- **状态**: Accepted (2026-07-26，所有者逐项裁决 D1、D3–D6、D8–D10)
-  - **D2 接管点**：具体屏蔽手法留待实现期确定（形态高度依赖 mixin 实际命中情况）；
-    其中 `isAcquired()` 门控为**必须处理项**，不处理将直接黑屏。
+- **状态**: Accepted (2026-07-31，所有者逐项裁决 D1–D6、D8–D10)
+  - **D2 接管点**：D9 第 1 步的实现细节已定案为仅注入 `VulkanGpuSurface` 后端；
+    保留外层 `GpuSurface` 状态机自然满足两个 `isAcquired()` 门控与 blit 后 present 前置条件。
   - **D7 GUI alpha**：`待实测`，由 D9 第 3 步给出答案；**D8.4 的混合公式在其定案前不完备**，
     实现时不得自行假定。
   - 除上述两项外，本 ADR 条款为已批准决策。
@@ -87,23 +87,37 @@ Minecraft.runTick()
 - 不引入第二种 presentation 模式；ADR-0004 的所有权矩阵在 Minecraft 宿主下按上述映射
   继续有效。
 
-### D2. 四个接管点 `待裁决(实现细节)`
+### D2. D9 第 1 步接管点 `已裁决(实现细节)`
 
-| 接管点 | 位置 | 动作 |
-| ------ | ---- | ---- |
-| ① swapchain 创建 | `VulkanGpuSurface.configure` | 阻止 Minecraft 建立 swapchain |
-| ② acquire | `Minecraft.java:1245` → `acquireNextTexture()` | 由 Native 的 `beginFrame` 取代 |
-| ③ 世界渲染 | `LevelRenderer.render` HEAD | readiness 满足时 cancel |
-| ④ blit + present | `Minecraft.java:1294` / `VulkanGpuSurface.present()` | 由 Native 合成尾段 + present 取代 |
+D9 第 1 步严格在 `VulkanGpuSurface` 后端层注入，不取消外层 `GpuSurface`、
+`Minecraft.renderFrame` 或 `LevelRenderer`，也不注入 `VulkanCommandEncoder`：
 
-`VulkanGpuSurface` 持有内部状态(`currentImageIndex`、acquire/present semaphores、
-`swapchainOutOfDate`)，接管后必须保证 Minecraft 侧代码路径不进入非法状态或抛出。
-具体屏蔽方式(mixin 取消 / 重定向 / 空实现)在实现提案中确定。
+| 接管点 | 后端位置 | D9 第 1 步动作 |
+| ------ | -------- | -------------- |
+| swapchain 创建 | `VulkanGpuSurface.configure` | generation readiness 完整且 Native 已呈现 priming 帧后，取消本次后端 configure |
+| acquire | `VulkanGpuSurface.acquireNextTexture` | Native `beginFrame` 后取消后端 acquire |
+| blit | `VulkanGpuSurface.blitFromTexture` | taken-over generation 中取消为空操作 |
+| present | `VulkanGpuSurface.present` | Native 清色并 present 后取消后端 present |
+| teardown | `VulkanGpuSurface.close` | 在 vanilla teardown 前关闭 Native coordinator，不取消 vanilla close |
 
-**必须处理项 —— `isAcquired()` 门控**：`Minecraft.java:1309` 以
-`if (this.windowSurface.isAcquired())` 决定是否调用 `present()`。接管 acquire 后
-Minecraft 内部的 `currentImageIndex` 不再被设置，`isAcquired()` 可能返回 false，导致
-`present()` 永不被调用而直接黑屏。该门控必须一并接管或使其返回真值。
+外层 `GpuSurface` 先调用后端、再更新自身状态：configure 后保存 configuration，acquire 后置
+`hasImageAcquired=true` / `hasBlittedTexture=false`，空 blit 后置 `hasBlittedTexture=true`，present
+后清除 acquired。因此两个 `isAcquired()` 门控和「必须先 blit 才能 present」前置条件自然成立；
+实现不得伪造 `GpuSurface` 私有 wrapper 状态，也不得伪造 `VulkanGpuSurface.currentImageIndex`。
+接管期间 vanilla swapchain 保持为 0。
+
+configure 取消属于 generation 决策，且只发生在 coordinator 已创建、acquire、清色并实际
+present 一个 Native priming 帧之后。readiness 不完整或安全关闭旧 generation 后 replacement
+失败时，本次不取消，允许 vanilla 创建 swapchain；旧 generation 关闭失败、Native 所有权不确定
+时继续取消，避免同一 surface 上出现双 swapchain。
+
+MC26.2 的 resize 顺序已实测并由字节码确认：`Minecraft.runTick` 先以新 window extent 调用后端
+`configure`，`GameRenderer.render` 随后才把 `mainRenderTarget` resize 到新 extent，且该 resize
+之后没有第二次后端 configure。D9 第 1 步不导入或读取宿主纹理，因此此阶段只校验 view/texture
+非空、color aspect、`COPY_SRC | TEXTURE_BINDING` usage、正数二维单 layer 与有效 mip 等静态属性；
+Native runtime 始终使用本次 `GpuSurface.Configuration` 的新 extent。D9 第 2 步起一旦导入并合成
+宿主纹理，必须在 target resize/generation 通知之后对 imported generation 强制执行 exact extent
+校验；本阶段澄清不修改 D8.2 的合成契约。
 
 ### D3. RDG 与 presentation 的职责边界 `已裁决`
 
@@ -429,13 +443,21 @@ present」在物理上不可能。
 
 #### D10.2 presentation 接管的 readiness（generation 级）
 
-全部满足方可接管，任一不满足则**不阻止** Minecraft 创建 swapchain，游戏以原版路径运行：
+readiness 按 D9 验证阶段递进。当前 D9 第 1 步全部满足方可接管，任一不满足则**不阻止**
+Minecraft 创建 swapchain，游戏以原版路径运行：
 
 - 宿主图形后端为 Vulkan；
 - 设备能力协商成功（D2 的扩展/特性追加）；
+- 借用的 instance/device/surface/queue handles 完整且 queue/family 约束成立；
 - Native presentation runtime 创建成功；
-- 宿主 GUI 纹理校验通过（format/extent/usage，D5 与 D8.2）；
+- 宿主 color texture/view 的静态属性通过：非空、color aspect、`COPY_SRC` 与
+  `TEXTURE_BINDING` usage、正数二维单 layer 与有效 mip；D9 第 1 步不导入/读取该纹理，
+  因而不把尚未 resize 的旧 host extent 与本次 configure extent 比较；
 - graph module（若参与）材质化成功且健康。
+
+D9 第 2 步起导入/合成宿主 GUI 纹理时，readiness 必须在 Minecraft 完成
+`mainRenderTarget.resize` 或发出等价 generation 通知后，按 D5 与 D8.2 强制校验 imported texture
+与目标 generation 的 exact extent。该后续门禁不得前移为 D9 第 1 步的无读取依赖。
 
 #### D10.3 接管后的失败处理（无原版回退）
 
@@ -470,8 +492,6 @@ present」在物理上不可能。
 ## Open
 
 - **D7 GUI alpha**：由 D9 第 3 步实测定案；在此之前 D8.4 的混合公式不完备。
-- **D2 屏蔽手法**：`VulkanGpuSurface` 的具体屏蔽方式与其内部状态一致性保证，
-  留待实现期（D9 第 1 步）确定。
 - D8 合成规则是否、何时对 TA 开放——**无既定计划**，待真实需求出现时另行裁决。
 - 与 ADR-0005 能力清单的协同：presentation 相关参数(输出分辨率、色彩空间)是否进入
   数据源清单。
