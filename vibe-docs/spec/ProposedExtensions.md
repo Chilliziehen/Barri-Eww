@@ -49,8 +49,68 @@ T0 三指标仲裁顺序 `性能 > 兼容性 > 可维护性` 已确认 (spec.md 
 | ---- | -------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | P25  | **能力清单 (Capability Manifest) 产出物** `PROPOSED`：装载期枚举 MC `ENVIRONMENT_ATTRIBUTE` / `ATTRIBUTE_TYPE` 注册表导出的机器可读数据源清单（属性 id、值类型、默认值、range、是否空间插值/同步 + 我方内建源），供 Editor 作数据调色板。需定义命名、序列化格式与版本策略 | GeneratedArtifacts §8 / ADR-0005 D1 |
 | P26  | **参数 DSL 与 frame-slot 参数块 ABI** `PROPOSED`：受限 DSL 文法与内建函数集、值类型到 MC `AttributeType` 的显式映射（含 RGB_COLOR 等打包类型）、参数块 schema 与编译期偏移分配规则 | CodingConvention §1 / CommandStreamFormat §9 / ADR-0005 D2·D4 |
+| P28  | **Host-image presentation additive Version 1 ABI** `PROPOSED`：新增 presentation 中立 UNORM format、96-byte host-image create record、独立 create/submit symbols；保留既有 Version 1 record 与 symbol 的二进制兼容，固定 borrowed host image ownership、exact extent、requested surface format 与 non-critical downcall 语义 | FfmBinding §6.7 / ADR-0006 D5·D6·D8·D9.2 |
 
 > ADR-0005 D5 另记录两项**明确推迟、非放弃**的方向，落地时须先在此登记并裁决：
 > Tier 2 外部声明数据源 (D5.1)、B 类图结构决策 (D5.2)。
 
 新的扩充建议在此登记，标 `PROPOSED`，经所有者确认后迁入对应正式文档并在 CHANGELOG 记录。
+
+### P28 提案明细：Host-image presentation additive Version 1 ABI
+
+`PresentationImageFormat` 使用稳定值 `R8G8B8A8Unorm = 1`、`B8G8R8A8Unorm = 2`。
+该枚举只属于 presentation interoperability；即使与 BECS 中立 format 数值一致，也不使
+宿主 image 进入 BECS 或 P22。
+
+新增 `NativeHostImagePresentationRuntimeCreateInfoVersion1`，布局固定为：
+
+| offset | 字段 | 类型 |
+| ------ | ---- | ---- |
+| 0 | `instanceHandle` | `uint64` |
+| 8 | `physicalDeviceHandle` | `uint64` |
+| 16 | `logicalDeviceHandle` | `uint64` |
+| 24 | `surfaceHandle` | `uint64` |
+| 32 | `graphicsQueueHandle` | `uint64` |
+| 40 | `presentQueueHandle` | `uint64` |
+| 48 | `graphicsQueueFamilyIndex` | `uint32` |
+| 52 | `presentQueueFamilyIndex` | `uint32` |
+| 56 | `framebufferWidth` | `uint32` |
+| 60 | `framebufferHeight` | `uint32` |
+| 64 | `framesInFlightCount` | `uint32` |
+| 68 | `reservedFlags`（必须为 0） | `uint32` |
+| 72 | `hostImageHandle` | `uint64` |
+| 80 | `hostImageFormatValue` | `uint32` |
+| 84 | `requestedSurfaceFormatValue` | `uint32` |
+| 88 | `hostImageWidth` | `uint32` |
+| 92 | `hostImageHeight` | `uint32` |
+
+该 record 固定 `sizeof == 96`、`alignof == 8`，以双侧 layout assertions 钉死。
+
+新增两个完整命名、additive、non-critical 的 Version 1 C symbols：
+
+```cpp
+NativePresentationRuntimeOperationResult
+barriEwwCreateHostImagePresentationRuntimeVersion1(
+    const NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo,
+    NativePresentationRuntimeCreateResultVersion1* createResult) noexcept;
+
+NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentHostImageFrameVersion1(
+    std::uint64_t runtimeAddress,
+    NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;
+```
+
+固定语义：
+
+1. 旧 `NativePresentationRuntimeCreateInfoVersion1`、所有旧 symbol 与 status record 原样保留；
+   禁止复用旧 `reservedFlags` 传递 host-image 数据。
+2. Native 借用 host `VkImage`，不拥有 image 或 memory；Native 只拥有为 sampled presentation
+   创建的 view、descriptor、pipeline 与 command buffers，且必须在宿主销毁 image 前退休。
+3. `hostImageHandle` 非零；host、framebuffer 与实际 swapchain extent 必须 exact match；format
+   必须为上述中立 UNORM 值。
+4. `requestedSurfaceFormatValue` 必须由 surface 以 `SRGB_NONLINEAR` color space 实际支持；
+   不允许静默替换为 SRGB format，也不在 shader 内做色彩空间抵消。
+5. create/submit 涉及分配、driver synchronization 与 queue operation，FFM downcall 固定
+   non-critical；binding 构造期解析一次 handle，frame path 不做 symbol lookup。
+6. submit 要求已有 open frame，并以该 frame 的固定 slot/image index 选择预录 command；
+   operation/result/exception containment 与既有 presentation Version 1 规则一致。
