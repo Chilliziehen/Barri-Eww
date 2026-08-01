@@ -95,7 +95,8 @@ else
     moduleSequence=("$selectedModule")
 fi
 
-for moduleName in "${moduleSequence[@]}"; do
+validateManifest() {
+    local moduleName="$1"
     case "$moduleName" in
         native)
             [[ -f "$scriptDirectory/Native/CMakeLists.txt" ]] \
@@ -114,7 +115,7 @@ for moduleName in "${moduleSequence[@]}"; do
                 || fail "Editor/package.json is missing; Editor is not implemented"
             ;;
     esac
-done
+}
 
 cmakeConfiguration="Debug"
 if [[ "$buildConfiguration" == "release" ]]; then
@@ -128,6 +129,11 @@ enableCoverageCmake="OFF"
 [[ "$enableCoverage" == "on" ]] && enableCoverageCmake="ON"
 
 nativeBuildDirectory="$scriptDirectory/Native/build-root-${buildConfiguration}-threaded-${threadedRecording}"
+coreLibraryFile="$scriptDirectory/Core/build/libs/BarriEwwCore-0.1.0.jar"
+nativeLibraryFile="$nativeBuildDirectory/ffm/libBarriEwwNativeFfm.so"
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+    nativeLibraryFile="$nativeBuildDirectory/ffm/BarriEwwNativeFfm.dll"
+fi
 
 runCommand() {
     printf '+ '
@@ -152,13 +158,9 @@ buildNative() {
 buildCore() {
     coreTasks=(clean assemble)
     if [[ "$buildTests" == "on" ]]; then
-        coreTasks=(clean test)
+        coreTasks=(clean test assemble)
     fi
     if [[ "$enableCoverage" == "on" ]]; then
-        nativeLibraryFile="$nativeBuildDirectory/ffm/libBarriEwwNativeFfm.so"
-        if [[ "${OS:-}" == "Windows_NT" ]]; then
-            nativeLibraryFile="$nativeBuildDirectory/ffm/BarriEwwNativeFfm.dll"
-        fi
         [[ -f "$nativeLibraryFile" ]] \
             || fail "Core coverage requires the matching Native FFM library: $nativeLibraryFile"
         coreTasks+=(nativeIntegrationTest jacocoTestReport jacocoTestCoverageVerification)
@@ -179,9 +181,18 @@ buildCore() {
 
 buildMod() {
     modTasks=(clean assemble)
-    [[ "$buildTests" == "on" ]] && modTasks=(clean test)
+    [[ "$buildTests" == "on" ]] && modTasks=(clean test assemble)
+    if [[ "$enableCoverage" == "on" ]]; then
+        modTasks+=(jacocoTestReport jacocoTestCoverageVerification)
+    fi
+    [[ -f "$coreLibraryFile" ]] \
+        || fail "Mod packaging requires the selected Core jar: $coreLibraryFile"
+    [[ -f "$nativeLibraryFile" ]] \
+        || fail "Mod packaging requires the selected Native FFM library: $nativeLibraryFile"
     runCommand "$scriptDirectory/Mod/gradlew" -p "$scriptDirectory/Mod" \
         "${modTasks[@]}" \
+        "-PbarriewwCoreLibraryPath=$coreLibraryFile" \
+        "-PbarriewwNativeLibraryPath=$nativeLibraryFile" \
         "-PbarriewwConfiguration=$buildConfiguration" \
         "-PbarriewwBackend=$selectedBackend" \
         "-PbarriewwThreadedRecording=$threadedRecording" --no-daemon
@@ -200,6 +211,7 @@ buildEditor() {
 }
 
 for moduleName in "${moduleSequence[@]}"; do
+    validateManifest "$moduleName"
     printf '\n== Building %s ==\n' "$moduleName"
     case "$moduleName" in
         native) buildNative ;;

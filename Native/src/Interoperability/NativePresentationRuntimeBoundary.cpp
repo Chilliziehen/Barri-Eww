@@ -1,11 +1,13 @@
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
 #include <vulkan/vulkan.h>
 
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
+#include "NativePresentationRuntimeBoundaryImplementation.hpp"
 
 namespace {
 
@@ -175,6 +177,40 @@ barriEwwSubmitPresentationFrameVersion1(
         submitResult->frameStatusValue = static_cast<std::uint32_t>(frameResult.status);
         submitResult->vulkanResult = frameResult.vulkanResult;
         return NativePresentationRuntimeOperationResult::Success;
+    } catch (...) {
+        *submitResult = {};
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentClearFrameVersion1(
+    std::uint64_t runtimeAddress, float clearRed, float clearGreen, float clearBlue,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (submitResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *submitResult = {};
+    if (runtimeAddress == 0u || !std::isfinite(clearRed) || clearRed < 0.0f
+        || clearRed > 1.0f || !std::isfinite(clearGreen) || clearGreen < 0.0f
+        || clearGreen > 1.0f || !std::isfinite(clearBlue) || clearBlue < 0.0f
+        || clearBlue > 1.0f) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        if (!runtime->isFrameOpen()) {
+            return NativePresentationRuntimeOperationResult::InvalidArgument;
+        }
+        const float clearColor[3] = {clearRed, clearGreen, clearBlue};
+        return barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+            submitResult,
+            [runtime, &clearColor] {
+                return runtime->submitAndPresentClearFrame(clearColor);
+            });
     } catch (...) {
         *submitResult = {};
         return NativePresentationRuntimeOperationResult::InternalFailure;

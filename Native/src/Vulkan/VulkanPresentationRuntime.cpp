@@ -461,6 +461,19 @@ VulkanPresentationRuntime::submitAndPresentFrame(VkCommandBuffer commandBuffer) 
     return submitResult;
 }
 
+VulkanPresentationRuntime::SubmitFrameResult
+VulkanPresentationRuntime::submitAndPresentClearFrame(const float clearColor[3]) {
+    if (!m_isFrameOpen) {
+        SubmitFrameResult submitResult{};
+        submitResult.vulkanResult = VK_NOT_READY;
+        return submitResult;
+    }
+
+    const VkCommandBuffer commandBuffer = m_frameCommandBuffers[m_currentFrameSlot];
+    recordClearCommandBuffer(commandBuffer, m_images[m_acquiredImageIndex], clearColor);
+    return submitAndPresentFrame(commandBuffer);
+}
+
 void VulkanPresentationRuntime::recordClearCommandBuffer(VkCommandBuffer commandBuffer,
                                                          VkImage swapchainImage,
                                                          const float clearColor[3]) {
@@ -525,9 +538,7 @@ VulkanPresentationRuntime::SubmitFrameResult VulkanPresentationRuntime::presentC
         submitResult.vulkanResult = outBeginResult.vulkanResult;
         return submitResult;
     }
-    VkCommandBuffer commandBuffer = m_frameCommandBuffers[outBeginResult.frameSlotIndex];
-    recordClearCommandBuffer(commandBuffer, m_images[outBeginResult.imageIndex], clearColor);
-    return submitAndPresentFrame(commandBuffer);
+    return submitAndPresentClearFrame(clearColor);
 }
 
 } // namespace barrieww

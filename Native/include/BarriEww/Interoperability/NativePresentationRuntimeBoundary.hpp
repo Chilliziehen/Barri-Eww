@@ -216,6 +216,25 @@ barriEwwSubmitPresentationFrameVersion1(
 
 /**
  * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
+ * @brief Non-critical call that clears, submits and presents an already-open frame.
+ * @param std::uint64_t runtimeAddress Native-owned runtime address
+ * @param float clearRed Clear color red channel in [0, 1]
+ * @param float clearGreen Clear color green channel in [0, 1]
+ * @param float clearBlue Clear color blue channel in [0, 1]
+ * @param barrieww::NativePresentationSubmitFrameResultVersion1* submitResult Writable result,
+ *        cleared before work
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns submitResult; Native writes it synchronously and does
+ *          not retain its address.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentClearFrameVersion1(
+    std::uint64_t runtimeAddress, float clearRed, float clearGreen, float clearBlue,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
  * @brief Begins a frame, clears the acquired swapchain image to the given color, submits and
  *        presents it (the baseline visible milestone). Returns both the begin identity/metrics
  *        and the submit status in one call.
