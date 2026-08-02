@@ -26,7 +26,8 @@ constexpr bool queueFamilySupportsRequiredOperations(VkQueueFlags availableQueue
 /**
  * @note ThreadSafety: Pure and safe from every thread.
  * @brief Reports strict Vulkan 1.2 KHR dynamic-rendering device eligibility.
- * @param std::uint32_t apiVersion Physical-device Vulkan API version
+ * @param std::uint32_t applicationProgrammingInterfaceVersion Physical-device Vulkan
+ *        application programming interface version
  * @param bool hasDynamicRenderingExtension Whether VK_KHR_dynamic_rendering is
  * advertised
  * @param bool hasDynamicRenderingFeature Whether its dynamicRendering feature
@@ -35,11 +36,12 @@ constexpr bool queueFamilySupportsRequiredOperations(VkQueueFlags availableQueue
  * @warning MemoryOwnership: Accepts and returns values without accessing
  * external memory.
  */
-constexpr bool isStrictDynamicRenderingDeviceEligible(std::uint32_t apiVersion,
-                                                      bool hasDynamicRenderingExtension,
-                                                      bool hasDynamicRenderingFeature) noexcept {
-    return apiVersion >= VK_API_VERSION_1_2 && hasDynamicRenderingExtension &&
-           hasDynamicRenderingFeature;
+constexpr bool isStrictDynamicRenderingDeviceEligible(
+    std::uint32_t applicationProgrammingInterfaceVersion,
+    bool hasDynamicRenderingExtension,
+    bool hasDynamicRenderingFeature) noexcept {
+    return applicationProgrammingInterfaceVersion >= VK_API_VERSION_1_2
+        && hasDynamicRenderingExtension && hasDynamicRenderingFeature;
 }
 
 } // namespace barrieww::testing

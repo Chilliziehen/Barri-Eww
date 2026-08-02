@@ -175,10 +175,12 @@ private:
             if constexpr (requiresVulkan12DynamicRenderingExtension) {
                 VkPhysicalDeviceProperties candidateProperties{};
                 vkGetPhysicalDeviceProperties(candidateDevice, &candidateProperties);
+                const std::uint32_t applicationProgrammingInterfaceVersion =
+                    candidateProperties.apiVersion;
                 const bool hasDynamicRenderingExtension = supportsDeviceExtension(
                     candidateDevice, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
                 bool hasDynamicRenderingFeature = false;
-                if (candidateProperties.apiVersion >= VK_API_VERSION_1_2
+                if (applicationProgrammingInterfaceVersion >= VK_API_VERSION_1_2
                     && hasDynamicRenderingExtension) {
                     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures{};
                     dynamicRenderingFeatures.sType =
@@ -191,7 +193,7 @@ private:
                         dynamicRenderingFeatures.dynamicRendering == VK_TRUE;
                 }
                 if (!isStrictDynamicRenderingDeviceEligible(
-                        candidateProperties.apiVersion,
+                        applicationProgrammingInterfaceVersion,
                         hasDynamicRenderingExtension,
                         hasDynamicRenderingFeature)) {
                     continue;
