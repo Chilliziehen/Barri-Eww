@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-08-02
+
+- [新增] §6.7.4 [FfmBinding.md](FfmBinding.md) —— 所有者裁决并提升 P28：固化
+  host-image presentation additive Version 1 ABI。新增 presentation 中立 RGBA/BGRA UNORM
+  format、96-byte `NativeHostImagePresentationRuntimeCreateInfoVersion1`、独立 create/submit
+  symbols，以及 borrowed host image ownership、exact extent、requested surface format 与
+  non-critical downcall 规则；旧 Version 1 record/symbol 原样保留，禁止复用 reserved field，
+  从而在不破坏已发布 ABI 的前提下支持 ADR-0006 D9 第 2 步。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P28 状态由 `PROPOSED` 提升为
+  `ACCEPTED` 并迁入 §6.7.4。
+
+---
+
 ## 2026-07-26
 
 - [新增] [ADR-0005](../adr/ADR-0005-SceneDataAccessAndParameterDsl.md) —— 固化 Minecraft

@@ -161,3 +161,67 @@ present result/mode 与 sharing mode。所有字段使用固定宽度；完整 o
 metrics 表示**已完成 frame**：`beginFrame` 在复用一个 slot 时返回该 slot 上一次 frame 的记录，
 并保留原 `frameSequence`；无效 GPU query 由 validFlags 表达，不返回虚假 0 duration。Java 自行
 测 `JavaParameterWriteNanoseconds` 并按 frameSequence 合并。
+
+### §6.7.4 Host-image presentation additive Version 1 ABI（P28）
+
+ADR-0006 D9 第 2 步以 additive Version 1 ABI 导入并采样宿主 color image。该路径属于
+presentation interoperability，不进入 BECS、P22 或图模块。
+
+presentation 中立 format 固定为：
+
+| 值 | `PresentationImageFormat` |
+| -- | ------------------------- |
+| 1 | `R8G8B8A8Unorm` |
+| 2 | `B8G8R8A8Unorm` |
+
+新增 `NativeHostImagePresentationRuntimeCreateInfoVersion1`，布局固定为：
+
+| offset | 字段 | 类型 |
+| ------ | ---- | ---- |
+| 0 | `instanceHandle` | `uint64` |
+| 8 | `physicalDeviceHandle` | `uint64` |
+| 16 | `logicalDeviceHandle` | `uint64` |
+| 24 | `surfaceHandle` | `uint64` |
+| 32 | `graphicsQueueHandle` | `uint64` |
+| 40 | `presentQueueHandle` | `uint64` |
+| 48 | `graphicsQueueFamilyIndex` | `uint32` |
+| 52 | `presentQueueFamilyIndex` | `uint32` |
+| 56 | `framebufferWidth` | `uint32` |
+| 60 | `framebufferHeight` | `uint32` |
+| 64 | `framesInFlightCount` | `uint32` |
+| 68 | `reservedFlags`（必须为 0） | `uint32` |
+| 72 | `hostImageHandle` | `uint64` |
+| 80 | `hostImageFormatValue` | `uint32` |
+| 84 | `requestedSurfaceFormatValue` | `uint32` |
+| 88 | `hostImageWidth` | `uint32` |
+| 92 | `hostImageHeight` | `uint32` |
+
+该 record 固定 `sizeof == 96`、`alignof == 8`，必须以 Native compile-time assertions 与
+Core layout tests 双侧钉死。新增两个完整命名的 C symbols：
+
+```cpp
+NativePresentationRuntimeOperationResult
+barriEwwCreateHostImagePresentationRuntimeVersion1(
+    const NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo,
+    NativePresentationRuntimeCreateResultVersion1* createResult) noexcept;
+
+NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentHostImageFrameVersion1(
+    std::uint64_t runtimeAddress,
+    NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;
+```
+
+固定语义：
+
+1. 旧 `NativePresentationRuntimeCreateInfoVersion1`、旧 symbol 与 status record 原样保留；
+   禁止复用旧 `reservedFlags` 传递 host-image 数据。
+2. Native 借用 host `VkImage`，不拥有 image 或 memory；Native 只拥有为 sampled presentation
+   创建的 view、descriptor、pipeline 与 command buffers，且必须在宿主销毁 image 前退休。
+3. `hostImageHandle` 非零；host、framebuffer 与实际 swapchain extent 必须 exact match；format
+   必须为上述中立 UNORM 值。
+4. `requestedSurfaceFormatValue` 必须由 surface 以 `SRGB_NONLINEAR` color space 实际支持；
+   不允许静默替换为 SRGB format，也不在 shader 内做色彩空间抵消。
+5. create 与 submit 涉及分配、driver synchronization 或 queue operation，FFM downcall 固定
+   non-critical；binding 构造期解析一次 handle，frame path 不做 symbol lookup。
+6. submit 要求已有 open frame，并以该 frame 的固定 slot/image index 选择预录 command；
+   operation/result/exception containment 与既有 presentation Version 1 规则一致。
