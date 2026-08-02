@@ -4,9 +4,7 @@ import barrieww.core.interoperability.NativePresentationRuntimeException;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.mod.BarriEwwClientInitializer;
 import barrieww.mod.CorePresentationRuntimeFactory;
-import barrieww.mod.MinecraftClearTakeoverReadiness;
 import barrieww.mod.MinecraftVulkanBootstrapHandles;
-import barrieww.mod.PresentationGenerationInputs;
 import barrieww.mod.PresentationTakeoverCoordinator;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
@@ -87,14 +85,14 @@ public abstract class VulkanGpuSurfaceMixin {
 
     /**
      * @note ThreadSafety: Render-thread-confined generation transition at backend configure HEAD.
-     * Supplies complete or explicitly unready generation inputs, mirrors coordinator recreation
-     * state, and cancels vanilla swapchain creation only after a primed Native generation exists or
-     * terminal interception is required.
+     * Supplies null preparation until Task9 atomically wires host-image extraction and generation,
+     * mirrors coordinator recreation state, and therefore leaves this intermediate branch on vanilla
+     * presentation unless catastrophic terminal interception was already entered.
      *
      * @param GpuSurface.Configuration configuration Requested surface generation configuration
      * @param CallbackInfo callbackInformation Cancellable Mixin callback metadata
-     * @warning MemoryOwnership: Bootstrap handles and host texture readiness are borrowed snapshots;
-     * the coordinator owns any runtime generation created from them.
+     * @warning MemoryOwnership: Null preparation borrows no host image. The coordinator retains sole
+     * ownership of any earlier runtime generation until it completes configure policy.
      */
     @Inject(
         method = "configure(Lcom/mojang/blaze3d/systems/GpuSurface$Configuration;)V",
@@ -109,17 +107,7 @@ public abstract class VulkanGpuSurfaceMixin {
             return;
         }
 
-        Optional<PresentationBootstrapHandles> bootstrapHandles =
-            MinecraftVulkanBootstrapHandles.extractBorrowedHandles(m_device, m_surface);
-        boolean isHostColorTextureReady =
-            MinecraftClearTakeoverReadiness.isMinecraftColorTextureReady();
-        PresentationGenerationInputs generationInputs = new PresentationGenerationInputs(
-            bootstrapHandles.orElse(null),
-            configuration.width(),
-            configuration.height(),
-            true,
-            isHostColorTextureReady);
-        boolean shouldCancelVanillaConfigure = coordinator.configure(generationInputs);
+        boolean shouldCancelVanillaConfigure = coordinator.configure(null);
         m_swapchainSuboptimal = coordinator.requiresReconfiguration();
         if (shouldCancelVanillaConfigure) {
             callbackInformation.cancel();

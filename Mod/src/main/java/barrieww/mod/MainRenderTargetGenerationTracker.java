@@ -42,7 +42,7 @@ public final class MainRenderTargetGenerationTracker {
      * @warning MemoryOwnership: Successful removal ends the tracker's borrowed listener reference.
      */
     public static boolean unregisterResizeListener(MainRenderTargetResizeListener resizeListener) {
-        if (s_resizeListener != resizeListener) {
+        if (resizeListener == null || s_resizeListener != resizeListener) {
             return false;
         }
         s_resizeListener = null;

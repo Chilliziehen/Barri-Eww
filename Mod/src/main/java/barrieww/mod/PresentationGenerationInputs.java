@@ -1,7 +1,6 @@
 package barrieww.mod;
 
 import barrieww.core.interoperability.HostImagePresentationBinding;
-import barrieww.core.interoperability.PresentationImageFormat;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 
 /**
@@ -25,40 +24,6 @@ public record PresentationGenerationInputs(
     HostImagePresentationBinding hostImageBinding,
     long hostTargetGeneration) implements PresentationGenerationPreparation {
 
-    /**
-     * Preserves source compatibility until Task9 replaces eager clear-readiness mixin preparation.
-     * The zero generation deliberately keeps this legacy snapshot unready for host-image takeover.
-     *
-     * @param PresentationBootstrapHandles bootstrapHandles Borrowed bootstrap handles, or null
-     * @param int framebufferWidth Framebuffer width in pixels
-     * @param int framebufferHeight Framebuffer height in pixels
-     * @param boolean isNativeLibraryReady Whether Native extraction completed successfully
-     * @param boolean isHostColorTextureReady Whether the legacy clear-stage host texture was ready
-     * @warning MemoryOwnership: Synthetic binding values are never passed to Native because the
-     * zero generation fails readiness; all actual handles remain caller-owned.
-     */
-    public PresentationGenerationInputs(
-        PresentationBootstrapHandles bootstrapHandles,
-        int framebufferWidth,
-        int framebufferHeight,
-        boolean isNativeLibraryReady,
-        boolean isHostColorTextureReady) {
-        this(
-            bootstrapHandles,
-            framebufferWidth,
-            framebufferHeight,
-            isNativeLibraryReady,
-            isHostColorTextureReady
-                ? new HostImagePresentationBinding(
-                    1L,
-                    PresentationImageFormat.B8G8R8A8_UNORM,
-                    PresentationImageFormat.B8G8R8A8_UNORM,
-                    framebufferWidth,
-                    framebufferHeight)
-                : null,
-            0L);
-    }
-
     /** Returns whether every configure prerequisite is valid without throwing. */
     public boolean isReady() {
         return bootstrapHandles != null
@@ -74,19 +39,9 @@ public record PresentationGenerationInputs(
             && hostImageBinding.height() == framebufferHeight;
     }
 
-    /** Returns this already captured immutable snapshot for source-compatible eager callers. */
+    /** Returns this already captured immutable snapshot when directly supplied as preparation. */
     @Override
     public PresentationGenerationInputs prepare() {
         return this;
-    }
-
-    /** Returns whether Native extraction was ready in this snapshot. */
-    public boolean isNativeLibraryReady() {
-        return isNativeLibraryReady;
-    }
-
-    /** Returns whether the legacy eager caller supplied a host texture snapshot. */
-    public boolean isHostColorTextureReady() {
-        return hostImageBinding != null;
     }
 }

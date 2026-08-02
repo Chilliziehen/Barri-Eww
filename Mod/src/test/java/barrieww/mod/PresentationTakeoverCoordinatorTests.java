@@ -70,6 +70,16 @@ final class PresentationTakeoverCoordinatorTests {
             1L).isReady());
     }
 
+    /** Verifies generation inputs expose only the canonical non-legacy readiness shape. */
+    @Test
+    void generationInputsHaveOneCanonicalConstructorAndNoBooleanHostReadinessAccessor() {
+        assertEquals(1, PresentationGenerationInputs.class.getDeclaredConstructors().length);
+        assertEquals(6,
+            PresentationGenerationInputs.class.getDeclaredConstructors()[0].getParameterCount());
+        assertThrows(NoSuchMethodException.class, () ->
+            PresentationGenerationInputs.class.getDeclaredMethod("isHostColorTextureReady"));
+    }
+
     /** Verifies replacement drains before preparation and commits only after a clear prime. */
     @Test
     void configureOrdersClosePreparationCreateBeginPrimeAndCommit() {
@@ -235,9 +245,9 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.isTakenOver());
     }
 
-    /** Verifies detach failure followed by close failure enters terminal interception once. */
+    /** Verifies detach and close failures enter catastrophic terminal interception once. */
     @Test
-    void detachFailureCloseFailurePreservesTerminalInterception() {
+    void detachAndCloseFailuresEnterCatastrophicTerminalInterception() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException detachFailure = runtimeFailure("detach");
@@ -268,11 +278,15 @@ final class PresentationTakeoverCoordinatorTests {
     void invalidOrUnreadyInitialConfigurePermanentlyCommitsVanilla() {
         PresentationGenerationInputs[] unavailableInputs = {
             null,
-            new PresentationGenerationInputs(null, 800, 600, true, true),
-            new PresentationGenerationInputs(s_bootstrapHandles, 0, 600, true, true),
-            new PresentationGenerationInputs(s_bootstrapHandles, 800, -1, true, true),
-            new PresentationGenerationInputs(s_bootstrapHandles, 800, 600, false, true),
-            new PresentationGenerationInputs(s_bootstrapHandles, 800, 600, true, false)
+            new PresentationGenerationInputs(null, 800, 600, true, s_hostImageBinding, 1L),
+            new PresentationGenerationInputs(
+                s_bootstrapHandles, 0, 600, true, s_hostImageBinding, 1L),
+            new PresentationGenerationInputs(
+                s_bootstrapHandles, 800, -1, true, s_hostImageBinding, 1L),
+            new PresentationGenerationInputs(
+                s_bootstrapHandles, 800, 600, false, s_hostImageBinding, 1L),
+            new PresentationGenerationInputs(
+                s_bootstrapHandles, 800, 600, true, null, 1L)
         };
         for (PresentationGenerationInputs unavailableInput : unavailableInputs) {
             RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
@@ -402,9 +416,9 @@ final class PresentationTakeoverCoordinatorTests {
         verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(submitFailure));
     }
 
-    /** Verifies failed candidate close enters stable terminal interception with suppression. */
+    /** Verifies failed candidate close enters catastrophic terminal interception with suppression. */
     @Test
-    void checkedPrimeFailureCloseFailureEntersTerminalInterceptionWithSuppression() {
+    void candidatePrimeAndCloseFailuresEnterCatastrophicTerminalInterception() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("candidate", runtimeFactory.m_events);
         NativePresentationRuntimeException submitFailure = runtimeFailure("primeSubmit");
@@ -737,7 +751,7 @@ final class PresentationTakeoverCoordinatorTests {
 
     /** Verifies resize close failure preserves interception and never creates a second swapchain. */
     @Test
-    void resizeCloseFailureEntersTerminalInterceptionWithoutReplacementCreation() {
+    void replacementCloseFailureEntersCatastrophicTerminalInterception() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         runtimeFactory.m_nextRuntime = runtime;
@@ -889,7 +903,16 @@ final class PresentationTakeoverCoordinatorTests {
         return readyInputs(framebufferWidth, framebufferHeight, 1L);
     }
 
-    /** Creates ready inputs with an explicit captured host-target generation. */
+    /**
+     * @note ThreadSafety: Concurrency-safe immutable test-value creation.
+     * Creates ready inputs with an explicit captured host-target generation.
+     *
+     * @param int framebufferWidth Positive test framebuffer width
+     * @param int framebufferHeight Positive test framebuffer height
+     * @param long hostTargetGeneration Positive captured host-target generation
+     * @return PresentationGenerationInputs Ready immutable test inputs
+     * @warning MemoryOwnership: Returned inputs borrow shared test handle values and binding data.
+     */
     private static PresentationGenerationInputs readyInputs(
         int framebufferWidth,
         int framebufferHeight,
@@ -957,6 +980,7 @@ final class PresentationTakeoverCoordinatorTests {
          * @param int framebufferWidth Test framebuffer width
          * @param int framebufferHeight Test framebuffer height
          * @param int framesInFlightCount Requested frame-slot count
+         * @param HostImagePresentationBinding hostImageBinding Borrowed exact host image binding
          * @return PresentationRuntime Configured fake runtime
          * @throws NativeLibraryLoadingException Configured checked loading failure
          * @throws NativePresentationRuntimeException Configured checked runtime failure
@@ -1074,7 +1098,13 @@ final class PresentationTakeoverCoordinatorTests {
             return m_submitStatus;
         }
 
-        /** Records one host-resource detach attempt and optionally fails. */
+        /**
+         * @note ThreadSafety: Confined to the invoking test thread.
+         * Records one host-resource detach attempt and optionally fails.
+         *
+         * @throws NativePresentationRuntimeException Configured checked detach failure
+         * @warning MemoryOwnership: Models ending the runtime borrow without owning a host image.
+         */
         @Override
         public void detachHostImagePresentationResources()
             throws NativePresentationRuntimeException {
@@ -1085,7 +1115,14 @@ final class PresentationTakeoverCoordinatorTests {
             }
         }
 
-        /** Records one host-image submission and returns the configured submit status. */
+        /**
+         * @note ThreadSafety: Confined to the invoking test thread.
+         * Records one host-image submission and returns the configured submit status.
+         *
+         * @return PresentationFrameStatus Configured semantic host submission status
+         * @throws NativePresentationRuntimeException Configured checked submission failure
+         * @warning MemoryOwnership: Observes fake borrowed host-image state without ownership transfer.
+         */
         @Override
         public PresentationFrameStatus submitAndPresentHostImageFrame()
             throws NativePresentationRuntimeException {

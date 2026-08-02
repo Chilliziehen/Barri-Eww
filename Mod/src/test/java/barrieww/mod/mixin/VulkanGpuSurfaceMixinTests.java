@@ -19,9 +19,7 @@ import static org.mockito.Mockito.when;
 import barrieww.core.interoperability.NativePresentationRuntimeException;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.mod.BarriEwwClientInitializer;
-import barrieww.mod.MinecraftClearTakeoverReadiness;
 import barrieww.mod.MinecraftVulkanBootstrapHandles;
-import barrieww.mod.PresentationGenerationInputs;
 import barrieww.mod.PresentationTakeoverCoordinator;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
@@ -33,7 +31,6 @@ import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 import org.slf4j.Logger;
@@ -119,20 +116,18 @@ final class VulkanGpuSurfaceMixinTests {
     }
 
     /**
-     * @note ThreadSafety: Not concurrency-safe because scoped static adapters are replaced.
-     * Uses the requested Native extent and cancels after accepting static clear-takeover readiness,
-     * even while Minecraft still owns an older host texture extent.
+     * @note ThreadSafety: Reflection mutates one test-owned mixin instance.
+     * Passes null preparation until Task9 atomically wires host-image extraction and generation.
      *
      * @throws ReflectiveOperationException When injected callback state cannot be inspected
-     * @warning MemoryOwnership: All handles and callback state are test-owned or borrowed mocks.
+     * @warning MemoryOwnership: Callback state and the coordinator remain test-owned mocks.
      */
     @Test
-    void configureUsesRequestedExtentWhenOlderHostTextureIsReady()
+    void configurePassesNullPreparationUntilHostImageWiringLands()
         throws ReflectiveOperationException {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         VulkanDevice surfaceDevice = mock(VulkanDevice.class);
         PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
-        PresentationBootstrapHandles bootstrapHandles = bootstrapHandles();
         GpuSurface.Configuration configuration = new GpuSurface.Configuration(
             1100,
             700,
@@ -142,34 +137,14 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
         setField(surfaceMixin, "m_swapchainSuboptimal", true);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
-        try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
-                 mockStatic(MinecraftVulkanBootstrapHandles.class);
-             MockedStatic<MinecraftClearTakeoverReadiness> textureReadiness =
-                 mockStatic(MinecraftClearTakeoverReadiness.class)) {
-            handlesAdapter.when(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
-                surfaceDevice,
-                4L)).thenReturn(Optional.of(bootstrapHandles));
-            textureReadiness.when(
-                MinecraftClearTakeoverReadiness::isMinecraftColorTextureReady)
-                .thenReturn(true);
+        invokeConfigure(surfaceMixin, configuration, callbackInformation);
 
-            invokeConfigure(surfaceMixin, configuration, callbackInformation);
-
-            ArgumentCaptor<PresentationGenerationInputs> inputsCaptor =
-                ArgumentCaptor.forClass(PresentationGenerationInputs.class);
-            verify(coordinator).configure(inputsCaptor.capture());
-            PresentationGenerationInputs inputs = inputsCaptor.getValue();
-            assertSame(bootstrapHandles, inputs.bootstrapHandles());
-            assertEquals(1100, inputs.framebufferWidth());
-            assertEquals(700, inputs.framebufferHeight());
-            assertTrue(inputs.isNativeLibraryReady());
-            assertTrue(inputs.isHostColorTextureReady());
-            assertTrue(callbackInformation.isCancelled());
-            assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
-        }
+        verify(coordinator).configure(null);
+        assertTrue(callbackInformation.isCancelled());
+        assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }
 
     /**
@@ -189,41 +164,25 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_device", surfaceDevice);
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.any())).thenReturn(false);
+        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(false);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
-        try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
-                 mockStatic(MinecraftVulkanBootstrapHandles.class);
-             MockedStatic<MinecraftClearTakeoverReadiness> textureReadiness =
-                 mockStatic(MinecraftClearTakeoverReadiness.class)) {
-            handlesAdapter.when(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
-                surfaceDevice,
-                4L)).thenReturn(Optional.empty());
-            textureReadiness.when(
-                MinecraftClearTakeoverReadiness::isMinecraftColorTextureReady)
-                .thenReturn(false);
+        invokeConfigure(surfaceMixin, configuration(), callbackInformation);
 
-            invokeConfigure(surfaceMixin, configuration(), callbackInformation);
-
-            ArgumentCaptor<PresentationGenerationInputs> inputsCaptor =
-                ArgumentCaptor.forClass(PresentationGenerationInputs.class);
-            verify(coordinator).configure(inputsCaptor.capture());
-            assertNull(inputsCaptor.getValue().bootstrapHandles());
-            assertFalse(inputsCaptor.getValue().isHostColorTextureReady());
-            assertFalse(callbackInformation.isCancelled());
-            assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
-        }
+        verify(coordinator).configure(null);
+        assertFalse(callbackInformation.isCancelled());
+        assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }
 
     /**
      * @note ThreadSafety: Not concurrency-safe because scoped static adapters are replaced.
-     * Cancels vanilla configure for terminal interception without scheduling a stale recreation.
+     * Cancels vanilla configure for catastrophic terminal interception without stale recreation.
      *
      * @throws ReflectiveOperationException When injected callback state cannot be inspected
      * @warning MemoryOwnership: All handles and callback state are test-owned or borrowed mocks.
      */
     @Test
-    void configureTerminalInterceptionDoesNotScheduleReconfiguration()
+    void configureCatastrophicTerminalInterceptionDoesNotScheduleReconfiguration()
         throws ReflectiveOperationException {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         VulkanDevice surfaceDevice = mock(VulkanDevice.class);
@@ -233,25 +192,14 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, "m_swapchainSuboptimal", true);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
-        try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
-                 mockStatic(MinecraftVulkanBootstrapHandles.class);
-             MockedStatic<MinecraftClearTakeoverReadiness> textureReadiness =
-                 mockStatic(MinecraftClearTakeoverReadiness.class)) {
-            handlesAdapter.when(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
-                surfaceDevice,
-                4L)).thenReturn(Optional.of(bootstrapHandles()));
-            textureReadiness.when(
-                MinecraftClearTakeoverReadiness::isMinecraftColorTextureReady)
-                .thenReturn(true);
+        invokeConfigure(surfaceMixin, configuration(), callbackInformation);
 
-            invokeConfigure(surfaceMixin, configuration(), callbackInformation);
-
-            assertTrue(callbackInformation.isCancelled());
-            assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
-        }
+        verify(coordinator).configure(null);
+        assertTrue(callbackInformation.isCancelled());
+        assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }
 
     /**

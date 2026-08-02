@@ -16,7 +16,11 @@ import org.junit.jupiter.api.Test;
 final class MainRenderTargetGenerationTrackerTests {
     private MainRenderTargetResizeListener m_registeredListener;
 
-    /** Removes the exact listener retained by a completed test. */
+    /**
+     * @note ThreadSafety: Runs serially on the same test thread as tracker access.
+     * Removes the exact listener retained by a completed test.
+     * @warning MemoryOwnership: Successful unregister releases the static borrowed reference.
+     */
     @AfterEach
     void unregisterListener() {
         if (m_registeredListener != null) {
@@ -75,14 +79,39 @@ final class MainRenderTargetGenerationTrackerTests {
         assertEquals(initialGeneration, MainRenderTargetGenerationTracker.currentGeneration());
     }
 
-    /** Verifies only the exact registered identity can unregister the active listener. */
+    /** Verifies null unregister reports absent when no listener is active. */
     @Test
-    void unregisterRequiresExactListenerIdentityAndReleasesRetention() {
+    void unregisterNullWithoutActiveListenerReturnsFalse() {
+        assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(null));
+        assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+    }
+
+    /** Verifies null unregister cannot remove an active listener. */
+    @Test
+    void unregisterNullPreservesActiveListener() {
+        m_registeredListener = () -> false;
+        MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
+
+        assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(null));
+        assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+    }
+
+    /** Verifies a wrong listener identity cannot remove an active listener. */
+    @Test
+    void unregisterWrongIdentityPreservesActiveListener() {
         m_registeredListener = () -> false;
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
         assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(() -> false));
         assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+    }
+
+    /** Verifies the exact registered identity releases listener retention. */
+    @Test
+    void unregisterExactIdentityReleasesRetention() {
+        m_registeredListener = () -> false;
+        MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
+
         assertTrue(MainRenderTargetGenerationTracker.unregisterResizeListener(m_registeredListener));
         m_registeredListener = null;
         assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
