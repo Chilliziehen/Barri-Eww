@@ -1,11 +1,17 @@
 package barrieww.mod.mixin;
 
+import barrieww.core.interoperability.HostImagePresentationBinding;
 import barrieww.core.interoperability.NativePresentationRuntimeException;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.mod.BarriEwwClientInitializer;
 import barrieww.mod.CorePresentationRuntimeFactory;
+import barrieww.mod.MainRenderTargetGenerationTracker;
+import barrieww.mod.MainRenderTargetResizeListener;
+import barrieww.mod.MinecraftHostImagePresentationBindingExtractor;
 import barrieww.mod.MinecraftVulkanBootstrapHandles;
+import barrieww.mod.PresentationGenerationInputs;
 import barrieww.mod.PresentationTakeoverCoordinator;
+import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.textures.GpuTextureView;
@@ -13,6 +19,8 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
 import java.nio.file.Path;
 import java.util.Optional;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Final;
@@ -41,6 +49,10 @@ public abstract class VulkanGpuSurfaceMixin {
     @Final
     private long m_surface;
 
+    @Shadow(aliases = "swapchainImageFormat")
+    @Final
+    private int m_swapchainImageFormat;
+
     @Shadow(aliases = "swapchainSuboptimal")
     private boolean m_swapchainSuboptimal;
 
@@ -49,6 +61,21 @@ public abstract class VulkanGpuSurfaceMixin {
 
     @Unique
     private PresentationTakeoverCoordinator barrieww$m_presentationTakeoverCoordinator;
+
+    @Unique
+    private MainRenderTargetResizeListener barrieww$m_mainRenderTargetResizeListener;
+
+    @Unique
+    private long barrieww$m_lastCommittedHostTargetGeneration;
+
+    @Unique
+    private long barrieww$m_lastCommittedHostImageHandle;
+
+    @Unique
+    private long barrieww$m_pendingHostTargetGeneration;
+
+    @Unique
+    private long barrieww$m_pendingHostImageHandle;
 
     /**
      * @note ThreadSafety: Called once at constructor TAIL on Minecraft's render initialization thread.
@@ -77,22 +104,45 @@ public abstract class VulkanGpuSurfaceMixin {
 
         Optional<Path> nativeLibraryPath = BarriEwwClientInitializer.nativeLibraryPath();
         if (nativeLibraryPath.isPresent()) {
-            barrieww$m_presentationTakeoverCoordinator = new PresentationTakeoverCoordinator(
+            PresentationTakeoverCoordinator coordinator = new PresentationTakeoverCoordinator(
                 new CorePresentationRuntimeFactory(nativeLibraryPath.orElseThrow()),
                 barrieww$m_logger);
+            barrieww$m_presentationTakeoverCoordinator = coordinator;
+            MainRenderTargetResizeListener resizeListener = () -> {
+                PresentationTakeoverCoordinator activeCoordinator =
+                    barrieww$m_presentationTakeoverCoordinator;
+                return activeCoordinator == null
+                    || activeCoordinator.detachHostImagePresentationResources();
+            };
+            barrieww$m_mainRenderTargetResizeListener = resizeListener;
+            try {
+                MainRenderTargetGenerationTracker.registerResizeListener(resizeListener);
+            } catch (RuntimeException registrationFailure) {
+                barrieww$m_mainRenderTargetResizeListener = null;
+                barrieww$m_presentationTakeoverCoordinator = null;
+                try {
+                    coordinator.close();
+                } catch (NativePresentationRuntimeException closeFailure) {
+                    closeFailure.addSuppressed(registrationFailure);
+                    barrieww$logCoordinatorCloseFailure(closeFailure);
+                }
+                barrieww$m_logger.error(
+                    "Presentation takeover resize listener registration failed",
+                    registrationFailure);
+            }
         }
     }
 
     /**
      * @note ThreadSafety: Render-thread-confined generation transition at backend configure HEAD.
-     * Supplies null preparation until Task9 atomically wires host-image extraction and generation,
-     * mirrors coordinator recreation state, and therefore leaves this intermediate branch on vanilla
-     * presentation unless catastrophic terminal interception was already entered.
+     * Retires the old runtime before deferred complete target resize and exact host-image extraction,
+     * commits the validated generation-handle pair only after coordinator publication, and mirrors
+     * coordinator recreation state.
      *
      * @param GpuSurface.Configuration configuration Requested surface generation configuration
      * @param CallbackInfo callbackInformation Cancellable Mixin callback metadata
-     * @warning MemoryOwnership: Null preparation borrows no host image. The coordinator retains sole
-     * ownership of any earlier runtime generation until it completes configure policy.
+     * @warning MemoryOwnership: Preparation borrows Minecraft handles only after old runtime retirement.
+     * The coordinator retains sole ownership of candidate and committed Native runtime generations.
      */
     @Inject(
         method = "configure(Lcom/mojang/blaze3d/systems/GpuSurface$Configuration;)V",
@@ -107,10 +157,101 @@ public abstract class VulkanGpuSurfaceMixin {
             return;
         }
 
-        boolean shouldCancelVanillaConfigure = coordinator.configure(null);
+        barrieww$m_pendingHostTargetGeneration = 0L;
+        barrieww$m_pendingHostImageHandle = 0L;
+        boolean shouldCancelVanillaConfigure = coordinator.configure(
+            () -> barrieww$prepareGeneration(configuration));
+        if (coordinator.hasCommittedHostImagePresentationGeneration()) {
+            barrieww$m_lastCommittedHostTargetGeneration =
+                barrieww$m_pendingHostTargetGeneration;
+            barrieww$m_lastCommittedHostImageHandle = barrieww$m_pendingHostImageHandle;
+        }
+        barrieww$m_pendingHostTargetGeneration = 0L;
+        barrieww$m_pendingHostImageHandle = 0L;
         m_swapchainSuboptimal = coordinator.requiresReconfiguration();
         if (shouldCancelVanillaConfigure) {
             callbackInformation.cancel();
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Render-thread-confined post-retirement configure callback.
+     * Resolves the current renderer and main target, performs a full public renderer resize when a
+     * positive requested extent differs, then extracts one generation-stable exact host binding.
+     * A previously committed generation cannot silently name a changed image handle.
+     *
+     * @param GpuSurface.Configuration configuration Requested positive framebuffer configuration
+     * @return PresentationGenerationInputs Exact ready generation inputs, or null when initialization,
+     * extent, generation, bootstrap, extraction, or handle validation is incomplete
+     * @warning MemoryOwnership: Minecraft and Vulkan handles remain borrowed. This callback runs only
+     * after the coordinator has closed the preceding runtime that could reference the old image.
+     */
+    @Unique
+    private PresentationGenerationInputs barrieww$prepareGeneration(
+        GpuSurface.Configuration configuration) {
+        try {
+            int framebufferWidth = configuration.width();
+            int framebufferHeight = configuration.height();
+            if (framebufferWidth <= 0 || framebufferHeight <= 0) {
+                return null;
+            }
+
+            Minecraft minecraft = Minecraft.getInstance();
+            if (minecraft == null) {
+                return null;
+            }
+            GameRenderer gameRenderer = minecraft.gameRenderer;
+            if (gameRenderer == null) {
+                return null;
+            }
+            RenderTarget mainRenderTarget = gameRenderer.mainRenderTarget();
+            if (mainRenderTarget == null) {
+                return null;
+            }
+            if (mainRenderTarget.width != framebufferWidth
+                || mainRenderTarget.height != framebufferHeight) {
+                gameRenderer.resize(framebufferWidth, framebufferHeight);
+            }
+
+            Optional<PresentationBootstrapHandles> bootstrapHandles =
+                MinecraftVulkanBootstrapHandles.extractBorrowedHandles(m_device, m_surface);
+            if (bootstrapHandles.isEmpty()) {
+                return null;
+            }
+            long generationBeforeExtraction =
+                MainRenderTargetGenerationTracker.currentGeneration();
+            Optional<HostImagePresentationBinding> hostImageBinding =
+                MinecraftHostImagePresentationBindingExtractor.extract(
+                    gameRenderer,
+                    framebufferWidth,
+                    framebufferHeight,
+                    m_swapchainImageFormat);
+            long generationAfterExtraction =
+                MainRenderTargetGenerationTracker.currentGeneration();
+            if (generationBeforeExtraction <= 0L
+                || generationBeforeExtraction != generationAfterExtraction
+                || hostImageBinding.isEmpty()) {
+                return null;
+            }
+
+            long hostImageHandle = hostImageBinding.orElseThrow().hostImageHandle();
+            if (barrieww$m_lastCommittedHostTargetGeneration == generationBeforeExtraction
+                && barrieww$m_lastCommittedHostImageHandle != 0L
+                && barrieww$m_lastCommittedHostImageHandle != hostImageHandle) {
+                return null;
+            }
+
+            barrieww$m_pendingHostTargetGeneration = generationBeforeExtraction;
+            barrieww$m_pendingHostImageHandle = hostImageHandle;
+            return new PresentationGenerationInputs(
+                bootstrapHandles.orElseThrow(),
+                framebufferWidth,
+                framebufferHeight,
+                true,
+                hostImageBinding.orElseThrow(),
+                generationBeforeExtraction);
+        } catch (RuntimeException initializationFailure) {
+            return null;
         }
     }
 
@@ -193,6 +334,13 @@ public abstract class VulkanGpuSurfaceMixin {
      */
     @Inject(method = "close()V", at = @At("HEAD"))
     private void barrieww$closePresentationTakeover(CallbackInfo callbackInformation) {
+        MainRenderTargetResizeListener resizeListener =
+            barrieww$m_mainRenderTargetResizeListener;
+        if (resizeListener != null) {
+            barrieww$m_mainRenderTargetResizeListener = null;
+            MainRenderTargetGenerationTracker.unregisterResizeListener(resizeListener);
+        }
+
         PresentationTakeoverCoordinator coordinator =
             barrieww$m_presentationTakeoverCoordinator;
         if (coordinator == null) {
@@ -205,12 +353,25 @@ public abstract class VulkanGpuSurfaceMixin {
             barrieww$m_logger.info(
                 "Presentation takeover closed before Minecraft Vulkan surface teardown");
         } catch (NativePresentationRuntimeException closeFailure) {
-            barrieww$m_logger.error(
-                "Presentation takeover close failed; Native symbol='"
-                    + closeFailure.nativeSymbolName()
-                    + "', operation result=" + closeFailure.operationResultCode()
-                    + ", Vulkan result=" + closeFailure.vulkanResult(),
-                closeFailure);
+            barrieww$logCoordinatorCloseFailure(closeFailure);
         }
+    }
+
+    /**
+     * @note ThreadSafety: Render-thread-confined slow teardown or initialization failure path.
+     * Reports complete checked Core close context exactly once at the call site.
+     *
+     * @param NativePresentationRuntimeException closeFailure Consumed-runtime close failure
+     * @warning MemoryOwnership: Logging observes but does not own the checked failure.
+     */
+    @Unique
+    private void barrieww$logCoordinatorCloseFailure(
+        NativePresentationRuntimeException closeFailure) {
+        barrieww$m_logger.error(
+            "Presentation takeover close failed; Native symbol='"
+                + closeFailure.nativeSymbolName()
+                + "', operation result=" + closeFailure.operationResultCode()
+                + ", Vulkan result=" + closeFailure.vulkanResult(),
+            closeFailure);
     }
 }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.inOrder;
@@ -78,6 +79,10 @@ final class VulkanGpuSurfaceMixinTests {
             handlesAdapter.verify(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
                 surfaceDevice,
                 4L));
+            invokeNoArgumentCallback(
+                surfaceMixin,
+                "barrieww$closePresentationTakeover",
+                new CallbackInfo("close", false));
         }
     }
 
@@ -117,13 +122,13 @@ final class VulkanGpuSurfaceMixinTests {
 
     /**
      * @note ThreadSafety: Reflection mutates one test-owned mixin instance.
-     * Passes null preparation until Task9 atomically wires host-image extraction and generation.
+     * Passes one deferred preparation callback and cancels only after coordinator takeover.
      *
      * @throws ReflectiveOperationException When injected callback state cannot be inspected
      * @warning MemoryOwnership: Callback state and the coordinator remain test-owned mocks.
      */
     @Test
-    void configurePassesNullPreparationUntilHostImageWiringLands()
+    void configurePassesDeferredHostGenerationPreparation()
         throws ReflectiveOperationException {
         VulkanGpuSurfaceMixin surfaceMixin = newSurfaceMixin();
         VulkanDevice surfaceDevice = mock(VulkanDevice.class);
@@ -137,12 +142,13 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
         setField(surfaceMixin, "m_swapchainSuboptimal", true);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
+        when(coordinator.configure(any())).thenReturn(true);
+        when(coordinator.hasCommittedHostImagePresentationGeneration()).thenReturn(true);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
         invokeConfigure(surfaceMixin, configuration, callbackInformation);
 
-        verify(coordinator).configure(null);
+        verify(coordinator).configure(any());
         assertTrue(callbackInformation.isCancelled());
         assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }
@@ -164,12 +170,12 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_device", surfaceDevice);
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(false);
+        when(coordinator.configure(any())).thenReturn(false);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
         invokeConfigure(surfaceMixin, configuration(), callbackInformation);
 
-        verify(coordinator).configure(null);
+        verify(coordinator).configure(any());
         assertFalse(callbackInformation.isCancelled());
         assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }
@@ -192,12 +198,12 @@ final class VulkanGpuSurfaceMixinTests {
         setField(surfaceMixin, "m_surface", 4L);
         setField(surfaceMixin, "m_swapchainSuboptimal", true);
         setField(surfaceMixin, s_coordinatorFieldName, coordinator);
-        when(coordinator.configure(org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
+        when(coordinator.configure(any())).thenReturn(true);
         when(coordinator.requiresReconfiguration()).thenReturn(false);
 
         invokeConfigure(surfaceMixin, configuration(), callbackInformation);
 
-        verify(coordinator).configure(null);
+        verify(coordinator).configure(any());
         assertTrue(callbackInformation.isCancelled());
         assertFalse((boolean) getField(surfaceMixin, "m_swapchainSuboptimal"));
     }

@@ -4,7 +4,9 @@
   "package": "barrieww.mod.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "GameRendererMixin",
     "GpuDeviceAccessor",
+    "RenderTargetMixin",
     "VulkanBackendMixin",
     "VulkanDeviceMixin",
     "VulkanGpuSurfaceMixin"

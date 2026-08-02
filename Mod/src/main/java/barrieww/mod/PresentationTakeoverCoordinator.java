@@ -248,6 +248,13 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         return m_requiresReconfiguration;
     }
 
+    /** Returns whether one host-image candidate runtime was successfully published and retained. */
+    public boolean hasCommittedHostImagePresentationGeneration() {
+        return m_runtime != null
+            && m_isTakenOver
+            && m_areHostImagePresentationResourcesAttached;
+    }
+
     /**
      * @note ThreadSafety: Render-thread-confined; call before complete host target resize.
      * Detaches borrowed host-image resources exactly once while preserving clear-capable runtime and

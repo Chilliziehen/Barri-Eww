@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyFloat;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
@@ -20,6 +22,7 @@ import barrieww.core.interoperability.HostImagePresentationBinding;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.core.interoperability.PresentationFrameStatus;
 import barrieww.core.interoperability.PresentationImageFormat;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +36,30 @@ import org.slf4j.Logger;
  * @warning MemoryOwnership: Fake runtimes model exclusive Native runtime ownership and record close.
  */
 final class PresentationTakeoverCoordinatorTests {
+    /** Verifies host generation commit state excludes unready and terminal configure outcomes. */
+    @Test
+    void committedHostGenerationQueryRequiresPublishedRuntime() throws Exception {
+        PresentationRuntimeFactory runtimeFactory = mock(PresentationRuntimeFactory.class);
+        PresentationRuntime candidateRuntime = mock(PresentationRuntime.class);
+        PresentationTakeoverCoordinator coordinator = new PresentationTakeoverCoordinator(
+            runtimeFactory,
+            mock(Logger.class));
+        Method committedGenerationMethod = PresentationTakeoverCoordinator.class.getMethod(
+            "hasCommittedHostImagePresentationGeneration");
+
+        assertFalse((boolean) committedGenerationMethod.invoke(coordinator));
+        when(runtimeFactory.create(
+            any(), anyInt(), anyInt(), anyInt(), any())).thenReturn(candidateRuntime);
+        when(candidateRuntime.beginFrameStatus(anyInt(), anyInt()))
+            .thenReturn(PresentationFrameStatus.SUCCESS);
+        when(candidateRuntime.submitAndPresentClearFrame(anyFloat(), anyFloat(), anyFloat()))
+            .thenReturn(PresentationFrameStatus.SUCCESS);
+
+        assertTrue(coordinator.configure(readyInputs(800, 600)));
+        assertTrue((boolean) committedGenerationMethod.invoke(coordinator));
+        coordinator.close();
+        assertFalse((boolean) committedGenerationMethod.invoke(coordinator));
+    }
     private static final PresentationBootstrapHandles s_bootstrapHandles =
         new PresentationBootstrapHandles(1L, 2L, 3L, 4L, 5L, 5L, 6, 6);
     private static final HostImagePresentationBinding s_hostImageBinding =
