@@ -41,6 +41,28 @@ public interface PresentationRuntime extends AutoCloseable {
         float clearBlue) throws NativePresentationRuntimeException;
 
     /**
+     * @note ThreadSafety: Thread-confined; call serially before host image destruction.
+     * Retires all runtime-owned resources that reference the borrowed host image while preserving
+     * the runtime, swapchain, open frame and clear path.
+     *
+     * @throws NativePresentationRuntimeException When Core cannot prove resource retirement
+     * @warning MemoryOwnership: A successful return ends Native borrowing of the host image without
+     * destroying the caller-owned image or memory.
+     */
+    void detachHostImagePresentationResources() throws NativePresentationRuntimeException;
+
+    /**
+     * @note ThreadSafety: Thread-confined; call serially for an open attached host-image frame.
+     * Submits and presents the prerecorded host-image composition command.
+     *
+     * @return PresentationFrameStatus Semantic submit-and-present status from Core
+     * @throws NativePresentationRuntimeException When Core reports an operation-level failure
+     * @warning MemoryOwnership: The runtime retains all storage and continues borrowing the host image.
+     */
+    PresentationFrameStatus submitAndPresentHostImageFrame()
+        throws NativePresentationRuntimeException;
+
+    /**
      * @note ThreadSafety: Thread-confined; close serially on the owning render thread.
      * Releases the exclusively owned Native presentation runtime and is idempotent.
      *

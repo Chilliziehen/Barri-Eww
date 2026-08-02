@@ -65,6 +65,33 @@ public final class CorePresentationRuntime implements PresentationRuntime {
     }
 
     /**
+     * @note ThreadSafety: Thread-confined; call serially before host image destruction.
+     * Delegates host-image resource retirement without translating error context.
+     *
+     * @throws NativePresentationRuntimeException Exact checked Core detach failure
+     * @warning MemoryOwnership: Successful delegation ends Native borrowing of the host image.
+     */
+    @Override
+    public void detachHostImagePresentationResources()
+        throws NativePresentationRuntimeException {
+        m_nativePresentationRuntime.detachHostImagePresentationResources();
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; call serially for an open attached frame.
+     * Delegates host-image submission and returns the exact Core semantic status.
+     *
+     * @return PresentationFrameStatus Exact Core submit-and-present status
+     * @throws NativePresentationRuntimeException Exact checked Core operation failure
+     * @warning MemoryOwnership: Delegation transfers no ownership and retains no new memory.
+     */
+    @Override
+    public PresentationFrameStatus submitAndPresentHostImageFrame()
+        throws NativePresentationRuntimeException {
+        return m_nativePresentationRuntime.submitAndPresentHostImageFrame();
+    }
+
+    /**
      * @note ThreadSafety: Thread-confined; close serially on the owning render thread.
      * Delegates destruction to the exclusively owned Core runtime.
      *

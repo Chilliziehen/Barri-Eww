@@ -3,6 +3,7 @@ package barrieww.mod;
 import barrieww.core.interoperability.NativeLibraryLoadingException;
 import barrieww.core.interoperability.NativePresentationRuntime;
 import barrieww.core.interoperability.NativePresentationRuntimeException;
+import barrieww.core.interoperability.HostImagePresentationBinding;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -36,6 +37,7 @@ public final class CorePresentationRuntimeFactory implements PresentationRuntime
      * @param int framebufferWidth Positive framebuffer width in pixels
      * @param int framebufferHeight Positive framebuffer height in pixels
      * @param int framesInFlightCount Positive number of in-flight frame slots
+     * @param HostImagePresentationBinding hostImageBinding Borrowed exact-extent host image binding
      * @return PresentationRuntime Exclusively owned Core adapter
      * @throws NativeLibraryLoadingException Exact checked Core loading failure
      * @throws NativePresentationRuntimeException Exact checked Core runtime creation failure
@@ -46,13 +48,15 @@ public final class CorePresentationRuntimeFactory implements PresentationRuntime
         PresentationBootstrapHandles bootstrapHandles,
         int framebufferWidth,
         int framebufferHeight,
-        int framesInFlightCount)
+        int framesInFlightCount,
+        HostImagePresentationBinding hostImageBinding)
         throws NativeLibraryLoadingException, NativePresentationRuntimeException {
-        return new CorePresentationRuntime(NativePresentationRuntime.create(
+        return new CorePresentationRuntime(NativePresentationRuntime.createHostImagePresentation(
             m_nativeLibraryPath,
             bootstrapHandles,
             framebufferWidth,
             framebufferHeight,
-            framesInFlightCount));
+            framesInFlightCount,
+            hostImageBinding));
     }
 }

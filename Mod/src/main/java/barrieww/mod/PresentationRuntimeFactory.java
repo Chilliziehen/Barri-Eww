@@ -2,6 +2,7 @@ package barrieww.mod;
 
 import barrieww.core.interoperability.NativeLibraryLoadingException;
 import barrieww.core.interoperability.NativePresentationRuntimeException;
+import barrieww.core.interoperability.HostImagePresentationBinding;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 
 /**
@@ -19,6 +20,7 @@ public interface PresentationRuntimeFactory {
      * @param int framebufferWidth Positive framebuffer width in pixels
      * @param int framebufferHeight Positive framebuffer height in pixels
      * @param int framesInFlightCount Positive number of in-flight frame slots
+     * @param HostImagePresentationBinding hostImageBinding Borrowed exact-extent host image binding
      * @return PresentationRuntime Exclusively owned open presentation runtime
      * @throws NativeLibraryLoadingException When the explicit Native library or symbols fail to load
      * @throws NativePresentationRuntimeException When Native runtime creation fails
@@ -28,6 +30,7 @@ public interface PresentationRuntimeFactory {
         PresentationBootstrapHandles bootstrapHandles,
         int framebufferWidth,
         int framebufferHeight,
-        int framesInFlightCount)
+        int framesInFlightCount,
+        HostImagePresentationBinding hostImageBinding)
         throws NativeLibraryLoadingException, NativePresentationRuntimeException;
 }

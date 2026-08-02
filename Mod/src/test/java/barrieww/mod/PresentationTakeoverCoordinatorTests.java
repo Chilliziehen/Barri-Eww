@@ -16,8 +16,10 @@ import static org.mockito.Mockito.when;
 import barrieww.core.interoperability.NativeLibraryLoadingException;
 import barrieww.core.interoperability.NativePresentationRuntime;
 import barrieww.core.interoperability.NativePresentationRuntimeException;
+import barrieww.core.interoperability.HostImagePresentationBinding;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.core.interoperability.PresentationFrameStatus;
+import barrieww.core.interoperability.PresentationImageFormat;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +35,233 @@ import org.slf4j.Logger;
 final class PresentationTakeoverCoordinatorTests {
     private static final PresentationBootstrapHandles s_bootstrapHandles =
         new PresentationBootstrapHandles(1L, 2L, 3L, 4L, 5L, 5L, 6, 6);
+    private static final HostImagePresentationBinding s_hostImageBinding =
+        new HostImagePresentationBinding(
+            7L,
+            PresentationImageFormat.B8G8R8A8_UNORM,
+            PresentationImageFormat.B8G8R8A8_UNORM,
+            800,
+            600);
+
+    /** Verifies readiness requires exact valid binding extent and a positive captured generation. */
+    @Test
+    void generationInputsRequireExactHostBindingAndValidGeneration() {
+        assertTrue(readyInputs(800, 600, 1L).isReady());
+        assertFalse(new PresentationGenerationInputs(
+            s_bootstrapHandles, 800, 600, true, s_hostImageBinding, 0L).isReady());
+        assertFalse(new PresentationGenerationInputs(
+            s_bootstrapHandles,
+            1024,
+            768,
+            true,
+            s_hostImageBinding,
+            1L).isReady());
+        assertFalse(new PresentationGenerationInputs(
+            s_bootstrapHandles,
+            800,
+            600,
+            true,
+            new HostImagePresentationBinding(
+                0L,
+                PresentationImageFormat.B8G8R8A8_UNORM,
+                PresentationImageFormat.B8G8R8A8_UNORM,
+                800,
+                600),
+            1L).isReady());
+    }
+
+    /** Verifies replacement drains before preparation and commits only after a clear prime. */
+    @Test
+    void configureOrdersClosePreparationCreateBeginPrimeAndCommit() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        runtimeFactory.m_nextRuntime = new RecordingRuntime("first", runtimeFactory.m_events);
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+        runtimeFactory.m_nextRuntime = new RecordingRuntime("second", runtimeFactory.m_events);
+
+        assertTrue(coordinator.configure(() -> {
+            runtimeFactory.m_events.add("prepare:second");
+            return readyInputs(800, 600, 2L);
+        }));
+
+        assertEquals(List.of(
+            "create:first", "begin:first:800x600", "clear:first", "close:first",
+            "prepare:second", "create:second", "begin:second:800x600", "clear:second"),
+            runtimeFactory.m_events);
+        assertSame(s_hostImageBinding, runtimeFactory.m_hostImageBinding);
+        assertTrue(coordinator.isTakenOver());
+    }
+
+    /** Verifies preparation is never invoked when old runtime destruction is uncertain. */
+    @Test
+    void closeFailurePreventsPreparation() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+        runtime.m_closeFailure = runtimeFailure("close");
+        int[] preparationCount = {0};
+
+        assertTrue(coordinator.configure(() -> {
+            preparationCount[0]++;
+            return readyInputs(800, 600, 2L);
+        }));
+
+        assertEquals(0, preparationCount[0]);
+        assertEquals(1, runtime.m_closeCount);
+        assertTrue(coordinator.isTakenOver());
+    }
+
+    /** Verifies null, unready and throwing preparation permanently select vanilla presentation. */
+    @Test
+    void preparationFailuresPermanentlySelectVanilla() {
+        List<PresentationGenerationPreparation> preparations = List.of(
+            () -> null,
+            () -> new PresentationGenerationInputs(
+                s_bootstrapHandles, 800, 600, true, null, 1L),
+            () -> { throw runtimeFailure("prepare"); });
+        for (PresentationGenerationPreparation preparation : preparations) {
+            RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+            PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+
+            assertFalse(coordinator.configure(preparation));
+            assertFalse(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+            assertEquals(0, runtimeFactory.m_createCount);
+            assertFalse(coordinator.isTakenOver());
+        }
+    }
+
+    /** Verifies unchecked preparation failure is contained and logged once before vanilla fallback. */
+    @Test
+    void uncheckedPreparationFailureSelectsVanillaWithoutFactoryCall() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+        IllegalStateException preparationFailure = new IllegalStateException("preparation");
+
+        assertFalse(coordinator.configure(() -> { throw preparationFailure; }));
+
+        assertEquals(0, runtimeFactory.m_createCount);
+        assertFalse(coordinator.isTakenOver());
+        verify(logger).error(any(String.class),
+            org.mockito.ArgumentMatchers.same(preparationFailure));
+    }
+
+    /** Verifies a null candidate never creates runtime-null takeover and permanently selects vanilla. */
+    @Test
+    void nullFactoryCandidateSelectsVanillaWithoutTakeover() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        runtimeFactory.m_shouldReturnNull = true;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+
+        assertFalse(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+
+        assertEquals(1, runtimeFactory.m_createCount);
+        assertFalse(coordinator.isTakenOver());
+        assertFalse(coordinator.configure(() -> readyInputs(800, 600, 2L)));
+        assertEquals(1, runtimeFactory.m_createCount);
+    }
+
+    /** Verifies detach before acquisition switches the next complete frame to clear output. */
+    @Test
+    void detachBeforeBeginUsesClearForNextFrame() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+
+        assertTrue(coordinator.detachHostImagePresentationResources());
+        coordinator.beginFrame();
+        coordinator.presentFrame();
+
+        assertEquals(0, runtime.m_hostPresentCount);
+        assertEquals(2, runtime.m_clearPresentCount);
+        assertEquals(1, runtime.m_detachCount);
+    }
+
+    /** Verifies attached frames use host submit while a successful detach switches to clear output. */
+    @Test
+    void successfulDetachSwitchesOpenAndLaterFramesToClearOutput() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+
+        coordinator.beginFrame();
+        coordinator.presentFrame();
+        coordinator.beginFrame();
+        assertTrue(coordinator.detachHostImagePresentationResources());
+        assertTrue(coordinator.detachHostImagePresentationResources());
+        coordinator.presentFrame();
+        coordinator.beginFrame();
+        coordinator.presentFrame();
+
+        assertEquals(1, runtime.m_hostPresentCount);
+        assertEquals(3, runtime.m_clearPresentCount);
+        assertEquals(1, runtime.m_detachCount);
+        assertTrue(coordinator.isTakenOver());
+        assertTrue(coordinator.requiresReconfiguration());
+    }
+
+    /** Verifies detach failure vetoes resize but preserves host output until delayed fallback. */
+    @Test
+    void detachFailureContinuesHostOutputThenFallsBackAtConfigure() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtime.m_detachFailure = runtimeFailure("detach");
+        runtimeFactory.m_nextRuntime = runtime;
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+
+        assertFalse(coordinator.detachHostImagePresentationResources());
+        assertFalse(coordinator.detachHostImagePresentationResources());
+        coordinator.beginFrame();
+        coordinator.presentFrame();
+
+        assertEquals(1, runtime.m_detachCount);
+        assertEquals(1, runtime.m_hostPresentCount);
+        assertTrue(coordinator.isTakenOver());
+        assertTrue(coordinator.requiresReconfiguration());
+        verify(logger, times(1)).error(any(String.class), any(Throwable.class));
+
+        assertFalse(coordinator.configure(() -> readyInputs(800, 600, 2L)));
+        assertEquals(1, runtime.m_closeCount);
+        assertFalse(coordinator.isTakenOver());
+    }
+
+    /** Verifies detach failure followed by close failure enters terminal interception once. */
+    @Test
+    void detachFailureCloseFailurePreservesTerminalInterception() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        NativePresentationRuntimeException detachFailure = runtimeFailure("detach");
+        NativePresentationRuntimeException closeFailure = runtimeFailure("close");
+        runtime.m_detachFailure = detachFailure;
+        runtime.m_closeFailure = closeFailure;
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+        assertFalse(coordinator.detachHostImagePresentationResources());
+        int[] preparationCount = {0};
+
+        assertTrue(coordinator.configure(() -> {
+            preparationCount[0]++;
+            return readyInputs(800, 600, 2L);
+        }));
+
+        assertEquals(0, preparationCount[0]);
+        assertEquals(1, runtime.m_closeCount);
+        assertSame(detachFailure, closeFailure.getSuppressed()[0]);
+        assertTrue(coordinator.isTakenOver());
+        assertFalse(coordinator.requiresReconfiguration());
+        assertFalse(coordinator.detachHostImagePresentationResources());
+    }
 
     /** Verifies every first invalid or unready input permanently commits the surface to vanilla. */
     @Test
@@ -72,7 +301,7 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(1, runtimeFactory.m_createCount);
         assertEquals(2, runtimeFactory.m_framesInFlightCount);
         assertEquals(s_bootstrapHandles, runtimeFactory.m_bootstrapHandles);
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first"),
             runtimeFactory.m_events);
         assertEquals(1, runtime.m_beginCount);
         assertEquals(1, runtime.m_presentCount);
@@ -126,7 +355,7 @@ final class PresentationTakeoverCoordinatorTests {
             assertFalse(coordinator.configure(readyInputs(800, 600)));
 
             assertEquals(List.of("create:candidate", "begin:candidate:800x600",
-                "submit:candidate", "close:candidate"), runtimeFactory.m_events);
+                "clear:candidate", "close:candidate"), runtimeFactory.m_events);
             assertEquals(1, runtime.m_presentCount);
             assertEquals(1, runtime.m_closeCount);
             assertFalse(coordinator.isTakenOver());
@@ -192,6 +421,7 @@ final class PresentationTakeoverCoordinatorTests {
         assertSame(submitFailure, closeFailure.getSuppressed()[0]);
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.requiresReconfiguration());
+        assertFalse(coordinator.detachHostImagePresentationResources());
         assertEquals(1, runtimeFactory.m_createCount);
         assertEquals(1, runtime.m_closeCount);
         verify(logger).error(any(String.class), org.mockito.ArgumentMatchers.same(closeFailure));
@@ -238,8 +468,8 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertTrue(coordinator.configure(readyInputs(1024, 768)));
 
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
-            "close:first", "create:second", "begin:second:1024x768", "submit:second"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first",
+            "close:first", "create:second", "begin:second:1024x768", "clear:second"),
             runtimeFactory.m_events);
         assertTrue(coordinator.isTakenOver());
     }
@@ -258,8 +488,8 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
 
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
-            "close:first", "create:second", "begin:second:1024x768", "submit:second",
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first",
+            "close:first", "create:second", "begin:second:1024x768", "clear:second",
             "close:second"), runtimeFactory.m_events);
         assertEquals(1, firstRuntime.m_closeCount);
         assertEquals(1, secondRuntime.m_closeCount);
@@ -282,7 +512,7 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertFalse(coordinator.configure(readyInputs(1024, 768)));
 
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first",
             "close:first", "create:failure"),
             runtimeFactory.m_events);
         assertFalse(coordinator.isTakenOver());
@@ -292,9 +522,9 @@ final class PresentationTakeoverCoordinatorTests {
         assertEquals(2, runtimeFactory.m_createCount);
     }
 
-    /** Verifies successful frame operations occur in exact order with the fixed clear color. */
+    /** Verifies clear priming precedes exact attached host-image frame submission. */
     @Test
-    void successfulBeginThenPresentUsesExactFixedClearColor() {
+    void successfulBeginThenPresentUsesClearPrimeAndHostFrame() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         runtimeFactory.m_nextRuntime = runtime;
@@ -304,8 +534,8 @@ final class PresentationTakeoverCoordinatorTests {
         coordinator.beginFrame();
         coordinator.presentFrame();
 
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
-            "begin:first:800x600", "submit:first"),
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first",
+            "begin:first:800x600", "host:first"),
             runtimeFactory.m_events);
         assertEquals(0.08f, runtime.m_clearRed);
         assertEquals(0.72f, runtime.m_clearGreen);
@@ -523,7 +753,7 @@ final class PresentationTakeoverCoordinatorTests {
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.requiresReconfiguration());
         assertEquals(1, runtimeFactory.m_createCount);
-        assertEquals(List.of("create:first", "begin:first:800x600", "submit:first",
+        assertEquals(List.of("create:first", "begin:first:800x600", "clear:first",
             "close:first"), runtimeFactory.m_events);
         verify(logger, times(1)).error(any(String.class), any(Throwable.class));
 
@@ -589,13 +819,18 @@ final class PresentationTakeoverCoordinatorTests {
             .thenReturn(PresentationFrameStatus.SUBOPTIMAL);
         when(nativeRuntime.submitAndPresentClearFrame(0.08f, 0.72f, 0.93f))
             .thenReturn(PresentationFrameStatus.RECREATE_REQUIRED);
+        when(nativeRuntime.submitAndPresentHostImageFrame())
+            .thenReturn(PresentationFrameStatus.SUCCESS);
         CorePresentationRuntime runtime = new CorePresentationRuntime(nativeRuntime);
 
         assertSame(PresentationFrameStatus.SUBOPTIMAL, runtime.beginFrameStatus(800, 600));
         assertSame(PresentationFrameStatus.RECREATE_REQUIRED,
             runtime.submitAndPresentClearFrame(0.08f, 0.72f, 0.93f));
+        runtime.detachHostImagePresentationResources();
+        assertSame(PresentationFrameStatus.SUCCESS, runtime.submitAndPresentHostImageFrame());
         runtime.close();
 
+        verify(nativeRuntime).detachHostImagePresentationResources();
         verify(nativeRuntime).close();
     }
 
@@ -607,17 +842,18 @@ final class PresentationTakeoverCoordinatorTests {
         NativePresentationRuntime nativeRuntime = mock(NativePresentationRuntime.class);
         try (MockedStatic<NativePresentationRuntime> nativeRuntimeCreation =
                  mockStatic(NativePresentationRuntime.class)) {
-            nativeRuntimeCreation.when(() -> NativePresentationRuntime.create(
-                expectedLibraryPath, s_bootstrapHandles, 800, 600, 2)).thenReturn(nativeRuntime);
+            nativeRuntimeCreation.when(() -> NativePresentationRuntime.createHostImagePresentation(
+                expectedLibraryPath, s_bootstrapHandles, 800, 600, 2, s_hostImageBinding))
+                .thenReturn(nativeRuntime);
             CorePresentationRuntimeFactory runtimeFactory =
                 new CorePresentationRuntimeFactory(relativeLibraryPath);
 
             PresentationRuntime runtime = runtimeFactory.create(
-                s_bootstrapHandles, 800, 600, 2);
+                s_bootstrapHandles, 800, 600, 2, s_hostImageBinding);
 
             assertTrue(runtime instanceof CorePresentationRuntime);
-            nativeRuntimeCreation.verify(() -> NativePresentationRuntime.create(
-                expectedLibraryPath, s_bootstrapHandles, 800, 600, 2));
+            nativeRuntimeCreation.verify(() -> NativePresentationRuntime.createHostImagePresentation(
+                expectedLibraryPath, s_bootstrapHandles, 800, 600, 2, s_hostImageBinding));
         }
     }
 
@@ -650,8 +886,30 @@ final class PresentationTakeoverCoordinatorTests {
     private static PresentationGenerationInputs readyInputs(
         int framebufferWidth,
         int framebufferHeight) {
+        return readyInputs(framebufferWidth, framebufferHeight, 1L);
+    }
+
+    /** Creates ready inputs with an explicit captured host-target generation. */
+    private static PresentationGenerationInputs readyInputs(
+        int framebufferWidth,
+        int framebufferHeight,
+        long hostTargetGeneration) {
+        HostImagePresentationBinding hostImageBinding = framebufferWidth == 800
+            && framebufferHeight == 600
+            ? s_hostImageBinding
+            : new HostImagePresentationBinding(
+                7L,
+                PresentationImageFormat.B8G8R8A8_UNORM,
+                PresentationImageFormat.B8G8R8A8_UNORM,
+                framebufferWidth,
+                framebufferHeight);
         return new PresentationGenerationInputs(
-            s_bootstrapHandles, framebufferWidth, framebufferHeight, true, true);
+            s_bootstrapHandles,
+            framebufferWidth,
+            framebufferHeight,
+            true,
+            hostImageBinding,
+            hostTargetGeneration);
     }
 
     /**
@@ -685,7 +943,9 @@ final class PresentationTakeoverCoordinatorTests {
         private RecordingRuntime m_nextRuntime;
         private NativeLibraryLoadingException m_loadingFailure;
         private NativePresentationRuntimeException m_creationFailure;
+        private boolean m_shouldReturnNull;
         private PresentationBootstrapHandles m_bootstrapHandles;
+        private HostImagePresentationBinding m_hostImageBinding;
         private int m_createCount;
         private int m_framesInFlightCount;
 
@@ -707,10 +967,12 @@ final class PresentationTakeoverCoordinatorTests {
             PresentationBootstrapHandles bootstrapHandles,
             int framebufferWidth,
             int framebufferHeight,
-            int framesInFlightCount)
+            int framesInFlightCount,
+            HostImagePresentationBinding hostImageBinding)
             throws NativeLibraryLoadingException, NativePresentationRuntimeException {
             m_createCount++;
             m_bootstrapHandles = bootstrapHandles;
+            m_hostImageBinding = hostImageBinding;
             m_framesInFlightCount = framesInFlightCount;
             if (m_loadingFailure != null) {
                 m_events.add("create:failure");
@@ -719,6 +981,10 @@ final class PresentationTakeoverCoordinatorTests {
             if (m_creationFailure != null) {
                 m_events.add("create:failure");
                 throw m_creationFailure;
+            }
+            if (m_shouldReturnNull) {
+                m_events.add("create:null");
+                return null;
             }
             m_events.add("create:" + m_nextRuntime.m_name);
             return m_nextRuntime;
@@ -733,9 +999,13 @@ final class PresentationTakeoverCoordinatorTests {
         private PresentationFrameStatus m_submitStatus = PresentationFrameStatus.SUCCESS;
         private NativePresentationRuntimeException m_beginFailure;
         private NativePresentationRuntimeException m_submitFailure;
+        private NativePresentationRuntimeException m_detachFailure;
         private NativePresentationRuntimeException m_closeFailure;
         private int m_beginCount;
         private int m_presentCount;
+        private int m_clearPresentCount;
+        private int m_hostPresentCount;
+        private int m_detachCount;
         private int m_closeCount;
         private float m_clearRed;
         private float m_clearGreen;
@@ -792,11 +1062,36 @@ final class PresentationTakeoverCoordinatorTests {
             float clearRed,
             float clearGreen,
             float clearBlue) throws NativePresentationRuntimeException {
-            m_events.add("submit:" + m_name);
+            m_events.add("clear:" + m_name);
             m_presentCount++;
+            m_clearPresentCount++;
             m_clearRed = clearRed;
             m_clearGreen = clearGreen;
             m_clearBlue = clearBlue;
+            if (m_submitFailure != null) {
+                throw m_submitFailure;
+            }
+            return m_submitStatus;
+        }
+
+        /** Records one host-resource detach attempt and optionally fails. */
+        @Override
+        public void detachHostImagePresentationResources()
+            throws NativePresentationRuntimeException {
+            m_events.add("detach:" + m_name);
+            m_detachCount++;
+            if (m_detachFailure != null) {
+                throw m_detachFailure;
+            }
+        }
+
+        /** Records one host-image submission and returns the configured submit status. */
+        @Override
+        public PresentationFrameStatus submitAndPresentHostImageFrame()
+            throws NativePresentationRuntimeException {
+            m_events.add("host:" + m_name);
+            m_presentCount++;
+            m_hostPresentCount++;
             if (m_submitFailure != null) {
                 throw m_submitFailure;
             }

@@ -30,7 +30,9 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     private boolean m_isTakeoverPermanentlyDisabled;
     private boolean m_isGenerationFatal;
     private boolean m_isTerminallyIntercepting;
+    private boolean m_areHostImagePresentationResourcesAttached;
     private NativePresentationRuntimeException m_primaryFrameFailure;
+    private NativePresentationRuntimeException m_hostResourceDetachFailure;
 
     /**
      * @note ThreadSafety: Construction and all subsequent use occur on one render thread.
@@ -55,13 +57,14 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
      * vanilla presentation. If runtime destruction fails, true preserves terminal interception
      * because creating a second swapchain while Native ownership may remain active is unsafe.
      *
-     * @param PresentationGenerationInputs inputs Immutable configure inputs, or null when unavailable
+     * @param PresentationGenerationPreparation generationPreparation Post-retirement input callback,
+     * or null when unavailable
      * @return boolean True after successful replacement or while terminal interception must prevent
      * a second swapchain; false when the current configure must proceed with vanilla presentation
      * @warning MemoryOwnership: Closes any preceding runtime before candidate creation. Candidate
      * ownership transfers only after priming; rejection closes it before vanilla presentation.
      */
-    public boolean configure(PresentationGenerationInputs inputs) {
+    public boolean configure(PresentationGenerationPreparation generationPreparation) {
         m_isFrameOpen = false;
         if (m_isTerminallyIntercepting) {
             m_requiresReconfiguration = false;
@@ -73,7 +76,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             try {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                addSuppressedFailure(closeFailure, m_primaryFrameFailure);
+                addSuppressedFailure(closeFailure, retainedFailureContext());
                 m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
                 m_isTakenOver = true;
@@ -89,8 +92,22 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_requiresReconfiguration = false;
         m_isGenerationFatal = false;
         m_primaryFrameFailure = null;
+        m_hostResourceDetachFailure = null;
+        m_areHostImagePresentationResourcesAttached = false;
 
         if (m_isTakeoverPermanentlyDisabled) {
+            return false;
+        }
+        PresentationGenerationInputs inputs;
+        try {
+            inputs = generationPreparation == null ? null : generationPreparation.prepare();
+        } catch (NativePresentationRuntimeException preparationFailure) {
+            m_isTakeoverPermanentlyDisabled = true;
+            logRuntimeFailure("Presentation generation preparation failed", preparationFailure);
+            return false;
+        } catch (RuntimeException preparationFailure) {
+            m_isTakeoverPermanentlyDisabled = true;
+            m_logger.error("Presentation generation preparation failed", preparationFailure);
             return false;
         }
         if (inputs == null || !inputs.isReady()) {
@@ -104,7 +121,8 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
                 inputs.bootstrapHandles(),
                 inputs.framebufferWidth(),
                 inputs.framebufferHeight(),
-                s_framesInFlightCount);
+                s_framesInFlightCount,
+                inputs.hostImageBinding());
         } catch (NativeLibraryLoadingException loadingFailure) {
             m_isTakeoverPermanentlyDisabled = true;
             logLoadingFailure("Presentation runtime creation failed", loadingFailure);
@@ -112,6 +130,11 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         } catch (NativePresentationRuntimeException creationFailure) {
             m_isTakeoverPermanentlyDisabled = true;
             logRuntimeFailure("Presentation runtime creation failed", creationFailure);
+            return false;
+        }
+        if (candidateRuntime == null) {
+            m_isTakeoverPermanentlyDisabled = true;
+            m_logger.error("Presentation runtime factory returned null");
             return false;
         }
 
@@ -152,6 +175,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         m_framebufferWidth = inputs.framebufferWidth();
         m_framebufferHeight = inputs.framebufferHeight();
         m_isTakenOver = true;
+        m_areHostImagePresentationResourcesAttached = true;
         m_requiresReconfiguration = candidateRequiresReconfiguration;
         return true;
     }
@@ -198,8 +222,9 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         }
 
         try {
-            PresentationFrameStatus frameStatus = m_runtime.submitAndPresentClearFrame(
-                s_clearRed, s_clearGreen, s_clearBlue);
+            PresentationFrameStatus frameStatus = m_areHostImagePresentationResourcesAttached
+                ? m_runtime.submitAndPresentHostImageFrame()
+                : m_runtime.submitAndPresentClearFrame(s_clearRed, s_clearGreen, s_clearBlue);
             if (frameStatus != PresentationFrameStatus.SUCCESS) {
                 m_requiresReconfiguration = true;
             }
@@ -221,6 +246,43 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     }
 
     /**
+     * @note ThreadSafety: Render-thread-confined; call before complete host target resize.
+     * Detaches borrowed host-image resources exactly once while preserving clear-capable runtime and
+     * any open frame. A checked failure vetoes resize and preserves attached host presentation.
+     *
+     * @return boolean True when resources are detached or already absent; false when resize must stop
+     * @warning MemoryOwnership: Success ends Native borrowing before host image destruction. Failure
+     * leaves the old host image valid and borrowed until the retained runtime is closed.
+     */
+    public boolean detachHostImagePresentationResources() {
+        if (m_isTerminallyIntercepting
+            && m_areHostImagePresentationResourcesAttached) {
+            return false;
+        }
+        if (!m_isTakenOver || m_runtime == null
+            || !m_areHostImagePresentationResourcesAttached) {
+            return true;
+        }
+        if (m_hostResourceDetachFailure != null) {
+            return false;
+        }
+
+        try {
+            m_runtime.detachHostImagePresentationResources();
+        } catch (NativePresentationRuntimeException detachFailure) {
+            m_hostResourceDetachFailure = detachFailure;
+            m_requiresReconfiguration = true;
+            m_isTakeoverPermanentlyDisabled = true;
+            logRuntimeFailure("Presentation host-image resource detach failed", detachFailure);
+            return false;
+        }
+
+        m_areHostImagePresentationResourcesAttached = false;
+        m_requiresReconfiguration = true;
+        return true;
+    }
+
+    /**
      * @note ThreadSafety: Render-thread-confined; call serially during surface teardown.
      * Consumes the owned runtime and clears interception state before its sole close attempt.
      *
@@ -232,18 +294,23 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     public void close() throws NativePresentationRuntimeException {
         PresentationRuntime runtime = m_runtime;
         NativePresentationRuntimeException primaryFrameFailure = m_primaryFrameFailure;
+        NativePresentationRuntimeException hostResourceDetachFailure =
+            m_hostResourceDetachFailure;
         m_runtime = null;
         m_isTakenOver = false;
         m_isFrameOpen = false;
         m_requiresReconfiguration = false;
         m_isGenerationFatal = false;
         m_isTerminallyIntercepting = false;
+        m_areHostImagePresentationResourcesAttached = false;
         m_primaryFrameFailure = null;
+        m_hostResourceDetachFailure = null;
         if (runtime != null) {
             try {
                 runtime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
                 addSuppressedFailure(closeFailure, primaryFrameFailure);
+                addSuppressedFailure(closeFailure, hostResourceDetachFailure);
                 throw closeFailure;
             }
         }
@@ -296,6 +363,7 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             m_isTakenOver = true;
             m_requiresReconfiguration = false;
             m_isTerminallyIntercepting = true;
+            m_areHostImagePresentationResourcesAttached = true;
             logRuntimeFailure("Presentation candidate destruction failed", closeFailure);
             return true;
         }
@@ -323,6 +391,13 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             }
         }
         primaryFailure.addSuppressed(contextualFailure);
+    }
+
+    /** Returns the retained failure context relevant to a generation close attempt. */
+    private NativePresentationRuntimeException retainedFailureContext() {
+        return m_primaryFrameFailure != null
+            ? m_primaryFrameFailure
+            : m_hostResourceDetachFailure;
     }
 
     /**
