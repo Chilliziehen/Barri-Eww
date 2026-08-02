@@ -8,11 +8,15 @@ namespace barrieww {
 
 /**
  * @note ThreadSafety: Plain input record; separate instances are concurrency-safe.
- * @brief Java-owned Vulkan bootstrap and host-image handles borrowed by one Native
- *        host-image presentation runtime. reservedFlags must be zero.
- * @warning MemoryOwnership: Java owns every encoded Vulkan handle and keeps it valid until
- *          host-image resources are detached or Native runtime destruction returns. Native
- *          copies scalar values and destroys none of the borrowed objects.
+ * @brief Java-owned fixed-layout creation input encoding Vulkan bootstrap and host-image
+ *        handles borrowed by one Native host-image presentation runtime. reservedFlags must
+ *        be zero.
+ * @warning MemoryOwnership: Java owns the input record memory; Native reads it synchronously
+ *          only during the create call and does not retain its address. Java owns every
+ *          encoded handle, and Native owns none of them. The instance, physical device,
+ *          logical device, surface and queue handles must remain valid until Native runtime
+ *          destruction returns. The host VkImage must remain valid until host-image resources
+ *          are successfully detached or Native runtime destruction returns.
  */
 struct NativeHostImagePresentationRuntimeCreateInfoVersion1 {
     std::uint64_t instanceHandle;

@@ -180,8 +180,13 @@ barriEwwCreatePresentationRuntimeVersion1(
  * @param barrieww::NativePresentationRuntimeCreateResultVersion1* createResult Writable
  *        creation result, cleared before work
  * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
- * @warning MemoryOwnership: Java owns both records and every input handle; Native borrows
- *          them during the call. Success transfers ownership only of runtimeAddress to Java.
+ * @warning MemoryOwnership: Java owns the createInfo and createResult record memory; Native
+ *          reads or writes it synchronously only during this call and retains neither address.
+ *          Java owns every encoded handle, and Native owns none of them. The instance,
+ *          physical device, logical device, surface and queue handles must remain valid until
+ *          Native runtime destruction returns. The host VkImage must remain valid until
+ *          host-image resources are successfully detached or Native runtime destruction
+ *          returns. Success transfers ownership only of runtimeAddress to Java.
  */
 extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
 barrieww::NativePresentationRuntimeOperationResult

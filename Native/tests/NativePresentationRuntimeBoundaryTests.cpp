@@ -89,6 +89,23 @@ static_assert(std::is_standard_layout_v<
 static_assert(std::is_trivially_copyable_v<
               barrieww::NativePresentationDetachHostImageResourcesResultVersion1>);
 
+static_assert(std::is_same_v<
+              decltype(&barriEwwCreateHostImagePresentationRuntimeVersion1),
+              barrieww::NativePresentationRuntimeOperationResult (*)(
+                  const barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1*,
+                  barrieww::NativePresentationRuntimeCreateResultVersion1*) noexcept>);
+static_assert(std::is_same_v<
+              decltype(&barriEwwDetachHostImagePresentationResourcesVersion1),
+              barrieww::NativePresentationRuntimeOperationResult (*)(
+                  std::uint64_t,
+                  barrieww::NativePresentationDetachHostImageResourcesResultVersion1*)
+                  noexcept>);
+static_assert(std::is_same_v<
+              decltype(&barriEwwSubmitAndPresentHostImageFrameVersion1),
+              barrieww::NativePresentationRuntimeOperationResult (*)(
+                  std::uint64_t,
+                  barrieww::NativePresentationSubmitFrameResultVersion1*) noexcept>);
+
 namespace {
 
 VkImageUsageFlags g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
