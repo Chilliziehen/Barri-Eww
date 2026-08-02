@@ -7,12 +7,16 @@
 #include <vector>
 
 #include "BarriEww/Vulkan/VulkanContext.hpp"
+#include "HostImagePresentationExecutionEnvironmentPolicy.hpp"
 #include "HostImagePresentationExecutionFixture.hpp"
 #include "TestVulkanDeviceHarness.hpp"
 
 using barrieww::VulkanContext;
 using barrieww::testing::HostImagePresentationExecutionFixture;
+using barrieww::testing::HostImagePresentationExecutionUnavailableDisposition;
 using barrieww::testing::TestVulkanDeviceHarness;
+using barrieww::testing::hostImagePresentationExecutionUnavailableDisposition;
+using barrieww::testing::isContinuousIntegrationEnvironment;
 
 namespace {
 
@@ -20,22 +24,8 @@ constexpr std::size_t g_hostImageByteCount =
     HostImagePresentationExecutionFixture::s_hostImageByteCount;
 
 /**
- * @note ThreadSafety: Compile-time-only and safe from every thread.
- * @brief Reports whether configure-time CI policy requires real Vulkan execution.
- * @return bool True when unavailable execution capabilities must fail the test
- * @warning MemoryOwnership: Returns a value and accesses no memory or Vulkan object.
- */
-constexpr bool isExecutionEnvironmentRequired() noexcept {
-#if defined(BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_REQUIRED)
-    return true;
-#else
-    return false;
-#endif
-}
-
-/**
  * @note ThreadSafety: Test-thread confined because FAIL and SKIP alter Catch2 control flow.
- * @brief Accepts an available capability, fails when CI requires it, and skips locally.
+ * @brief Accepts an available capability or applies the runtime CI disposition.
  * @param bool isAvailable Whether the required driver and extension profile is available
  * @param const char* unavailableMessage Stable diagnostic for the unavailable capability
  * @warning MemoryOwnership: Borrows unavailableMessage and transfers no ownership.
@@ -44,26 +34,23 @@ void requireExecutionEnvironment(bool isAvailable, const char* unavailableMessag
     if (isAvailable) {
         return;
     }
-#if defined(BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_REQUIRED)
-    FAIL(unavailableMessage);
-#else
-    SKIP(unavailableMessage);
-#endif
+    switch (hostImagePresentationExecutionUnavailableDisposition(
+        isContinuousIntegrationEnvironment())) {
+    case HostImagePresentationExecutionUnavailableDisposition::Fail:
+        FAIL(unavailableMessage);
+    case HostImagePresentationExecutionUnavailableDisposition::Skip:
+        SKIP(unavailableMessage);
+    }
 }
 
 /**
  * @note ThreadSafety: Creates one harness owned by the calling test thread.
- * @brief Creates the Vulkan 1.2 extension-only harness or applies the test-only forced
- *        unavailable seam used to verify CI failure policy.
+ * @brief Creates the Vulkan 1.2 extension-only execution harness.
  * @return std::unique_ptr<TestVulkanDeviceHarness> Harness owner, or nullptr when unavailable
  * @warning MemoryOwnership: Transfers harness ownership to the caller on success.
  */
 std::unique_ptr<TestVulkanDeviceHarness> createExecutionHarness() {
-#if defined(BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_FORCED_UNAVAILABLE)
-    return nullptr;
-#else
     return TestVulkanDeviceHarness::createWithVulkan12DynamicRenderingExtension();
-#endif
 }
 
 /**
@@ -90,13 +77,12 @@ std::vector<std::byte> executeAndReadback(
 
 } // namespace
 
-TEST_CASE("Host image presentation execution policy matches configure environment",
+TEST_CASE("Host image presentation execution policy maps local and CI environments",
           "[hostImagePresentationExecution][policy]") {
-#if defined(BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_REQUIRED)
-    STATIC_REQUIRE(isExecutionEnvironmentRequired());
-#else
-    STATIC_REQUIRE_FALSE(isExecutionEnvironmentRequired());
-#endif
+    REQUIRE(hostImagePresentationExecutionUnavailableDisposition(false)
+            == HostImagePresentationExecutionUnavailableDisposition::Skip);
+    REQUIRE(hostImagePresentationExecutionUnavailableDisposition(true)
+            == HostImagePresentationExecutionUnavailableDisposition::Fail);
 }
 
 TEST_CASE("Host image presentation reproduces Minecraft image pixels",

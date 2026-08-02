@@ -51,6 +51,7 @@ if(BARRIEWW_BACKEND_VULKAN)
             ${CMAKE_CURRENT_BINARY_DIR}/../generated)
 
     add_executable(BarriEwwPresentationExecutionTests
+        HostImagePresentationExecutionEnvironmentPolicy.cpp
         HostImagePresentationExecutionFixture.cpp
         HostImagePresentationExecutionTests.cpp)
     add_dependencies(BarriEwwPresentationExecutionTests
@@ -62,16 +63,6 @@ if(BARRIEWW_BACKEND_VULKAN)
         PRIVATE
             BarriEwwNative
             Catch2::Catch2WithMain)
-    if(DEFINED ENV{CI})
-        target_compile_definitions(BarriEwwPresentationExecutionTests
-            PRIVATE
-                BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_REQUIRED=1)
-    endif()
-    if(DEFINED ENV{BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_FORCED_UNAVAILABLE})
-        target_compile_definitions(BarriEwwPresentationExecutionTests
-            PRIVATE
-                BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_FORCED_UNAVAILABLE=1)
-    endif()
 endif()
 
 add_executable(BarriEwwNativeFfmBoundaryTests
