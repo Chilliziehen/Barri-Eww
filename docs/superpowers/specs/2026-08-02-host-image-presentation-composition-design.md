@@ -73,14 +73,21 @@ surface format not advertised with `VK_COLOR_SPACE_SRGB_NONLINEAR_KHR`, and any 
 framebuffer, or selected swapchain extent mismatch. It never silently substitutes an
 SRGB format for the requested UNORM format.
 
-`barriEwwSubmitAndPresentHostImageFrameVersion1` accepts the opaque runtime address
-and the existing submit result. It is non-critical because queue submission and
-presentation can block. It requires an open frame and submits the prerecorded primary
-for that frame's fixed slot/image pair. Existing create, clear-submit, and standalone
-symbols retain their exact layouts and semantics.
+`barriEwwDetachHostImagePresentationResourcesVersion1` accepts the opaque runtime
+address. It is idempotent and non-critical. It waits only submitted frame-slot fences
+that can still reference host resources, destroys the host command matrix, pipeline,
+descriptor, sampler, and borrowed-image view, and preserves the swapchain, frame
+synchronization, open acquired frame, and clear path. When a frame is open it must not
+wait the current slot's reset-but-unsubmitted fence.
 
-Core resolves both new downcall handles once per host-image binding instance and
-retains them as immutable members of the lookup Arena owner. The ordinary
+`barriEwwSubmitAndPresentHostImageFrameVersion1` accepts the opaque runtime address and
+the existing submit result. It is non-critical because queue submission and
+presentation can block. It requires an open frame with attached host resources and
+submits the prerecorded primary for that frame's fixed slot/image pair. Existing
+create, clear-submit, and standalone symbols retain their exact layouts and semantics.
+
+Core resolves all three host-image downcall handles once per host-image binding
+instance and retains them as immutable members of the lookup Arena owner. The ordinary
 clear/standalone factory does not require those additive symbols, preserving its use
 with an older Native Version 1 library. Java call segments remain confined and bounded
 by the runtime. Destroy permanently invalidates the runtime address after one attempt,
@@ -112,12 +119,14 @@ The callback is never invoked if old-generation retirement fails. A preparation 
 candidate failure before commit leaves that configure invocation uncancelled, allowing
 Minecraft to create and own its original swapchain.
 
-A render-thread-only main-target tracker observes `RenderTarget.resize`. Its HEAD
-notification detaches and retires all resources that refer to the borrowed host image
-before Minecraft destroys that image, while retaining the clear-capable Native
-swapchain runtime. Its TAIL notification publishes a monotonically increasing
-generation. The normal window path has already retired the complete generation before
-calling the complete resize and therefore treats the HEAD notification idempotently.
+A render-thread-only main-target tracker observes `RenderTarget.resize` and publishes
+a monotonically increasing generation at TAIL. A cancellable `GameRenderer.resize`
+HEAD notification first detaches and retires all resources that refer to the borrowed
+host image before the complete resize can destroy that image, while retaining the
+clear-capable Native swapchain runtime. Detach failure cancels the complete resize and
+enters diagnosed terminal interception; Minecraft must not destroy the still-borrowed
+image. The normal window path has already retired the complete generation before
+calling the complete resize and therefore treats the notification idempotently.
 
 If another host path replaces the main target outside configure, interception remains
 committed and the base Native runtime remains alive without host-image resources.
@@ -223,8 +232,8 @@ Implementation follows test-driven development.
 Native Catch2 tests cover neutral format mapping, requested format selection and
 rejection, null image and extent validation, every resource-creation failure cleanup
 edge, descriptor and pipeline configuration, exact barrier fields, command-matrix
-indexing, no steady-state command recording, boundary result mapping, and exception
-containment.
+indexing, open-frame detach fence selection, idempotent detach, no steady-state command
+recording, boundary result mapping, and exception containment.
 
 Core JUnit tests pin every new record offset, size, and alignment; eager symbol
 resolution; non-critical handle construction; exact argument transfer; result mapping;
@@ -233,9 +242,10 @@ tests call the new symbols with rejected inputs and assert stable operation resu
 
 Mod JUnit tests cover host extraction, surface-format mapping, the
 `retire -> prepare -> create -> prime -> commit` order, callback suppression after
-retirement failure, resize listener registration and removal, handle comparison,
-host-resource detachment with clear fallback, and one-attempt teardown. Mixin and
-remapped-jar tests pin target descriptors and packaged classes.
+retirement failure, resize listener registration and removal, complete-resize
+cancellation after detach failure, handle comparison, host-resource detachment with
+clear fallback, and one-attempt teardown. Mixin and remapped-jar tests pin target
+descriptors and packaged classes.
 
 The release gate runs the staged Native operating-system and threaded-recording matrix,
 Native coverage at 90 percent or higher, Core unit and real FFM integration coverage

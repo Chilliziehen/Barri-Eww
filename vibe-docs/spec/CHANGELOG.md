@@ -10,7 +10,7 @@
 
 - [新增] §6.7.4 [FfmBinding.md](FfmBinding.md) —— 所有者裁决并提升 P28：固化
   host-image presentation additive Version 1 ABI。新增 presentation 中立 RGBA/BGRA UNORM
-  format、96-byte `NativeHostImagePresentationRuntimeCreateInfoVersion1`、独立 create/submit
+  format、96-byte `NativeHostImagePresentationRuntimeCreateInfoVersion1`、独立 create/detach/submit
   symbols，以及 borrowed host image ownership、exact extent、requested surface format 与
   non-critical downcall 规则；旧 Version 1 record/symbol 原样保留，禁止复用 reserved field，
   从而在不破坏已发布 ABI 的前提下支持 ADR-0006 D9 第 2 步。
@@ -22,6 +22,10 @@
 - [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) D5.4 / D6 / D10.3
   —— 统一 host barrier 为 `MEMORY_WRITE`，并明确 resize HEAD 先 detach imported-host
   resources、保留 clear-capable Native runtime，使 generation replacement 期间仍逐帧输出。
+- [修改] §6.7.4 [FfmBinding.md](FfmBinding.md) / [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md)
+  D5.4 —— 依所有者补充裁决，为 P28 增加 idempotent non-critical host-resource detach symbol；
+  固定 open-frame fence 排除、clear runtime 保留与 detach 失败时取消完整 host resize 的 ownership
+  规则，补齐 D10.3 fallback 所需的跨边界操作。
 - [修改] §4.4 [Testing.md](Testing.md) —— 所有者裁决并提升 P29：Native CI 改为分层矩阵，
   Linux Vulkan + lavapipe execution 覆盖 `THREADED_RECORDING` on/off，Windows backend-neutral
   build/test 覆盖同一开关；明确 Windows Vulkan 是未验证 compatibility gap，不再以

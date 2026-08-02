@@ -306,9 +306,11 @@ Screenshot.takeScreenshot(this.mainRenderTarget, ...);         // GameRenderer.j
 - 换代时重建导入绑定、sampled view 与依赖其句柄的预录命令缓冲；沿用 ADR-0004 D3 的
   old-swapchain 与 generation 退休策略，不依赖全局 `vkDeviceWaitIdle`。
 - 句柄在一个 generation 内不变（Context 事实 2），故可被预录命令缓冲直接引用。
-- `resize()` HEAD 必须先退休所有引用旧宿主 image 的 view/descriptor/预录命令；若此时已
-  acquire，保留同一 Native swapchain runtime 并使该帧走 clear 输出，TAIL 发布新 generation
-  并请求 configure。禁止进入「已接管但无 runtime」状态，以维持 D10.3 每帧有输出不变式。
+- `GameRenderer.resize()` HEAD 必须经 additive FFM detach 先退休所有引用旧宿主 image 的
+  view/descriptor/预录命令；若此时已 acquire，保留同一 Native swapchain runtime 与 open frame
+  并使该帧走 clear 输出。detach 失败则取消完整 resize，禁止宿主销毁仍被借用的 image。
+  `RenderTarget.resize()` TAIL 发布新 generation 并请求 configure。禁止进入「已接管但无
+  runtime」状态，以维持 D10.3 每帧有输出不变式。
 - 若未来实测发现该纹理改为来自 `GraphicsResourceAllocator` 池化分配，回退方案为按
   `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
 

@@ -197,13 +197,17 @@ presentation 中立 format 固定为：
 | 92 | `hostImageHeight` | `uint32` |
 
 该 record 固定 `sizeof == 96`、`alignof == 8`，必须以 Native compile-time assertions 与
-Core layout tests 双侧钉死。新增两个完整命名的 C symbols：
+Core layout tests 双侧钉死。新增三个完整命名的 C symbols：
 
 ```cpp
 NativePresentationRuntimeOperationResult
 barriEwwCreateHostImagePresentationRuntimeVersion1(
     const NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo,
     NativePresentationRuntimeCreateResultVersion1* createResult) noexcept;
+
+NativePresentationRuntimeOperationResult
+barriEwwDetachHostImagePresentationResourcesVersion1(
+    std::uint64_t runtimeAddress) noexcept;
 
 NativePresentationRuntimeOperationResult
 barriEwwSubmitAndPresentHostImageFrameVersion1(
@@ -221,10 +225,14 @@ barriEwwSubmitAndPresentHostImageFrameVersion1(
    必须为上述中立 UNORM 值。
 4. `requestedSurfaceFormatValue` 必须由 surface 以 `SRGB_NONLINEAR` color space 实际支持；
    不允许静默替换为 SRGB format，也不在 shader 内做色彩空间抵消。
-5. create 与 submit 涉及分配、driver synchronization 或 queue operation，FFM downcall 固定
+5. detach 幂等；等待仍可能引用 host resources 的已提交 frame-slot fences 后销毁 host
+   command matrix、pipeline、descriptor、sampler 与 sampled view，但保留 swapchain、frame sync、
+   open acquired frame 与 clear path。frame open 时禁止等待刚 reset 且尚未 submit 的当前 slot fence。
+6. create、detach 与 submit 涉及分配、driver synchronization 或 queue operation，FFM downcall固定
    non-critical；binding 构造期解析一次 handle，frame path 不做 symbol lookup。
-6. submit 要求已有 open frame，并以该 frame 的固定 slot/image index 选择预录 command；
+7. submit 要求已有 open frame 且 host resources 仍 attached，并以该 frame 的固定 slot/image
+   index 选择预录 command；
    operation/result/exception containment 与既有 presentation Version 1 规则一致。
-7. 旧 clear/standalone create binding 不得为普通 runtime 强制解析新增 host-image symbols；
-   只有 host-image factory 在构造对应 binding 时解析并固定持有新增 create/submit handles。
+8. 旧 clear/standalone create binding 不得为普通 runtime 强制解析新增 host-image symbols；
+   只有 host-image factory 在构造对应 binding 时解析并固定持有新增 create/detach/submit handles。
    因此旧 Core → 新 Native 与新 Core clear path → 旧 Native 均保持可用。

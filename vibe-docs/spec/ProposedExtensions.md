@@ -35,7 +35,7 @@
 | P22  | ImportedImageBinding v0.1：按 importIdentifier 绑定 borrowed image、metadata compatibility 与 generation replacement | CommandStreamFormat §9.15 / ADR-0004 |
 | P23  | FrameMetricsVersion 1 与 `BARRIEWW_GPU_FRAME_METRICS`：completed-frame CPU/GPU 分段指标 | BuildSystem §3.3 / FfmBinding §6.7.3 / ADR-0004 |
 | P24  | Pure Compute visible CopyBufferToImage：64-byte payload、tight-packed range 与 swapchain TRANSFER_DST 规则 | CommandStreamFormat §9.11 / §9.16 / ADR-0004 |
-| P28  | Host-image presentation additive Version 1 ABI：中立 UNORM format、96-byte create record、独立 create/submit symbols、borrowed image ownership 与 exact extent/format 契约 | FfmBinding §6.7.4 / ADR-0006 D5·D6·D8·D9.2 |
+| P28  | Host-image presentation additive Version 1 ABI：中立 UNORM format、96-byte create record、独立 create/detach/submit symbols、borrowed image ownership 与 exact extent/format 契约 | FfmBinding §6.7.4 / ADR-0006 D5·D6·D8·D9.2 |
 | P29  | 分层 Native CI 矩阵：Linux Vulkan + lavapipe execution on/off；Windows backend-neutral build/test on/off；Windows Vulkan 为显式 coverage gap | Testing §4.4 |
 | —    | `Editor/` 技术栈 Node.js/Electron                 | spec.md / §1T                              |
 | —    | 两级合并流 `功能 → dev → master` + 全 CI          | VersionControl §5.4                         |
