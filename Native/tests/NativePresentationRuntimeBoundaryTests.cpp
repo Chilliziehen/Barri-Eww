@@ -189,7 +189,11 @@ std::uint32_t g_destroyedShaderModuleCount = 0u;
 std::uint32_t g_destroyedCommandPoolCount = 0u;
 std::uint32_t g_observedCommandPoolQueueFamilyIndex = 0u;
 
-/** Resets deterministic host-resource Vulkan interception state. */
+/**
+ * @note ThreadSafety: Test-thread confined; callers serialize access to global mock state.
+ * @brief Resets deterministic host-resource Vulkan interception state.
+ * @warning MemoryOwnership: Clears test-owned containers and does not destroy Vulkan objects.
+ */
 void resetHostResourceState() {
     g_failedHostResourceOperation.reset();
     g_injectedHostResourceResult = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -235,7 +239,13 @@ void resetHostResourceState() {
     g_observedCommandPoolQueueFamilyIndex = 0u;
 }
 
-/** Returns whether the named host-resource Vulkan operation should fail. */
+/**
+ * @note ThreadSafety: Test-thread confined; mutates global mock creation history.
+ * @brief Records an attempted host-resource operation and applies deterministic injection.
+ * @param HostResourceOperation operation Vulkan operation being intercepted
+ * @return bool True when the selected operation must return the injected failure
+ * @warning MemoryOwnership: Does not acquire, release, or transfer Vulkan object ownership.
+ */
 bool shouldFailHostResourceOperation(HostResourceOperation operation) {
     g_hostResourceCreationOrder.push_back(operation);
     return g_failedHostResourceOperation == operation;
@@ -248,7 +258,13 @@ const std::array<VkImageView, 3> g_hostResourceSwapchainImageViews{
     reinterpret_cast<VkImageView>(0x7101u), reinterpret_cast<VkImageView>(0x7102u),
     reinterpret_cast<VkImageView>(0x7103u)};
 
-/** Builds valid creation input for a two-slot by three-image command matrix. */
+/**
+ * @note ThreadSafety: Read-only and concurrency-safe after static initialization.
+ * @brief Builds valid creation input for a two-slot by three-image command matrix.
+ * @return barrieww::VulkanHostImagePresentationResources::CreateInfo Borrowed test handles
+ * @warning MemoryOwnership: Returned spans borrow static test arrays and remain valid for
+ *          the process lifetime; no Vulkan object ownership is transferred.
+ */
 barrieww::VulkanHostImagePresentationResources::CreateInfo makeHostResourceCreateInfo() {
     return {
         reinterpret_cast<VkDevice>(0x3000u),
@@ -490,6 +506,17 @@ extern "C" void VKAPI_CALL vkDestroyImageView(
     ++g_destroyedImageViewCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts sampler creation and captures filtering and addressing policy.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkSamplerCreateInfo* createInfo Borrowed sampler creation structure
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkSampler* sampler Receives an opaque test sampler handle on success
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a test handle tracked until vkDestroySampler; all input
+ *          pointers and the logical device remain borrowed.
+ */
 extern "C" VkResult VKAPI_CALL vkCreateSampler(
     VkDevice device, const VkSamplerCreateInfo* createInfo,
     const VkAllocationCallbacks* allocationCallbacks, VkSampler* sampler) {
@@ -503,6 +530,14 @@ extern "C" VkResult VKAPI_CALL vkCreateSampler(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one intercepted sampler handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkSampler sampler Opaque test sampler handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the test sampler released without touching borrowed inputs.
+ */
 extern "C" void VKAPI_CALL vkDestroySampler(
     VkDevice device, VkSampler sampler, const VkAllocationCallbacks* allocationCallbacks) {
     static_cast<void>(device);
@@ -512,6 +547,16 @@ extern "C" void VKAPI_CALL vkDestroySampler(
     ++g_destroyedSamplerCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts descriptor-set-layout creation and captures its fixed binding.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkDescriptorSetLayoutCreateInfo* createInfo Borrowed creation structure
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkDescriptorSetLayout* descriptorSetLayout Receives an opaque test layout handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a tracked test handle; all inputs remain borrowed.
+ */
 extern "C" VkResult VKAPI_CALL vkCreateDescriptorSetLayout(
     VkDevice device, const VkDescriptorSetLayoutCreateInfo* createInfo,
     const VkAllocationCallbacks* allocationCallbacks,
@@ -526,6 +571,14 @@ extern "C" VkResult VKAPI_CALL vkCreateDescriptorSetLayout(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one intercepted descriptor-set-layout handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkDescriptorSetLayout descriptorSetLayout Opaque test layout handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the test handle released without touching borrowed inputs.
+ */
 extern "C" void VKAPI_CALL vkDestroyDescriptorSetLayout(
     VkDevice device, VkDescriptorSetLayout descriptorSetLayout,
     const VkAllocationCallbacks* allocationCallbacks) {
@@ -536,6 +589,16 @@ extern "C" void VKAPI_CALL vkDestroyDescriptorSetLayout(
     ++g_destroyedDescriptorSetLayoutCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts descriptor-pool creation and captures the fixed pool size.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkDescriptorPoolCreateInfo* createInfo Borrowed creation structure
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkDescriptorPool* descriptorPool Receives an opaque test pool handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a tracked test handle; all inputs remain borrowed.
+ */
 extern "C" VkResult VKAPI_CALL vkCreateDescriptorPool(
     VkDevice device, const VkDescriptorPoolCreateInfo* createInfo,
     const VkAllocationCallbacks* allocationCallbacks, VkDescriptorPool* descriptorPool) {
@@ -549,6 +612,14 @@ extern "C" VkResult VKAPI_CALL vkCreateDescriptorPool(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one intercepted descriptor-pool handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkDescriptorPool descriptorPool Opaque test pool handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the pool and its test descriptor set released.
+ */
 extern "C" void VKAPI_CALL vkDestroyDescriptorPool(
     VkDevice device, VkDescriptorPool descriptorPool,
     const VkAllocationCallbacks* allocationCallbacks) {
@@ -559,6 +630,15 @@ extern "C" void VKAPI_CALL vkDestroyDescriptorPool(
     ++g_destroyedDescriptorPoolCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts allocation of the immutable host-image descriptor set.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkDescriptorSetAllocateInfo* allocateInfo Borrowed allocation structure
+ * @param VkDescriptorSet* descriptorSets Receives one opaque test descriptor-set handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: The returned test set follows intercepted descriptor-pool lifetime.
+ */
 extern "C" VkResult VKAPI_CALL vkAllocateDescriptorSets(
     VkDevice device, const VkDescriptorSetAllocateInfo* allocateInfo,
     VkDescriptorSet* descriptorSets) {
@@ -571,6 +651,16 @@ extern "C" VkResult VKAPI_CALL vkAllocateDescriptorSets(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Captures the immutable host sampled-image descriptor update.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param std::uint32_t descriptorWriteCount Number of borrowed write structures
+ * @param const VkWriteDescriptorSet* descriptorWrites Borrowed descriptor writes
+ * @param std::uint32_t descriptorCopyCount Number of borrowed copy structures
+ * @param const VkCopyDescriptorSet* descriptorCopies Borrowed descriptor copies
+ * @warning MemoryOwnership: Copies observed scalar fields and retains no borrowed pointer.
+ */
 extern "C" void VKAPI_CALL vkUpdateDescriptorSets(
     VkDevice device, std::uint32_t descriptorWriteCount,
     const VkWriteDescriptorSet* descriptorWrites, std::uint32_t descriptorCopyCount,
@@ -671,6 +761,16 @@ extern "C" VkResult VKAPI_CALL vkQueuePresentKHR(
     return g_presentResult;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts pipeline-layout creation for deterministic failure coverage.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkPipelineLayoutCreateInfo* createInfo Borrowed creation structure
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkPipelineLayout* pipelineLayout Receives an opaque test pipeline-layout handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a tracked test handle; all inputs remain borrowed.
+ */
 extern "C" VkResult VKAPI_CALL vkCreatePipelineLayout(
     VkDevice device, const VkPipelineLayoutCreateInfo* createInfo,
     const VkAllocationCallbacks* allocationCallbacks, VkPipelineLayout* pipelineLayout) {
@@ -684,6 +784,14 @@ extern "C" VkResult VKAPI_CALL vkCreatePipelineLayout(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one intercepted pipeline-layout handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkPipelineLayout pipelineLayout Opaque test layout handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the test handle released without touching borrowed inputs.
+ */
 extern "C" void VKAPI_CALL vkDestroyPipelineLayout(
     VkDevice device, VkPipelineLayout pipelineLayout,
     const VkAllocationCallbacks* allocationCallbacks) {
@@ -694,6 +802,16 @@ extern "C" void VKAPI_CALL vkDestroyPipelineLayout(
     ++g_destroyedPipelineLayoutCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts shader-module creation and verifies embedded bytecode alignment.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const VkShaderModuleCreateInfo* createInfo Borrowed shader creation structure
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkShaderModule* shaderModule Receives an opaque test shader-module handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a tracked test handle and retains no bytecode pointer.
+ */
 extern "C" VkResult VKAPI_CALL vkCreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo* createInfo,
     const VkAllocationCallbacks* allocationCallbacks, VkShaderModule* shaderModule) {
@@ -715,6 +833,14 @@ extern "C" VkResult VKAPI_CALL vkCreateShaderModule(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one temporary intercepted shader-module handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkShaderModule shaderModule Opaque test shader-module handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the test handle released without touching borrowed inputs.
+ */
 extern "C" void VKAPI_CALL vkDestroyShaderModule(
     VkDevice device, VkShaderModule shaderModule,
     const VkAllocationCallbacks* allocationCallbacks) {
@@ -724,6 +850,18 @@ extern "C" void VKAPI_CALL vkDestroyShaderModule(
     ++g_destroyedShaderModuleCount;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Intercepts graphics-pipeline creation and captures exact fixed rendering state.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkPipelineCache pipelineCache Borrowed cache handle, expected null
+ * @param std::uint32_t createInfoCount Number of borrowed pipeline creation structures
+ * @param const VkGraphicsPipelineCreateInfo* createInfos Borrowed pipeline structures
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @param VkPipeline* pipelines Receives one opaque test pipeline handle
+ * @return VkResult Injected failure or VK_SUCCESS
+ * @warning MemoryOwnership: Returns a tracked test handle and retains no input pointer.
+ */
 extern "C" VkResult VKAPI_CALL vkCreateGraphicsPipelines(
     VkDevice device, VkPipelineCache pipelineCache, std::uint32_t createInfoCount,
     const VkGraphicsPipelineCreateInfo* createInfos,
@@ -749,6 +887,14 @@ extern "C" VkResult VKAPI_CALL vkCreateGraphicsPipelines(
     return VK_SUCCESS;
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records destruction of one intercepted graphics-pipeline handle.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param VkPipeline pipeline Opaque test pipeline handle being released
+ * @param const VkAllocationCallbacks* allocationCallbacks Borrowed callbacks, expected null
+ * @warning MemoryOwnership: Marks the test handle released without touching borrowed inputs.
+ */
 extern "C" void VKAPI_CALL vkDestroyPipeline(
     VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks* allocationCallbacks) {
     static_cast<void>(device);
@@ -839,6 +985,13 @@ extern "C" void VKAPI_CALL vkCmdPipelineBarrier(
     }
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Captures dynamic-rendering attachment load, store, and image-view fields.
+ * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
+ * @param const VkRenderingInfo* renderingInfo Borrowed dynamic-rendering structure
+ * @warning MemoryOwnership: Copies observed scalar handles and retains no input pointer.
+ */
 extern "C" void VKAPI_CALL vkCmdBeginRenderingKHR(
     VkCommandBuffer commandBuffer, const VkRenderingInfo* renderingInfo) {
     static_cast<void>(commandBuffer);
@@ -847,10 +1000,24 @@ extern "C" void VKAPI_CALL vkCmdBeginRenderingKHR(
     g_observedRenderingImageViews.push_back(renderingInfo->pColorAttachments[0].imageView);
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined; does not mutate shared ownership state.
+ * @brief Intercepts the end of one dynamic-rendering scope.
+ * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
+ * @warning MemoryOwnership: Does not acquire, release, or retain the command buffer.
+ */
 extern "C" void VKAPI_CALL vkCmdEndRenderingKHR(VkCommandBuffer commandBuffer) {
     static_cast<void>(commandBuffer);
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records the command buffer receiving the fixed graphics-pipeline bind.
+ * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
+ * @param VkPipelineBindPoint pipelineBindPoint Pipeline binding domain
+ * @param VkPipeline pipeline Borrowed intercepted graphics-pipeline handle
+ * @warning MemoryOwnership: Copies handles for assertions and retains no Vulkan ownership.
+ */
 extern "C" void VKAPI_CALL vkCmdBindPipeline(
     VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
     VkPipeline pipeline) {
@@ -859,6 +1026,19 @@ extern "C" void VKAPI_CALL vkCmdBindPipeline(
     g_boundPipelineCommandBuffers.push_back(commandBuffer);
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Records the command buffer receiving the host descriptor-set bind.
+ * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
+ * @param VkPipelineBindPoint pipelineBindPoint Pipeline binding domain
+ * @param VkPipelineLayout layout Borrowed pipeline-layout handle
+ * @param std::uint32_t firstSet First descriptor-set index
+ * @param std::uint32_t descriptorSetCount Number of borrowed descriptor-set handles
+ * @param const VkDescriptorSet* descriptorSets Borrowed descriptor-set handles
+ * @param std::uint32_t dynamicOffsetCount Number of dynamic offsets
+ * @param const std::uint32_t* dynamicOffsets Borrowed dynamic offsets
+ * @warning MemoryOwnership: Copies the command-buffer handle and retains no input pointer.
+ */
 extern "C" void VKAPI_CALL vkCmdBindDescriptorSets(
     VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint,
     VkPipelineLayout layout, std::uint32_t firstSet, std::uint32_t descriptorSetCount,
@@ -874,6 +1054,16 @@ extern "C" void VKAPI_CALL vkCmdBindDescriptorSets(
     g_boundDescriptorCommandBuffers.push_back(commandBuffer);
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through global mock state.
+ * @brief Verifies and records one fullscreen-triangle draw command.
+ * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
+ * @param std::uint32_t vertexCount Number of vertices
+ * @param std::uint32_t instanceCount Number of instances
+ * @param std::uint32_t firstVertex First vertex index
+ * @param std::uint32_t firstInstance First instance index
+ * @warning MemoryOwnership: Does not acquire, release, or retain Vulkan object ownership.
+ */
 extern "C" void VKAPI_CALL vkCmdDraw(
     VkCommandBuffer commandBuffer, std::uint32_t vertexCount,
     std::uint32_t instanceCount, std::uint32_t firstVertex,

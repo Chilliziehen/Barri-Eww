@@ -151,8 +151,20 @@ public:
         VkFence unsubmittedOpenFrameFence);
 
 private:
+    /**
+     * @note ThreadSafety: Render-thread confined through transactional creation.
+     * @brief Constructs a detached candidate whose owned handles are all null.
+     * @warning MemoryOwnership: Acquires no resources; later creation steps populate ownership.
+     */
     VulkanHostImagePresentationResources() = default;
 
+    /**
+     * @note ThreadSafety: Render-thread confined; no concurrent resource use is permitted.
+     * @brief Destroys every currently attached Native-owned object in reverse dependency
+     *        order and leaves this owner detached. A detached owner is a no-op.
+     * @warning MemoryOwnership: Releases owned command, pipeline, descriptor, sampler, and
+     *          image-view objects; never releases borrowed device or image objects.
+     */
     void destroyOwnedObjects() noexcept;
 
     VkDevice m_logicalDevice = VK_NULL_HANDLE;
