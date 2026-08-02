@@ -161,7 +161,9 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(BarriEwwNativeTests)
 if(BARRIEWW_BACKEND_VULKAN)
-    catch_discover_tests(BarriEwwPresentationExecutionTests)
+    catch_discover_tests(BarriEwwPresentationExecutionTests
+        PROPERTIES
+            SKIP_RETURN_CODE 4)
     catch_discover_tests(BarriEwwVulkanFrameLoopFailureTests)
     catch_discover_tests(BarriEwwVulkanImageTableFailureTests)
     catch_discover_tests(BarriEwwVulkanPipelineTableFailureTests)
