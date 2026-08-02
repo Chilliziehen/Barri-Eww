@@ -96,6 +96,16 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
         return std::unexpected(creationFailure(VK_ERROR_INITIALIZATION_FAILED));
     }
 
+    const auto beginRenderingFunction =
+        reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
+            vkGetDeviceProcAddr(createInfo.logicalDevice, "vkCmdBeginRenderingKHR"));
+    const auto endRenderingFunction =
+        reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
+            vkGetDeviceProcAddr(createInfo.logicalDevice, "vkCmdEndRenderingKHR"));
+    if (beginRenderingFunction == nullptr || endRenderingFunction == nullptr) {
+        return std::unexpected(creationFailure(VK_ERROR_EXTENSION_NOT_PRESENT));
+    }
+
     VulkanHostImagePresentationResources resources;
     resources.m_logicalDevice = createInfo.logicalDevice;
     resources.m_swapchainImageCount = createInfo.swapchainImages.size();
@@ -467,14 +477,14 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
                 nullptr,
                 nullptr,
             };
-            vkCmdBeginRenderingKHR(commandBuffer, &renderingInfo);
+            beginRenderingFunction(commandBuffer, &renderingInfo);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               resources.m_pipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     resources.m_pipelineLayout, 0u, 1u,
                                     &resources.m_descriptorSet, 0u, nullptr);
             vkCmdDraw(commandBuffer, 3u, 1u, 0u, 0u);
-            vkCmdEndRenderingKHR(commandBuffer);
+            endRenderingFunction(commandBuffer);
 
             const VkImageMemoryBarrier presentBarrier{
                 VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,

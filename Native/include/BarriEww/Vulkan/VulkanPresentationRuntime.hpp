@@ -3,9 +3,12 @@
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <vector>
 
 #include <vulkan/vulkan.h>
+
+#include "BarriEww/Vulkan/VulkanHostImagePresentationResources.hpp"
 
 namespace barrieww {
 
@@ -13,8 +16,9 @@ namespace barrieww {
  * @note ThreadSafety: Single-threaded creation/destruction and frame access.
  * @brief Owns the baseline visible presentation swapchain generation while borrowing the
  *        Java-created device, surface and queues (ADR-0004).
- * @warning MemoryOwnership: Owns swapchain, image views and per-frame synchronization
- *          objects. Borrows all bootstrap handles.
+ * @warning MemoryOwnership: Owns swapchain, image views, per-frame synchronization objects,
+ *          and optional host-image-dependent resources. Borrows all bootstrap handles and
+ *          never owns a host image or its memory.
  */
 class VulkanPresentationRuntime {
 public:
@@ -34,6 +38,21 @@ public:
     struct CreationFailure {
         std::int32_t vulkanResult;
         bool unsupportedSurface;
+    };
+
+    /**
+     * @note ThreadSafety: Immutable creation input consumed on the presentation thread.
+     * @brief Extends the borrowed bootstrap input with one exact host-image generation.
+     * @warning MemoryOwnership: Every encoded Vulkan handle remains caller-owned. The host
+     *          image must outlive attached host-image resources or the complete runtime.
+     */
+    struct HostImageCreateInfo {
+        CreateInfo presentationCreateInfo;
+        VkImage hostImage;
+        VkFormat hostImageFormat;
+        VkFormat requestedSurfaceFormat;
+        std::uint32_t hostImageWidth;
+        std::uint32_t hostImageHeight;
     };
 
     /**
@@ -88,6 +107,19 @@ public:
     [[nodiscard]] static std::expected<VulkanPresentationRuntime, CreationFailure>
     create(const CreateInfo& createInfo);
 
+    /**
+     * @note ThreadSafety: Creation is confined to one presentation thread.
+     * @brief Creates an exact UNORM swapchain and transactionally attaches the fixed
+     *        host-image presentation resources.
+     * @param const HostImageCreateInfo& createInfo Borrowed bootstrap and host-image input
+     * @return std::expected<VulkanPresentationRuntime, CreationFailure> Complete runtime or
+     *         exact Vulkan/unsupported-surface failure
+     * @warning MemoryOwnership: Success owns the swapchain and dependent host resources but
+     *          continues to borrow every bootstrap handle and the host image.
+     */
+    [[nodiscard]] static std::expected<VulkanPresentationRuntime, CreationFailure>
+    createHostImagePresentation(const HostImageCreateInfo& createInfo);
+
     VulkanPresentationRuntime(const VulkanPresentationRuntime&) = delete;
     VulkanPresentationRuntime& operator=(const VulkanPresentationRuntime&) = delete;
 
@@ -96,7 +128,7 @@ public:
 
     VulkanPresentationRuntime& operator=(VulkanPresentationRuntime&&) = delete;
 
-    /** Destroys sync objects, image views and swapchain after draining borrowed queues. */
+    /** Destroys host resources, sync objects, image views and swapchain after queue drain. */
     ~VulkanPresentationRuntime();
 
     /**
@@ -121,6 +153,26 @@ public:
      * @return SubmitFrameResult Submission status, with VK_NOT_READY when no frame is open
      */
     [[nodiscard]] SubmitFrameResult submitAndPresentClearFrame(const float clearColor[3]);
+
+    /**
+     * @note ThreadSafety: Render-thread confined; no concurrent frame or detach operation.
+     * @brief Selects the open frame's prerecorded host matrix entry in constant time and
+     *        delegates submission and presentation to the common frame path.
+     * @return SubmitFrameResult Submission result; VK_NOT_READY when no frame is open or
+     *         host-image resources are detached
+     * @warning MemoryOwnership: Borrows the selected command buffer from attached resources.
+     */
+    [[nodiscard]] SubmitFrameResult submitAndPresentHostImageFrame();
+
+    /**
+     * @note ThreadSafety: Render-thread confined; no concurrent submission is permitted.
+     * @brief Waits only submitted host-image frame slots, then idempotently destroys every
+     *        resource that depends on the borrowed host image while preserving the runtime.
+     * @return std::expected<void, VkResult> Success or exact fence-wait failure; failure
+     *         retains all host-image resources
+     * @warning MemoryOwnership: Releases only Native-owned host-image-dependent resources.
+     */
+    [[nodiscard]] std::expected<void, VkResult> detachHostImagePresentationResources();
 
     /**
      * @brief Begins a frame, records a clear of the acquired swapchain image to the given
@@ -163,6 +215,11 @@ public:
     /** Whether a frame is currently open between beginFrame and submitAndPresentFrame. */
     [[nodiscard]] bool isFrameOpen() const noexcept { return m_isFrameOpen; }
 
+    /** Whether the borrowed host image still has attached Native-owned dependent resources. */
+    [[nodiscard]] bool hasHostImagePresentationResources() const noexcept {
+        return m_hostImagePresentationResources.has_value();
+    }
+
 private:
     struct FrameSlot {
         VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
@@ -170,6 +227,7 @@ private:
         VkFence inFlightFence = VK_NULL_HANDLE;
         FrameMetrics completedMetrics{};
         bool hasCompletedMetrics = false;
+        bool hasSubmittedHostImageResources = false;
     };
 
     VulkanPresentationRuntime(VkDevice logicalDevice, VkQueue graphicsQueue,
@@ -180,7 +238,39 @@ private:
                               std::vector<VkImage> images,
                               std::vector<VkImageView> imageViews,
                               std::vector<VkCommandBuffer> frameCommandBuffers,
-                              std::vector<FrameSlot> frameSlots) noexcept;
+                               std::vector<FrameSlot> frameSlots) noexcept;
+
+    /**
+     * @note ThreadSafety: Creation is confined to one presentation thread.
+     * @brief Builds the shared swapchain/synchronization runtime under an explicit surface
+     *        format, usage, extent, and failure-preservation policy.
+     * @param const CreateInfo& createInfo Borrowed bootstrap and dimensions
+     * @param VkFormat requiredSurfaceFormat Exact format, or VK_FORMAT_UNDEFINED for legacy
+     *        SRGB preference and first-format fallback
+     * @param VkImageUsageFlags requiredImageUsageFlags Required and created swapchain usage
+     * @param bool requiresExactExtent Whether selected extent must equal framebuffer extent
+     * @param bool preservesExactCreationFailures Whether synchronization and command-pool
+     *        failures retain their exact VkResult instead of legacy out-of-memory mapping
+     * @return std::expected<VulkanPresentationRuntime, CreationFailure> Runtime or failure
+     * @warning MemoryOwnership: Transactionally owns created resources only on success.
+     */
+    [[nodiscard]] static std::expected<VulkanPresentationRuntime, CreationFailure>
+    createSwapchainRuntime(const CreateInfo& createInfo, VkFormat requiredSurfaceFormat,
+                           VkImageUsageFlags requiredImageUsageFlags,
+                           bool requiresExactExtent,
+                           bool preservesExactCreationFailures);
+
+    /**
+     * @note ThreadSafety: Render-thread confined; requires serialized frame access.
+     * @brief Executes the common submit/present path and marks a frame-slot fence only after
+     *        a successful submission that references attached host-image resources.
+     * @param VkCommandBuffer commandBuffer Borrowed primary command buffer, or null
+     * @param bool usesHostImageResources Whether the submission references host resources
+     * @return SubmitFrameResult Submission and presentation status with raw Vulkan result
+     * @warning MemoryOwnership: Borrows the command buffer and all runtime-owned sync state.
+     */
+    [[nodiscard]] SubmitFrameResult submitAndPresentFrameWithResourceTracking(
+        VkCommandBuffer commandBuffer, bool usesHostImageResources);
 
     void recordClearCommandBuffer(VkCommandBuffer commandBuffer, VkImage swapchainImage,
                                   const float clearColor[3]);
@@ -201,6 +291,7 @@ private:
     std::vector<VkFence> m_imageInFlightFences;
     std::vector<VkCommandBuffer> m_frameCommandBuffers;
     std::vector<FrameSlot> m_frameSlots;
+    std::optional<VulkanHostImagePresentationResources> m_hostImagePresentationResources;
     std::uint64_t m_swapchainGeneration = 1u;
     std::uint64_t m_frameSequence = 0u;
     std::uint32_t m_currentFrameSlot = 0u;

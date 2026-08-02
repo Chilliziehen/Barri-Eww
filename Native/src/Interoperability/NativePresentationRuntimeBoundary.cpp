@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
+#include "BarriEww/Vulkan/VulkanPresentationImageFormatMapping.hpp"
 #include "NativePresentationRuntimeBoundaryImplementation.hpp"
 
 namespace {
@@ -99,6 +100,81 @@ barriEwwCreatePresentationRuntimeVersion1(
         *createResult = {};
         return NativePresentationRuntimeOperationResult::InternalFailure;
     }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwCreateHostImagePresentationRuntimeVersion1(
+    const barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo,
+    barrieww::NativePresentationRuntimeCreateResultVersion1* createResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (createResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *createResult = {};
+    if (createInfo == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    const VkFormat hostImageFormat = barrieww::mapPresentationImageFormat(
+        static_cast<barrieww::PresentationImageFormat>(
+            createInfo->hostImageFormatValue));
+    const VkFormat requestedSurfaceFormat = barrieww::mapPresentationImageFormat(
+        static_cast<barrieww::PresentationImageFormat>(
+            createInfo->requestedSurfaceFormatValue));
+    if (createInfo->instanceHandle == 0u || createInfo->physicalDeviceHandle == 0u
+        || createInfo->logicalDeviceHandle == 0u || createInfo->surfaceHandle == 0u
+        || createInfo->graphicsQueueHandle == 0u || createInfo->presentQueueHandle == 0u
+        || createInfo->hostImageHandle == 0u || createInfo->reservedFlags != 0u
+        || createInfo->framebufferWidth == 0u || createInfo->framebufferHeight == 0u
+        || createInfo->framesInFlightCount == 0u || createInfo->hostImageWidth == 0u
+        || createInfo->hostImageHeight == 0u || hostImageFormat == VK_FORMAT_UNDEFINED
+        || requestedSurfaceFormat == VK_FORMAT_UNDEFINED) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    return barrieww::interoperability::executeNativePresentationCreateOperation(
+        createResult, [createInfo, createResult, hostImageFormat,
+                       requestedSurfaceFormat] {
+            barrieww::VulkanPresentationRuntime::HostImageCreateInfo runtimeCreateInfo{
+                barrieww::VulkanPresentationRuntime::CreateInfo{
+                    reinterpret_cast<VkPhysicalDevice>(createInfo->physicalDeviceHandle),
+                    reinterpret_cast<VkDevice>(createInfo->logicalDeviceHandle),
+                    reinterpret_cast<VkSurfaceKHR>(createInfo->surfaceHandle),
+                    reinterpret_cast<VkQueue>(createInfo->graphicsQueueHandle),
+                    reinterpret_cast<VkQueue>(createInfo->presentQueueHandle),
+                    createInfo->graphicsQueueFamilyIndex,
+                    createInfo->presentQueueFamilyIndex,
+                    createInfo->framebufferWidth,
+                    createInfo->framebufferHeight,
+                    createInfo->framesInFlightCount},
+                reinterpret_cast<VkImage>(createInfo->hostImageHandle),
+                hostImageFormat,
+                requestedSurfaceFormat,
+                createInfo->hostImageWidth,
+                createInfo->hostImageHeight,
+            };
+            auto runtimeResult =
+                barrieww::VulkanPresentationRuntime::createHostImagePresentation(
+                    runtimeCreateInfo);
+            if (!runtimeResult.has_value()) {
+                createResult->vulkanResult = runtimeResult.error().vulkanResult;
+                return runtimeResult.error().unsupportedSurface
+                    ? NativePresentationRuntimeOperationResult::UnsupportedSurface
+                    : NativePresentationRuntimeOperationResult::VulkanFailure;
+            }
+
+            auto runtime = std::make_unique<barrieww::VulkanPresentationRuntime>(
+                std::move(runtimeResult.value()));
+            createResult->selectedFormatValue = neutralFormatValue(runtime->imageFormat());
+            createResult->selectedPresentModeValue =
+                static_cast<std::uint32_t>(runtime->presentMode());
+            createResult->selectedSharingModeValue =
+                static_cast<std::uint32_t>(runtime->sharingMode());
+            createResult->swapchainImageCount = runtime->imageCount();
+            createResult->runtimeAddress =
+                reinterpret_cast<std::uint64_t>(runtime.release());
+            return NativePresentationRuntimeOperationResult::Success;
+        });
 }
 
 extern "C" barrieww::NativePresentationRuntimeOperationResult
@@ -211,6 +287,54 @@ barriEwwSubmitAndPresentClearFrameVersion1(
             [runtime, &clearColor] {
                 return runtime->submitAndPresentClearFrame(clearColor);
             });
+    } catch (...) {
+        *submitResult = {};
+        return NativePresentationRuntimeOperationResult::InternalFailure;
+    }
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwDetachHostImagePresentationResourcesVersion1(
+    std::uint64_t runtimeAddress,
+    barrieww::NativePresentationDetachHostImageResourcesResultVersion1* detachResult)
+    noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (detachResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *detachResult = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    auto* runtime = reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+    return barrieww::interoperability::executeNativePresentationDetachOperation(
+        detachResult,
+        [runtime] { return runtime->detachHostImagePresentationResources(); });
+}
+
+extern "C" barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentHostImageFrameVersion1(
+    std::uint64_t runtimeAddress,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept {
+    using barrieww::NativePresentationRuntimeOperationResult;
+    if (submitResult == nullptr) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+    *submitResult = {};
+    if (runtimeAddress == 0u) {
+        return NativePresentationRuntimeOperationResult::InvalidArgument;
+    }
+
+    try {
+        auto* runtime =
+            reinterpret_cast<barrieww::VulkanPresentationRuntime*>(runtimeAddress);
+        if (!runtime->isFrameOpen() || !runtime->hasHostImagePresentationResources()) {
+            return NativePresentationRuntimeOperationResult::InvalidArgument;
+        }
+        return barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+            submitResult,
+            [runtime] { return runtime->submitAndPresentHostImageFrame(); });
     } catch (...) {
         *submitResult = {};
         return NativePresentationRuntimeOperationResult::InternalFailure;

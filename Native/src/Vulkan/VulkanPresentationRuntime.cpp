@@ -23,6 +23,96 @@ std::uint64_t elapsedNanosecondsSince(
 
 std::expected<VulkanPresentationRuntime, VulkanPresentationRuntime::CreationFailure>
 VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
+    return createSwapchainRuntime(createInfo, VK_FORMAT_UNDEFINED,
+                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT, false, false);
+}
+
+std::expected<VulkanPresentationRuntime, VulkanPresentationRuntime::CreationFailure>
+VulkanPresentationRuntime::createHostImagePresentation(
+    const HostImageCreateInfo& createInfo) {
+    const CreateInfo& presentationCreateInfo = createInfo.presentationCreateInfo;
+    const bool isKnownHostImageFormat =
+        createInfo.hostImageFormat == VK_FORMAT_R8G8B8A8_UNORM
+        || createInfo.hostImageFormat == VK_FORMAT_B8G8R8A8_UNORM;
+    const bool isKnownSurfaceFormat =
+        createInfo.requestedSurfaceFormat == VK_FORMAT_R8G8B8A8_UNORM
+        || createInfo.requestedSurfaceFormat == VK_FORMAT_B8G8R8A8_UNORM;
+    if (presentationCreateInfo.physicalDevice == VK_NULL_HANDLE
+        || presentationCreateInfo.logicalDevice == VK_NULL_HANDLE
+        || presentationCreateInfo.surface == VK_NULL_HANDLE
+        || presentationCreateInfo.graphicsQueue == VK_NULL_HANDLE
+        || presentationCreateInfo.presentQueue == VK_NULL_HANDLE
+        || createInfo.hostImage == VK_NULL_HANDLE || !isKnownHostImageFormat
+        || !isKnownSurfaceFormat || presentationCreateInfo.framebufferWidth == 0u
+        || presentationCreateInfo.framebufferHeight == 0u
+        || presentationCreateInfo.framesInFlightCount == 0u
+        || createInfo.hostImageWidth == 0u || createInfo.hostImageHeight == 0u) {
+        return std::unexpected(CreationFailure{VK_ERROR_INITIALIZATION_FAILED, false});
+    }
+    if (createInfo.hostImageWidth != presentationCreateInfo.framebufferWidth
+        || createInfo.hostImageHeight != presentationCreateInfo.framebufferHeight) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
+    }
+
+    auto runtimeResult = createSwapchainRuntime(
+        presentationCreateInfo, createInfo.requestedSurfaceFormat,
+        VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags,
+        true, true);
+    if (!runtimeResult.has_value()) {
+        return runtimeResult;
+    }
+
+    VulkanHostImagePresentationResources::CreateInfo hostResourceCreateInfo{
+        presentationCreateInfo.logicalDevice,
+        presentationCreateInfo.graphicsQueueFamilyIndex,
+        createInfo.hostImage,
+        createInfo.hostImageFormat,
+        runtimeResult->m_surfaceFormat.format,
+        VkExtent2D{presentationCreateInfo.framebufferWidth,
+                   presentationCreateInfo.framebufferHeight},
+        runtimeResult->m_images,
+        runtimeResult->m_imageViews,
+        presentationCreateInfo.framesInFlightCount,
+    };
+    auto hostResourceResult =
+        VulkanHostImagePresentationResources::create(hostResourceCreateInfo);
+    if (!hostResourceResult.has_value()) {
+        return std::unexpected(
+            CreationFailure{hostResourceResult.error().vulkanResult, false});
+    }
+    runtimeResult->m_hostImagePresentationResources.emplace(
+        std::move(hostResourceResult.value()));
+    return std::move(runtimeResult.value());
+}
+
+std::expected<VulkanPresentationRuntime, VulkanPresentationRuntime::CreationFailure>
+VulkanPresentationRuntime::createSwapchainRuntime(
+    const CreateInfo& createInfo, VkFormat requiredSurfaceFormat,
+    VkImageUsageFlags requiredImageUsageFlags, bool requiresExactExtent,
+    bool preservesExactCreationFailures) {
+    /**
+     * @note ThreadSafety: Creation is presentation-thread confined and publishes no handle
+     *       until every swapchain, view, synchronization, and clear-path object exists.
+     * @brief Applies one explicit policy to common swapchain construction. Legacy creation
+     *        supplies undefined format, transfer-only usage, clamped extent, and historical
+     *        failure mapping. Host creation supplies exact UNORM format, combined usage,
+     *        exact extent, and raw failure preservation. This keeps the old path's observable
+     *        choices unchanged while sharing transactional ownership mechanics.
+     *
+     * Semantic pseudocode:
+     * validate framebuffer and required surface usage
+     * enumerate formats and select legacy preference or exact requested format
+     * enumerate present modes and select MAILBOX else FIFO
+     * calculate surface extent; reject mismatch when exact extent is required
+     * create swapchain with the supplied usage policy
+     * create every swapchain view and frame synchronization object
+     * create the clear command pool and command buffers
+     * on any failure, destroy all completed objects in reverse ownership order
+     * publish the complete runtime
+     *
+     * The algorithm is O(surfaceFormatCount + presentModeCount + swapchainImageCount +
+     * framesInFlightCount) time and O(the same counts) temporary/owned storage.
+     */
     if (createInfo.framebufferWidth == 0u || createInfo.framebufferHeight == 0u
         || createInfo.framesInFlightCount == 0u) {
         return std::unexpected(CreationFailure{VK_SUCCESS, true});
@@ -34,15 +124,21 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     if (vulkanResult != VK_SUCCESS) {
         return std::unexpected(CreationFailure{vulkanResult, false});
     }
-    if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) == 0u) {
+    if ((surfaceCapabilities.supportedUsageFlags & requiredImageUsageFlags)
+        != requiredImageUsageFlags) {
         return std::unexpected(CreationFailure{VK_SUCCESS, true});
     }
 
     std::uint32_t surfaceFormatCount = 0u;
     vulkanResult = vkGetPhysicalDeviceSurfaceFormatsKHR(
         createInfo.physicalDevice, createInfo.surface, &surfaceFormatCount, nullptr);
-    if (vulkanResult != VK_SUCCESS || surfaceFormatCount == 0u) {
-        return std::unexpected(CreationFailure{vulkanResult, surfaceFormatCount == 0u});
+    if (vulkanResult != VK_SUCCESS) {
+        return std::unexpected(CreationFailure{
+            vulkanResult,
+            preservesExactCreationFailures ? false : surfaceFormatCount == 0u});
+    }
+    if (surfaceFormatCount == 0u) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
     }
     std::vector<VkSurfaceFormatKHR> surfaceFormats(surfaceFormatCount);
     vulkanResult = vkGetPhysicalDeviceSurfaceFormatsKHR(
@@ -58,9 +154,16 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
                    && candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         });
     };
-    auto selectedFormat = selectFormat(VK_FORMAT_B8G8R8A8_SRGB);
-    if (selectedFormat == surfaceFormats.end()) {
+    auto selectedFormat = requiredSurfaceFormat == VK_FORMAT_UNDEFINED
+        ? selectFormat(VK_FORMAT_B8G8R8A8_SRGB)
+        : selectFormat(requiredSurfaceFormat);
+    if (requiredSurfaceFormat == VK_FORMAT_UNDEFINED
+        && selectedFormat == surfaceFormats.end()) {
         selectedFormat = selectFormat(VK_FORMAT_R8G8B8A8_SRGB);
+    }
+    if (requiredSurfaceFormat != VK_FORMAT_UNDEFINED
+        && selectedFormat == surfaceFormats.end()) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
     }
     const VkSurfaceFormatKHR surfaceFormat = selectedFormat == surfaceFormats.end()
         ? surfaceFormats.front()
@@ -69,8 +172,13 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     std::uint32_t presentModeCount = 0u;
     vulkanResult = vkGetPhysicalDeviceSurfacePresentModesKHR(
         createInfo.physicalDevice, createInfo.surface, &presentModeCount, nullptr);
-    if (vulkanResult != VK_SUCCESS || presentModeCount == 0u) {
-        return std::unexpected(CreationFailure{vulkanResult, presentModeCount == 0u});
+    if (vulkanResult != VK_SUCCESS) {
+        return std::unexpected(CreationFailure{
+            vulkanResult,
+            preservesExactCreationFailures ? false : presentModeCount == 0u});
+    }
+    if (presentModeCount == 0u) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
     }
     std::vector<VkPresentModeKHR> presentModes(presentModeCount);
     vulkanResult = vkGetPhysicalDeviceSurfacePresentModesKHR(
@@ -93,6 +201,11 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
               std::clamp(createInfo.framebufferHeight,
                          surfaceCapabilities.minImageExtent.height,
                          surfaceCapabilities.maxImageExtent.height)};
+    if (requiresExactExtent
+        && (extent.width != createInfo.framebufferWidth
+            || extent.height != createInfo.framebufferHeight)) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
+    }
     std::uint32_t imageCount = surfaceCapabilities.minImageCount + 1u;
     if (surfaceCapabilities.maxImageCount != 0u) {
         imageCount = std::min(imageCount, surfaceCapabilities.maxImageCount);
@@ -114,7 +227,7 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     swapchainCreateInfo.imageColorSpace = surfaceFormat.colorSpace;
     swapchainCreateInfo.imageExtent = extent;
     swapchainCreateInfo.imageArrayLayers = 1u;
-    swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    swapchainCreateInfo.imageUsage = requiredImageUsageFlags;
     swapchainCreateInfo.imageSharingMode = sharingMode;
     swapchainCreateInfo.queueFamilyIndexCount = splitQueueFamilies ? 2u : 0u;
     swapchainCreateInfo.pQueueFamilyIndices =
@@ -160,9 +273,13 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     std::vector<FrameSlot> frameSlots;
     vulkanResult = vkGetSwapchainImagesKHR(
         createInfo.logicalDevice, swapchain, &actualImageCount, nullptr);
-    if (vulkanResult != VK_SUCCESS || actualImageCount == 0u) {
-        return failAfterSwapchain(imageViews, frameSlots, vulkanResult,
-                                  actualImageCount == 0u);
+    if (vulkanResult != VK_SUCCESS) {
+        return failAfterSwapchain(
+            imageViews, frameSlots, vulkanResult,
+            preservesExactCreationFailures ? false : actualImageCount == 0u);
+    }
+    if (actualImageCount == 0u) {
+        return failAfterSwapchain(imageViews, frameSlots, VK_SUCCESS, true);
     }
     std::vector<VkImage> images(actualImageCount);
     vulkanResult = vkGetSwapchainImagesKHR(
@@ -197,14 +314,21 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     for (FrameSlot& frameSlot : frameSlots) {
-        if (vkCreateSemaphore(createInfo.logicalDevice, &semaphoreCreateInfo, nullptr,
-                              &frameSlot.imageAvailableSemaphore) != VK_SUCCESS
-            || vkCreateSemaphore(createInfo.logicalDevice, &semaphoreCreateInfo, nullptr,
-                                 &frameSlot.renderFinishedSemaphore) != VK_SUCCESS
-            || vkCreateFence(createInfo.logicalDevice, &fenceCreateInfo, nullptr,
-                             &frameSlot.inFlightFence) != VK_SUCCESS) {
-            return failAfterSwapchain(imageViews, frameSlots, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                                      false);
+        vulkanResult = vkCreateSemaphore(createInfo.logicalDevice, &semaphoreCreateInfo,
+                                         nullptr, &frameSlot.imageAvailableSemaphore);
+        if (vulkanResult == VK_SUCCESS) {
+            vulkanResult = vkCreateSemaphore(createInfo.logicalDevice, &semaphoreCreateInfo,
+                                             nullptr, &frameSlot.renderFinishedSemaphore);
+        }
+        if (vulkanResult == VK_SUCCESS) {
+            vulkanResult = vkCreateFence(createInfo.logicalDevice, &fenceCreateInfo, nullptr,
+                                         &frameSlot.inFlightFence);
+        }
+        if (vulkanResult != VK_SUCCESS) {
+            const VkResult reportedResult = preservesExactCreationFailures
+                ? vulkanResult
+                : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
         }
     }
 
@@ -213,10 +337,13 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     commandPoolCreateInfo.queueFamilyIndex = createInfo.graphicsQueueFamilyIndex;
     VkCommandPool commandPool = VK_NULL_HANDLE;
-    if (vkCreateCommandPool(createInfo.logicalDevice, &commandPoolCreateInfo, nullptr,
-                            &commandPool) != VK_SUCCESS) {
-        return failAfterSwapchain(imageViews, frameSlots, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                                  false);
+    vulkanResult = vkCreateCommandPool(createInfo.logicalDevice, &commandPoolCreateInfo,
+                                       nullptr, &commandPool);
+    if (vulkanResult != VK_SUCCESS) {
+        const VkResult reportedResult = preservesExactCreationFailures
+            ? vulkanResult
+            : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
     }
     std::vector<VkCommandBuffer> frameCommandBuffers(createInfo.framesInFlightCount,
                                                      VK_NULL_HANDLE);
@@ -225,11 +352,15 @@ VulkanPresentationRuntime::create(const CreateInfo& createInfo) {
     commandBufferAllocateInfo.commandPool = commandPool;
     commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     commandBufferAllocateInfo.commandBufferCount = createInfo.framesInFlightCount;
-    if (vkAllocateCommandBuffers(createInfo.logicalDevice, &commandBufferAllocateInfo,
-                                 frameCommandBuffers.data()) != VK_SUCCESS) {
+    vulkanResult = vkAllocateCommandBuffers(createInfo.logicalDevice,
+                                            &commandBufferAllocateInfo,
+                                            frameCommandBuffers.data());
+    if (vulkanResult != VK_SUCCESS) {
         vkDestroyCommandPool(createInfo.logicalDevice, commandPool, nullptr);
-        return failAfterSwapchain(imageViews, frameSlots, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                                  false);
+        const VkResult reportedResult = preservesExactCreationFailures
+            ? vulkanResult
+            : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
     }
 
     return VulkanPresentationRuntime{
@@ -278,11 +409,15 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     , m_imageInFlightFences(std::move(movedFrom.m_imageInFlightFences))
     , m_frameCommandBuffers(std::move(movedFrom.m_frameCommandBuffers))
     , m_frameSlots(std::move(movedFrom.m_frameSlots))
+    , m_hostImagePresentationResources(
+          std::move(movedFrom.m_hostImagePresentationResources))
     , m_swapchainGeneration(movedFrom.m_swapchainGeneration)
     , m_frameSequence(movedFrom.m_frameSequence)
     , m_currentFrameSlot(movedFrom.m_currentFrameSlot)
     , m_acquiredImageIndex(movedFrom.m_acquiredImageIndex)
-    , m_isFrameOpen(movedFrom.m_isFrameOpen) {
+    , m_isFrameOpen(movedFrom.m_isFrameOpen)
+    , m_openFrameMetrics(movedFrom.m_openFrameMetrics)
+    , m_frameStartTimePoint(movedFrom.m_frameStartTimePoint) {
     movedFrom.m_swapchain = VK_NULL_HANDLE;
     movedFrom.m_commandPool = VK_NULL_HANDLE;
     movedFrom.m_imageViews.clear();
@@ -290,6 +425,8 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     movedFrom.m_frameSlots.clear();
     movedFrom.m_imageInFlightFences.clear();
     movedFrom.m_frameCommandBuffers.clear();
+    movedFrom.m_hostImagePresentationResources.reset();
+    movedFrom.m_isFrameOpen = false;
 }
 
 void VulkanPresentationRuntime::destroyOwnedObjects() noexcept {
@@ -300,6 +437,7 @@ void VulkanPresentationRuntime::destroyOwnedObjects() noexcept {
     if (m_presentQueue != m_graphicsQueue) {
         vkQueueWaitIdle(m_presentQueue);
     }
+    m_hostImagePresentationResources.reset();
     for (const FrameSlot& frameSlot : m_frameSlots) {
         if (frameSlot.imageAvailableSemaphore != VK_NULL_HANDLE) {
             vkDestroySemaphore(m_logicalDevice, frameSlot.imageAvailableSemaphore, nullptr);
@@ -350,6 +488,7 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
         beginResult.vulkanResult = vulkanResult;
         return beginResult;
     }
+    frameSlot.hasSubmittedHostImageResources = false;
     m_openFrameMetrics = FrameMetrics{};
     m_openFrameMetrics.fenceWaitNanoseconds = elapsedNanosecondsSince(fenceWaitStart);
 
@@ -392,6 +531,12 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
 
 VulkanPresentationRuntime::SubmitFrameResult
 VulkanPresentationRuntime::submitAndPresentFrame(VkCommandBuffer commandBuffer) {
+    return submitAndPresentFrameWithResourceTracking(commandBuffer, false);
+}
+
+VulkanPresentationRuntime::SubmitFrameResult
+VulkanPresentationRuntime::submitAndPresentFrameWithResourceTracking(
+    VkCommandBuffer commandBuffer, bool usesHostImageResources) {
     SubmitFrameResult submitResult{};
     if (!m_isFrameOpen) {
         submitResult.vulkanResult = VK_NOT_READY;
@@ -421,6 +566,9 @@ VulkanPresentationRuntime::submitAndPresentFrame(VkCommandBuffer commandBuffer) 
         submitResult.status = FrameStatus::RecreateRequired;
         submitResult.vulkanResult = vulkanResult;
         return submitResult;
+    }
+    if (usesHostImageResources) {
+        frameSlot.hasSubmittedHostImageResources = true;
     }
 
     VkPresentInfoKHR presentInfo{};
@@ -459,6 +607,69 @@ VulkanPresentationRuntime::submitAndPresentFrame(VkCommandBuffer commandBuffer) 
     }
     submitResult.vulkanResult = presentResult;
     return submitResult;
+}
+
+VulkanPresentationRuntime::SubmitFrameResult
+VulkanPresentationRuntime::submitAndPresentHostImageFrame() {
+    if (!m_isFrameOpen || !m_hostImagePresentationResources.has_value()) {
+        SubmitFrameResult submitResult{};
+        submitResult.vulkanResult = VK_NOT_READY;
+        return submitResult;
+    }
+    const VkCommandBuffer commandBuffer =
+        m_hostImagePresentationResources->commandBuffer(m_currentFrameSlot,
+                                                        m_acquiredImageIndex);
+    return submitAndPresentFrameWithResourceTracking(commandBuffer, true);
+}
+
+std::expected<void, VkResult>
+VulkanPresentationRuntime::detachHostImagePresentationResources() {
+    if (!m_hostImagePresentationResources.has_value()) {
+        return {};
+    }
+
+    /**
+     * @note ThreadSafety: Detach is render-thread confined, so frame-slot submission flags
+     *       cannot change while the retirement set is built or waited.
+     * @brief Builds the minimal fence retirement set from slots whose last successful submit
+     *        referenced host resources. The current open slot is excluded by index because
+     *        beginFrame reset its fence but has not submitted it; excluding by handle value
+     *        could incorrectly omit another slot in a mock or aliased-handle environment.
+     *
+     * Semantic pseudocode:
+     * submittedFrameFences = empty
+     * for each frameSlotIndex and frameSlot:
+     *     isOpenUnsubmitted = frameOpen and frameSlotIndex equals currentFrameSlot
+     *     if frameSlot references host resources and not isOpenUnsubmitted:
+     *         append frameSlot.inFlightFence
+     * wait all submittedFrameFences through the host-resource owner
+     * if wait fails: retain optional owner and every submission flag
+     * otherwise: destroy/reset owner and clear all submission flags
+     *
+     * Retirement is O(framesInFlightCount) time and storage on the detach slow path.
+     */
+    std::vector<VkFence> submittedFrameFences;
+    submittedFrameFences.reserve(m_frameSlots.size());
+    for (std::size_t frameSlotIndex = 0u; frameSlotIndex < m_frameSlots.size();
+         ++frameSlotIndex) {
+        const FrameSlot& frameSlot = m_frameSlots[frameSlotIndex];
+        const bool isResetUnsubmittedOpenSlot =
+            m_isFrameOpen && frameSlotIndex == m_currentFrameSlot;
+        if (frameSlot.hasSubmittedHostImageResources && !isResetUnsubmittedOpenSlot) {
+            submittedFrameFences.push_back(frameSlot.inFlightFence);
+        }
+    }
+    auto destructionResult =
+        m_hostImagePresentationResources->destroyAfterSubmittedFrames(
+            submittedFrameFences, VK_NULL_HANDLE);
+    if (!destructionResult.has_value()) {
+        return destructionResult;
+    }
+    m_hostImagePresentationResources.reset();
+    for (FrameSlot& frameSlot : m_frameSlots) {
+        frameSlot.hasSubmittedHostImageResources = false;
+    }
+    return {};
 }
 
 VulkanPresentationRuntime::SubmitFrameResult

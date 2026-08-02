@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -24,6 +25,7 @@
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
 using barrieww::NativePresentationRuntimeOperationResult;
+using barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1;
 
 static_assert(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::R8G8B8A8Unorm)
               == 1u);
@@ -113,16 +115,25 @@ static_assert(std::is_same_v<
 namespace {
 
 VkImageUsageFlags g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+VkExtent2D g_surfaceCurrentExtent{1280u, 720u};
+VkResult g_surfaceFormatCountResult = VK_SUCCESS;
 std::uint32_t g_minImageCount = 2u;
 std::uint32_t g_maxImageCount = 0u;
 bool g_offerMailboxPresentMode = true;
 bool g_offerPreferredFormat = true;
+bool g_offerRequestedHostFormat = true;
+VkColorSpaceKHR g_requestedHostColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 std::uint32_t g_swapchainImageCount = 3u;
 std::uint32_t g_createdImageViewCount = 0u;
 std::uint32_t g_destroyedImageViewCount = 0u;
+std::vector<VkImageView> g_destroyedImageViews;
 std::uint32_t g_destroyedSwapchainCount = 0u;
 VkSharingMode g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 std::uint32_t g_observedQueueFamilyCount = 0u;
+VkImageUsageFlags g_observedSwapchainImageUsage = 0u;
+VkFormat g_observedSwapchainImageFormat = VK_FORMAT_UNDEFINED;
+VkColorSpaceKHR g_observedSwapchainImageColorSpace = VK_COLOR_SPACE_MAX_ENUM_KHR;
+VkExtent2D g_observedSwapchainExtent{};
 VkResult g_acquireResult = VK_SUCCESS;
 VkResult g_submitResult = VK_SUCCESS;
 VkResult g_presentResult = VK_SUCCESS;
@@ -131,7 +142,10 @@ std::uint32_t g_submitCallCount = 0u;
 std::uint32_t g_presentCallCount = 0u;
 std::uint32_t g_clearImageCallCount = 0u;
 std::uint32_t g_recordedCommandBufferCount = 0u;
+VkCommandBuffer g_observedSubmittedCommandBuffer = VK_NULL_HANDLE;
 std::array<float, 4> g_observedClearColor{};
+std::uint32_t g_createdFenceCount = 0u;
+bool g_offerDynamicRenderingFunctions = true;
 
 enum class HostResourceOperation {
     ImageView,
@@ -233,6 +247,7 @@ void resetHostResourceState() {
     g_hostResourceWaitCallCount = 0u;
     g_createdImageViewCount = 0u;
     g_destroyedImageViewCount = 0u;
+    g_destroyedImageViews.clear();
     g_destroyedSamplerCount = 0u;
     g_destroyedDescriptorSetLayoutCount = 0u;
     g_destroyedDescriptorPoolCount = 0u;
@@ -241,6 +256,7 @@ void resetHostResourceState() {
     g_destroyedShaderModuleCount = 0u;
     g_destroyedCommandPoolCount = 0u;
     g_observedCommandPoolQueueFamilyIndex = 0u;
+    g_offerDynamicRenderingFunctions = true;
 }
 
 /**
@@ -291,16 +307,25 @@ barrieww::VulkanHostImagePresentationResources::CreateInfo makeHostResourceCreat
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
     g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    g_surfaceCurrentExtent = VkExtent2D{1280u, 720u};
+    g_surfaceFormatCountResult = VK_SUCCESS;
     g_minImageCount = 2u;
     g_maxImageCount = 0u;
     g_offerMailboxPresentMode = true;
     g_offerPreferredFormat = true;
+    g_offerRequestedHostFormat = true;
+    g_requestedHostColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     g_swapchainImageCount = 3u;
     g_createdImageViewCount = 0u;
     g_destroyedImageViewCount = 0u;
+    g_destroyedImageViews.clear();
     g_destroyedSwapchainCount = 0u;
     g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     g_observedQueueFamilyCount = 0u;
+    g_observedSwapchainImageUsage = 0u;
+    g_observedSwapchainImageFormat = VK_FORMAT_UNDEFINED;
+    g_observedSwapchainImageColorSpace = VK_COLOR_SPACE_MAX_ENUM_KHR;
+    g_observedSwapchainExtent = {};
     g_acquireResult = VK_SUCCESS;
     g_submitResult = VK_SUCCESS;
     g_presentResult = VK_SUCCESS;
@@ -309,7 +334,10 @@ void resetPresentationState() {
     g_presentCallCount = 0u;
     g_clearImageCallCount = 0u;
     g_recordedCommandBufferCount = 0u;
+    g_observedSubmittedCommandBuffer = VK_NULL_HANDLE;
     g_observedClearColor = {};
+    g_createdFenceCount = 0u;
+    g_offerDynamicRenderingFunctions = true;
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -348,6 +376,37 @@ TEST_CASE("Presentation image format values map strictly to Vulkan formats",
                 static_cast<barrieww::PresentationImageFormat>(UINT32_MAX))
             == VK_FORMAT_UNDEFINED);
 }
+
+namespace {
+
+/**
+ * @note ThreadSafety: Returns only local scalar state and is fully thread-safe.
+ * @brief Builds valid host-image creation input with exact BGRA UNORM surface output.
+ * @return NativeHostImagePresentationRuntimeCreateInfoVersion1 Valid borrowed-handle input
+ * @warning MemoryOwnership: Contains opaque borrowed handles and transfers no ownership.
+ */
+NativeHostImagePresentationRuntimeCreateInfoVersion1 makeHostImageCreateInfo() {
+    NativeHostImagePresentationRuntimeCreateInfoVersion1 createInfo{};
+    createInfo.instanceHandle = 1u;
+    createInfo.physicalDeviceHandle = 2u;
+    createInfo.logicalDeviceHandle = 3u;
+    createInfo.surfaceHandle = 4u;
+    createInfo.graphicsQueueHandle = 5u;
+    createInfo.presentQueueHandle = 5u;
+    createInfo.graphicsQueueFamilyIndex = 7u;
+    createInfo.presentQueueFamilyIndex = 7u;
+    createInfo.framebufferWidth = 1280u;
+    createInfo.framebufferHeight = 720u;
+    createInfo.framesInFlightCount = 2u;
+    createInfo.hostImageHandle = 0x4000u;
+    createInfo.hostImageFormatValue = 1u;
+    createInfo.requestedSurfaceFormatValue = 2u;
+    createInfo.hostImageWidth = 1280u;
+    createInfo.hostImageHeight = 720u;
+    return createInfo;
+}
+
+} // namespace
 
 TEST_CASE("Host image presentation boundary layouts remain fixed",
           "[presentationRuntime][layout]") {
@@ -405,7 +464,7 @@ extern "C" VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     *surfaceCapabilities = {};
     surfaceCapabilities->minImageCount = g_minImageCount;
     surfaceCapabilities->maxImageCount = g_maxImageCount;
-    surfaceCapabilities->currentExtent = VkExtent2D{1280u, 720u};
+    surfaceCapabilities->currentExtent = g_surfaceCurrentExtent;
     surfaceCapabilities->minImageExtent = VkExtent2D{1u, 1u};
     surfaceCapabilities->maxImageExtent = VkExtent2D{4096u, 4096u};
     surfaceCapabilities->currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -425,7 +484,14 @@ extern "C" VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(
     }
     availableFormats.push_back(
         VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR});
+    if (g_offerRequestedHostFormat) {
+        availableFormats.push_back(
+            VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, g_requestedHostColorSpace});
+    }
     if (formats == nullptr) {
+        if (g_surfaceFormatCountResult != VK_SUCCESS) {
+            return g_surfaceFormatCountResult;
+        }
         *formatCount = static_cast<std::uint32_t>(availableFormats.size());
         return VK_SUCCESS;
     }
@@ -461,6 +527,10 @@ extern "C" VkResult VKAPI_CALL vkCreateSwapchainKHR(
     static_cast<void>(allocationCallbacks);
     g_observedSharingMode = createInfo->imageSharingMode;
     g_observedQueueFamilyCount = createInfo->queueFamilyIndexCount;
+    g_observedSwapchainImageUsage = createInfo->imageUsage;
+    g_observedSwapchainImageFormat = createInfo->imageFormat;
+    g_observedSwapchainImageColorSpace = createInfo->imageColorSpace;
+    g_observedSwapchainExtent = createInfo->imageExtent;
     *swapchain = reinterpret_cast<VkSwapchainKHR>(0x5000u);
     return VK_SUCCESS;
 }
@@ -512,6 +582,7 @@ extern "C" void VKAPI_CALL vkDestroyImageView(
     static_cast<void>(imageView);
     static_cast<void>(allocationCallbacks);
     g_hostResourceDestructionOrder.push_back(HostResourceOperation::ImageView);
+    g_destroyedImageViews.push_back(imageView);
     ++g_destroyedImageViewCount;
 }
 
@@ -681,6 +752,30 @@ extern "C" void VKAPI_CALL vkUpdateDescriptorSets(
     g_observedDescriptorImageInfo = descriptorWrites[0].pImageInfo[0];
 }
 
+/**
+ * @note ThreadSafety: Test-thread confined through deterministic global mock state.
+ * @brief Resolves only the dynamic-rendering device procedures used by host resources.
+ * @param VkDevice device Borrowed logical-device handle
+ * @param const char* procedureName Null-terminated Vulkan procedure name
+ * @return PFN_vkVoidFunction Mock procedure address, or null when unavailable
+ * @warning MemoryOwnership: Returns a static function address and retains no input pointer.
+ */
+extern "C" PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(
+    VkDevice device, const char* procedureName) {
+    static_cast<void>(device);
+    if (!g_offerDynamicRenderingFunctions) {
+        return nullptr;
+    }
+    const std::string_view requestedProcedure{procedureName};
+    if (requestedProcedure == "vkCmdBeginRenderingKHR") {
+        return reinterpret_cast<PFN_vkVoidFunction>(&vkCmdBeginRenderingKHR);
+    }
+    if (requestedProcedure == "vkCmdEndRenderingKHR") {
+        return reinterpret_cast<PFN_vkVoidFunction>(&vkCmdEndRenderingKHR);
+    }
+    return nullptr;
+}
+
 extern "C" VkResult VKAPI_CALL vkQueueWaitIdle(VkQueue queue) {
     static_cast<void>(queue);
     return VK_SUCCESS;
@@ -710,7 +805,9 @@ extern "C" VkResult VKAPI_CALL vkCreateFence(
     static_cast<void>(device);
     static_cast<void>(createInfo);
     static_cast<void>(allocationCallbacks);
-    *fence = reinterpret_cast<VkFence>(0x9000u);
+    *fence = reinterpret_cast<VkFence>(
+        static_cast<std::uintptr_t>(0x9000u + g_createdFenceCount));
+    ++g_createdFenceCount;
     return VK_SUCCESS;
 }
 
@@ -756,7 +853,9 @@ extern "C" VkResult VKAPI_CALL vkQueueSubmit(
     VkQueue queue, std::uint32_t submitCount, const VkSubmitInfo* submitInfo, VkFence fence) {
     static_cast<void>(queue);
     static_cast<void>(submitCount);
-    static_cast<void>(submitInfo);
+    g_observedSubmittedCommandBuffer = submitInfo->commandBufferCount == 0u
+        ? VK_NULL_HANDLE
+        : submitInfo->pCommandBuffers[0];
     static_cast<void>(fence);
     ++g_submitCallCount;
     return g_submitResult;
@@ -1802,6 +1901,20 @@ TEST_CASE("Host image resources create the exact pipeline and prerecorded matrix
     REQUIRE(g_destroyedShaderModuleCount == 2u);
 }
 
+TEST_CASE("Host image resources reject unavailable dynamic rendering procedures",
+          "[presentationRuntime][hostResources]") {
+    resetHostResourceState();
+    g_offerDynamicRenderingFunctions = false;
+
+    const auto result = barrieww::VulkanHostImagePresentationResources::create(
+        makeHostResourceCreateInfo());
+
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().vulkanResult == VK_ERROR_EXTENSION_NOT_PRESENT);
+    REQUIRE(g_hostResourceCreationOrder.empty());
+    REQUIRE(g_createdImageViewCount == 0u);
+}
+
 TEST_CASE("Host image resource creation preserves every practical Vulkan failure",
           "[presentationRuntime][hostResources]") {
     const std::array failedOperations{
@@ -1957,4 +2070,421 @@ TEST_CASE("Host image resource detach waits submitted fences and is transactiona
             .has_value());
     REQUIRE(g_hostResourceWaitCallCount == waitCallCount);
     REQUIRE(g_destroyedCommandPoolCount == 1u);
+}
+
+namespace {
+
+/**
+ * @note ThreadSafety: Test-thread confined through deterministic global Vulkan mock state.
+ * @brief Creates a host-image presentation runtime from valid exact-format input.
+ * @return std::uint64_t Nonzero Native-owned runtime address
+ * @warning MemoryOwnership: Transfers the returned runtime ownership to the caller, which
+ *          must invoke barriEwwDestroyPresentationRuntimeVersion1 exactly once.
+ */
+std::uint64_t openHostImageRuntime() {
+    g_supportedUsageFlags =
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags;
+    const NativeHostImagePresentationRuntimeCreateInfoVersion1 createInfo =
+        makeHostImageCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(createResult.runtimeAddress != 0u);
+    return createResult.runtimeAddress;
+}
+
+} // namespace
+
+TEST_CASE("Host image runtime boundary clears outputs and rejects null or invalid scalars",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    NativePresentationRuntimeCreateResultVersion1 createResult{
+        UINT64_MAX, VK_ERROR_UNKNOWN, UINT32_MAX, UINT32_MAX,
+        UINT32_MAX, UINT32_MAX, UINT32_MAX};
+
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(nullptr, &createResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(createResult.runtimeAddress == 0u);
+    REQUIRE(createResult.vulkanResult == VK_SUCCESS);
+    const NativeHostImagePresentationRuntimeCreateInfoVersion1 validCreateInfo =
+        makeHostImageCreateInfo();
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&validCreateInfo, nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+
+    const std::array<std::uint64_t NativeHostImagePresentationRuntimeCreateInfoVersion1::*,
+                     7>
+        handleMembers{
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::instanceHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::physicalDeviceHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::logicalDeviceHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::surfaceHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::graphicsQueueHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::presentQueueHandle,
+            &NativeHostImagePresentationRuntimeCreateInfoVersion1::hostImageHandle,
+        };
+    for (const auto handleMember : handleMembers) {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.*handleMember = 0u;
+        createResult.runtimeAddress = UINT64_MAX;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+        REQUIRE(createResult.runtimeAddress == 0u);
+    }
+
+    SECTION("reserved flags") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.reservedFlags = 1u;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    SECTION("unknown host format") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.hostImageFormatValue = UINT32_MAX;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    SECTION("unknown requested surface format") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.requestedSurfaceFormatValue = UINT32_MAX;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    SECTION("zero framebuffer extent") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.framebufferWidth = 0u;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    SECTION("zero host extent") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.hostImageHeight = 0u;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    SECTION("zero frame slots") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.framesInFlightCount = 0u;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+    }
+    REQUIRE(g_destroyedSwapchainCount == 0u);
+}
+
+TEST_CASE("Host image runtime requires exact extents format color space and combined usage",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    g_supportedUsageFlags =
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags;
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+
+    SECTION("host and framebuffer mismatch") {
+        auto createInfo = makeHostImageCreateInfo();
+        createInfo.hostImageWidth = 1279u;
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    }
+    SECTION("selected swapchain extent mismatch") {
+        g_surfaceCurrentExtent = VkExtent2D{1024u, 720u};
+        const auto createInfo = makeHostImageCreateInfo();
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    }
+    SECTION("requested format absent") {
+        g_offerRequestedHostFormat = false;
+        const auto createInfo = makeHostImageCreateInfo();
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    }
+    SECTION("requested format has a different color space") {
+        g_requestedHostColorSpace = VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT;
+        const auto createInfo = makeHostImageCreateInfo();
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    }
+    SECTION("surface lacks color attachment usage") {
+        g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const auto createInfo = makeHostImageCreateInfo();
+        REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+                == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    }
+    REQUIRE(createResult.runtimeAddress == 0u);
+    REQUIRE(createResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(g_destroyedSwapchainCount == 0u);
+}
+
+TEST_CASE("Host image runtime creates exact swapchain and owns attached resources",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    g_supportedUsageFlags =
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags;
+    const auto createInfo = makeHostImageCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    const std::uint64_t runtimeAddress = createResult.runtimeAddress;
+
+    REQUIRE(runtimeAddress != 0u);
+    REQUIRE(createResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(createResult.selectedFormatValue == 2u);
+    REQUIRE(createResult.selectedPresentModeValue
+            == static_cast<std::uint32_t>(VK_PRESENT_MODE_MAILBOX_KHR));
+    REQUIRE(createResult.selectedSharingModeValue
+            == static_cast<std::uint32_t>(VK_SHARING_MODE_EXCLUSIVE));
+    REQUIRE(createResult.swapchainImageCount == 3u);
+    REQUIRE(g_observedSwapchainImageUsage
+            == (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT));
+    REQUIRE(g_observedSwapchainImageFormat == VK_FORMAT_B8G8R8A8_UNORM);
+    REQUIRE(g_observedSwapchainImageColorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    REQUIRE(g_observedSwapchainExtent.width == 1280u);
+    REQUIRE(g_observedSwapchainExtent.height == 720u);
+    REQUIRE(g_observedPipelineColorFormat == VK_FORMAT_B8G8R8A8_UNORM);
+    REQUIRE(g_observedHostImageViewCreateInfo.image == reinterpret_cast<VkImage>(0x4000u));
+    REQUIRE(g_observedHostImageViewCreateInfo.format == VK_FORMAT_R8G8B8A8_UNORM);
+    REQUIRE(g_recordedCommandBufferCount == 6u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_destroyedSwapchainCount == 1u);
+    REQUIRE(g_destroyedImageViewCount == 4u);
+    REQUIRE(g_destroyedImageViews
+            == std::vector<VkImageView>{
+                reinterpret_cast<VkImageView>(0x7003u),
+                reinterpret_cast<VkImageView>(0x7000u),
+                reinterpret_cast<VkImageView>(0x7001u),
+                reinterpret_cast<VkImageView>(0x7002u)});
+}
+
+TEST_CASE("Host image runtime creation preserves resource failure and cleans swapchain",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    g_supportedUsageFlags =
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags;
+    g_failedHostResourceOperation = HostResourceOperation::ImageView;
+    g_failedHostResourceInvocationOrdinal = g_swapchainImageCount + 1u;
+    g_injectedHostResourceResult = VK_ERROR_DEVICE_LOST;
+    const auto createInfo = makeHostImageCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{
+        UINT64_MAX, VK_ERROR_UNKNOWN, UINT32_MAX, UINT32_MAX,
+        UINT32_MAX, UINT32_MAX, UINT32_MAX};
+
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::VulkanFailure);
+    REQUIRE(createResult.runtimeAddress == 0u);
+    REQUIRE(createResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_destroyedImageViewCount == 3u);
+    REQUIRE(g_destroyedSwapchainCount == 1u);
+}
+
+TEST_CASE("Host image runtime preserves WSI query failures as Vulkan failures",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    g_supportedUsageFlags =
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags;
+    g_surfaceFormatCountResult = VK_ERROR_SURFACE_LOST_KHR;
+    const auto createInfo = makeHostImageCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+
+    REQUIRE(barriEwwCreateHostImagePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::VulkanFailure);
+    REQUIRE(createResult.vulkanResult == VK_ERROR_SURFACE_LOST_KHR);
+    REQUIRE(createResult.runtimeAddress == 0u);
+}
+
+TEST_CASE("Host image submit selects the fixed frame slot and image matrix entry",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    const std::uint64_t runtimeAddress = openHostImageRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
+        makeSentinelSubmitResult();
+    const std::uint32_t creationRecordingCount = g_recordedCommandBufferCount;
+
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
+
+    g_acquiredImageIndex = 2u;
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_observedSubmittedCommandBuffer == reinterpret_cast<VkCommandBuffer>(0xB002u));
+
+    g_acquiredImageIndex = 1u;
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_observedSubmittedCommandBuffer == reinterpret_cast<VkCommandBuffer>(0xB004u));
+    REQUIRE(g_recordedCommandBufferCount == creationRecordingCount);
+    REQUIRE(g_submitCallCount == 2u);
+    REQUIRE(g_presentCallCount == 2u);
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Host image detach skips an open unsubmitted slot and preserves clear presentation",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    const std::uint64_t runtimeAddress = openHostImageRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+    barrieww::NativePresentationDetachHostImageResourcesResultVersion1 detachResult{
+        VK_ERROR_UNKNOWN, UINT32_MAX};
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+
+    REQUIRE(barriEwwDetachHostImagePresentationResourcesVersion1(runtimeAddress,
+                                                                 &detachResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(detachResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(detachResult.reserved == 0u);
+    REQUIRE(g_waitedHostResourceFences
+            == std::vector<VkFence>{reinterpret_cast<VkFence>(0x9000u)});
+    const std::uint32_t waitCallCount = g_hostResourceWaitCallCount;
+    REQUIRE(barriEwwDetachHostImagePresentationResourcesVersion1(runtimeAddress,
+                                                                 &detachResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_hostResourceWaitCallCount == waitCallCount);
+
+    submitResult = makeSentinelSubmitResult();
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.2f, 0.4f, 0.6f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_clearImageCallCount == 1u);
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Host image detach retains resources when a submitted fence wait fails",
+          "[presentationRuntime][hostRuntime]") {
+    resetPresentationState();
+    resetHostResourceState();
+    const std::uint64_t runtimeAddress = openHostImageRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+    barrieww::NativePresentationDetachHostImageResourcesResultVersion1 detachResult{};
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    g_acquiredImageIndex = 1u;
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    g_hostResourceWaitResult = VK_ERROR_DEVICE_LOST;
+
+    REQUIRE(barriEwwDetachHostImagePresentationResourcesVersion1(runtimeAddress,
+                                                                 &detachResult)
+            == NativePresentationRuntimeOperationResult::VulkanFailure);
+    REQUIRE(detachResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_destroyedCommandPoolCount == 0u);
+    REQUIRE(g_destroyedSamplerCount == 0u);
+
+    g_hostResourceWaitResult = VK_SUCCESS;
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(runtimeAddress, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_observedSubmittedCommandBuffer == reinterpret_cast<VkCommandBuffer>(0xB004u));
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Host image operations reject null addresses and clear writable results",
+          "[presentationRuntime][hostRuntime]") {
+    barrieww::NativePresentationDetachHostImageResourcesResultVersion1 detachResult{
+        VK_ERROR_UNKNOWN, UINT32_MAX};
+    auto submitResult = makeSentinelSubmitResult();
+
+    REQUIRE(barriEwwDetachHostImagePresentationResourcesVersion1(0u, &detachResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(detachResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(detachResult.reserved == 0u);
+    REQUIRE(barriEwwDetachHostImagePresentationResourcesVersion1(1u, nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(barriEwwSubmitAndPresentHostImageFrameVersion1(1u, nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+}
+
+TEST_CASE("Host image boundary operations contain detach and submit exceptions",
+          "[presentationRuntime][hostRuntime]") {
+    SECTION("creation") {
+        NativePresentationRuntimeCreateResultVersion1 createResult{
+            UINT64_MAX, VK_ERROR_UNKNOWN, UINT32_MAX, UINT32_MAX,
+            UINT32_MAX, UINT32_MAX, UINT32_MAX};
+        const auto throwingCreation = []() -> NativePresentationRuntimeOperationResult {
+            throw std::runtime_error{"Injected host creation failure"};
+        };
+        REQUIRE(barrieww::interoperability::executeNativePresentationCreateOperation(
+                    &createResult, throwingCreation)
+                == NativePresentationRuntimeOperationResult::InternalFailure);
+        REQUIRE(createResult.runtimeAddress == 0u);
+        REQUIRE(createResult.vulkanResult == VK_SUCCESS);
+    }
+    SECTION("detach") {
+        barrieww::NativePresentationDetachHostImageResourcesResultVersion1 detachResult{
+            VK_ERROR_UNKNOWN, UINT32_MAX};
+        const auto throwingDetach = []() -> std::expected<void, VkResult> {
+            throw std::runtime_error{"Injected detach failure"};
+        };
+        REQUIRE(barrieww::interoperability::executeNativePresentationDetachOperation(
+                    &detachResult, throwingDetach)
+                == NativePresentationRuntimeOperationResult::InternalFailure);
+        REQUIRE(detachResult.vulkanResult == VK_SUCCESS);
+        REQUIRE(detachResult.reserved == 0u);
+    }
+    SECTION("submit") {
+        auto submitResult = makeSentinelSubmitResult();
+        const auto throwingHostSubmission =
+            []() -> barrieww::VulkanPresentationRuntime::SubmitFrameResult {
+            throw std::runtime_error{"Injected host submit failure"};
+        };
+        REQUIRE(barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+                    &submitResult, throwingHostSubmission)
+                == NativePresentationRuntimeOperationResult::InternalFailure);
+        REQUIRE(submitResult.frameStatusValue == 0u);
+        REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
+    }
+}
+
+TEST_CASE("Standalone clear creation retains transfer-only SRGB behavior",
+          "[presentationRuntime][hostRuntime][regression]") {
+    resetPresentationState();
+    resetHostResourceState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    REQUIRE(g_observedSwapchainImageUsage == VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    REQUIRE(g_observedSwapchainImageFormat == VK_FORMAT_B8G8R8A8_SRGB);
+    REQUIRE(g_observedSwapchainImageColorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    REQUIRE(g_recordedCommandBufferCount == 0u);
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
 }
