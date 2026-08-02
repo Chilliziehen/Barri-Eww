@@ -99,10 +99,13 @@ if(BARRIEWW_BACKEND_VULKAN)
     add_executable(BarriEwwNativePresentationRuntimeTests
         NativePresentationRuntimeBoundaryTests.cpp
         ../src/Interoperability/NativePresentationRuntimeBoundary.cpp
+        ../src/Vulkan/VulkanHostImagePresentationResources.cpp
         ../src/Vulkan/VulkanPresentationRuntime.cpp)
+    add_dependencies(BarriEwwNativePresentationRuntimeTests BarriEwwHostImagePresentationShaders)
     target_include_directories(BarriEwwNativePresentationRuntimeTests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../include
+            ${CMAKE_CURRENT_BINARY_DIR}/../generated
             ${Vulkan_INCLUDE_DIRS})
     target_compile_definitions(BarriEwwNativePresentationRuntimeTests
         PRIVATE
