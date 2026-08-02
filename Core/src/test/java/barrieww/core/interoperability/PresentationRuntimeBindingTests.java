@@ -236,6 +236,99 @@ class PresentationRuntimeBindingTests {
     }
 
     @Test
+    void createFactoriesRejectInvalidDimensionsAndFrameCountsBeforeLibraryLookup() {
+        Path missingAbsoluteLibraryPath = Path.of("missing-validation-library").toAbsolutePath();
+        PresentationBootstrapHandles bootstrapHandles = new PresentationBootstrapHandles(
+                1L, 2L, 3L, 4L, 5L, 5L, 0, 0);
+        HostImagePresentationBinding hostImageBinding = HostImagePresentationBinding.create(
+                6L, PresentationImageFormat.R8G8B8A8_UNORM,
+                PresentationImageFormat.B8G8R8A8_UNORM, 1, 1, 1, 1);
+        int[][] invalidCreateParameters = {
+                {0, 1, 1}, {-1, 1, 1}, {1, 0, 1}, {1, -1, 1}, {1, 1, 0}, {1, 1, -1}
+        };
+
+        for (int[] createParameters : invalidCreateParameters) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> NativePresentationRuntime.create(missingAbsoluteLibraryPath,
+                            bootstrapHandles, createParameters[0], createParameters[1],
+                            createParameters[2]));
+            assertThrows(IllegalArgumentException.class,
+                    () -> NativePresentationRuntime.createHostImagePresentation(
+                            missingAbsoluteLibraryPath, bootstrapHandles, createParameters[0],
+                            createParameters[1], createParameters[2], hostImageBinding));
+        }
+    }
+
+    @Test
+    void failedOwnerHandoffDestroysOnceClosesArenaAndPreservesFailures() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        Arena creationArena = Arena.ofConfined();
+        RuntimeException initializationFailure = new RuntimeException("owner initialization");
+        RuntimeException destroyFailure = new RuntimeException("handoff destroy");
+        OwnershipHandoffObserver observer = new OwnershipHandoffObserver(destroyFailure);
+        MethodHandle destroyHandle = MethodHandles.lookup().findVirtual(
+                OwnershipHandoffObserver.class, "destroy",
+                MethodType.methodType(int.class, long.class)).bindTo(observer);
+
+        NativePresentationRuntimeException runtimeException = assertThrows(
+                NativePresentationRuntimeException.class,
+                () -> NativePresentationRuntime.completeRuntimeOwnershipTransfer(
+                        libraryArena, creationArena, destroyHandle, 91L,
+                        () -> {
+                            assertTrue(creationArena.scope().isAlive());
+                            throw initializationFailure;
+                        }, NativePresentationRuntime.s_createHostImageSymbolName));
+
+        assertSame(initializationFailure, runtimeException.getCause());
+        assertEquals(1, initializationFailure.getSuppressed().length);
+        assertSame(destroyFailure, initializationFailure.getSuppressed()[0]);
+        assertEquals(1, observer.m_invocationCount);
+        assertEquals(91L, observer.m_runtimeAddress);
+        assertFalse(libraryArena.scope().isAlive());
+        assertFalse(creationArena.scope().isAlive());
+    }
+
+    @Test
+    void hostInvocationFailuresPreserveExactCausesAndStacks() throws Exception {
+        RuntimeException createFailure = new RuntimeException("host create invocation");
+        MethodHandle createHandle = MethodHandles.lookup().findStatic(
+                PresentationRuntimeBindingTests.class, "failHostImageCreate",
+                MethodType.methodType(int.class, RuntimeException.class, MemorySegment.class,
+                        MemorySegment.class)).bindTo(createFailure);
+        try (Arena invocationArena = Arena.ofConfined()) {
+            NativePresentationRuntimeException createException = assertThrows(
+                    NativePresentationRuntimeException.class,
+                    () -> NativePresentationRuntime.invokeHostImageCreate(
+                            createHandle, invocationArena.allocate(96, 8),
+                            invocationArena.allocate(32, 8)));
+            assertSame(createFailure, createException.getCause());
+            assertTrue(createException.getCause().getStackTrace().length > 0);
+        }
+
+        Arena libraryArena = Arena.ofConfined();
+        HostImageInvocationObserver observer = new HostImageInvocationObserver();
+        NativePresentationRuntime runtime = createHostRuntimeForInvocationTest(
+                libraryArena, observer);
+        RuntimeException detachFailure = new RuntimeException("host detach invocation");
+        observer.m_detachInvocationFailure = detachFailure;
+        NativePresentationRuntimeException detachException = assertThrows(
+                NativePresentationRuntimeException.class,
+                runtime::detachHostImagePresentationResources);
+        assertSame(detachFailure, detachException.getCause());
+        assertTrue(detachException.getCause().getStackTrace().length > 0);
+
+        observer.m_detachInvocationFailure = null;
+        RuntimeException submitFailure = new RuntimeException("host submit invocation");
+        observer.m_submitInvocationFailure = submitFailure;
+        NativePresentationRuntimeException submitException = assertThrows(
+                NativePresentationRuntimeException.class,
+                runtime::submitAndPresentHostImageFrame);
+        assertSame(submitFailure, submitException.getCause());
+        assertTrue(submitException.getCause().getStackTrace().length > 0);
+        runtime.close();
+    }
+
+    @Test
     void closeFinalizesOwnershipAfterOperationFailureWithoutRetry() throws Exception {
         Arena libraryArena = Arena.ofConfined();
         DestroyAttemptObserver destroyAttemptObserver = new DestroyAttemptObserver(false, 4);
@@ -784,6 +877,59 @@ class PresentationRuntimeBindingTests {
     }
 
     /**
+     * @note ThreadSafety: Test-confined; invoke once on the owning test thread.
+     * Throws the configured failure from a Java-only host-create handle.
+     *
+     * @param RuntimeException invocationFailure Exact injected invocation failure
+     * @param MemorySegment createInfo Synthetic host create-info segment
+     * @param MemorySegment createResult Synthetic host create-result segment
+     * @return int Never returns
+     * @warning MemoryOwnership: The test owns both segments and their Arena; this method retains
+     *          neither segment and transfers no ownership.
+     */
+    private static int failHostImageCreate(RuntimeException invocationFailure,
+                                           MemorySegment createInfo,
+                                           MemorySegment createResult) {
+        throw invocationFailure;
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; one test thread invokes this observer once.
+     * Records a compensating destroy and throws its exact configured failure.
+     * @warning MemoryOwnership: Stores only the scalar Native runtime address and owns no Arena or
+     *          native memory.
+     */
+    private static final class OwnershipHandoffObserver {
+        private final RuntimeException m_destroyFailure;
+        private int m_invocationCount;
+        private long m_runtimeAddress;
+
+        /**
+         * Creates one deterministic ownership-handoff observer.
+         *
+         * @param RuntimeException destroyFailure Exact failure thrown by destroy
+         */
+        private OwnershipHandoffObserver(RuntimeException destroyFailure) {
+            m_destroyFailure = destroyFailure;
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke once on the owning test thread.
+         * Records the consumed runtime address and throws the configured destroy failure.
+         *
+         * @param long runtimeAddress Synthetic Native runtime address
+         * @return int Never returns
+         * @warning MemoryOwnership: The address is treated as consumed by this sole attempt; this
+         *          observer stores only its scalar value and owns no Native allocation.
+         */
+        private int destroy(long runtimeAddress) {
+            ++m_invocationCount;
+            m_runtimeAddress = runtimeAddress;
+            throw m_destroyFailure;
+        }
+    }
+
+    /**
      * @note ThreadSafety: Test-confined; one test thread invokes each instance serially.
      * Observes host detach and submit calls and writes deterministic boundary outputs.
      * @warning MemoryOwnership: Retained MemorySegment references remain owned by the test
@@ -798,6 +944,8 @@ class PresentationRuntimeBindingTests {
         private int m_submitInvocationCount;
         private int m_detachOperationResult;
         private int m_submitOperationResult;
+        private RuntimeException m_detachInvocationFailure;
+        private RuntimeException m_submitInvocationFailure;
 
         /**
          * @note ThreadSafety: Test-confined; invoke serially from the owning test thread.
@@ -810,6 +958,9 @@ class PresentationRuntimeBindingTests {
          *          reference only for same-lifetime identity assertions.
          */
         private int detach(long runtimeAddress, MemorySegment detachResult) {
+            if (m_detachInvocationFailure != null) {
+                throw m_detachInvocationFailure;
+            }
             detachResult.fill((byte) 0);
             detachResult.set(ValueLayout.JAVA_INT, 0, -77);
             if (m_detachInvocationCount++ == 0) {
@@ -831,6 +982,9 @@ class PresentationRuntimeBindingTests {
          *          reference only for same-lifetime identity assertions.
          */
         private int submit(long runtimeAddress, MemorySegment submitResult) {
+            if (m_submitInvocationFailure != null) {
+                throw m_submitInvocationFailure;
+            }
             submitResult.fill((byte) 0);
             submitResult.set(ValueLayout.JAVA_INT, 0, 3);
             submitResult.set(ValueLayout.JAVA_INT, 4, -88);

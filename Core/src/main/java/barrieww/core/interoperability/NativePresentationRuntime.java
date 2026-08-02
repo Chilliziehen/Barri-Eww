@@ -225,6 +225,8 @@ public final class NativePresentationRuntime implements AutoCloseable {
      * @param int framebufferHeight Initial framebuffer height in pixels
      * @param int framesInFlightCount Number of in-flight frame slots
      * @return NativePresentationRuntime The open thread-confined runtime
+     * @throws IllegalArgumentException When framebuffer dimensions or framesInFlightCount are not
+     *         positive
      * @throws NativeLibraryLoadingException When the library or a symbol cannot be resolved
      * @throws NativePresentationRuntimeException When the Native runtime cannot be created
      * @warning MemoryOwnership: The returned runtime owns its confined library Arena and Native
@@ -237,6 +239,7 @@ public final class NativePresentationRuntime implements AutoCloseable {
             throws NativeLibraryLoadingException, NativePresentationRuntimeException {
         Objects.requireNonNull(nativeLibraryPath, "nativeLibraryPath");
         Objects.requireNonNull(bootstrapHandles, "bootstrapHandles");
+        validateCreateDimensions(framebufferWidth, framebufferHeight, framesInFlightCount);
         Path absoluteLibraryPath = nativeLibraryPath.toAbsolutePath().normalize();
         if (!nativeLibraryPath.isAbsolute()) {
             throw new NativeLibraryLoadingException(
@@ -281,7 +284,8 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     absoluteLibraryPath, s_createSymbolName, loadingFailure);
         }
 
-        try (Arena creationArena = Arena.ofConfined()) {
+        Arena creationArena = Arena.ofConfined();
+        try {
             MemorySegment createInfo = creationArena.allocate(s_createInfoByteSize, 8);
             createInfo.set(ValueLayout.JAVA_LONG, 0, bootstrapHandles.instanceHandle());
             createInfo.set(ValueLayout.JAVA_LONG, 8, bootstrapHandles.physicalDeviceHandle());
@@ -303,27 +307,37 @@ public final class NativePresentationRuntime implements AutoCloseable {
             try {
                 operationResult = (int) createHandle.invokeExact(createInfo, createResult);
             } catch (Throwable invocationFailure) {
-                libraryArena.close();
-                throw new NativePresentationRuntimeException(
-                        "Native presentation runtime creation invocation failed: "
-                                + invocationFailure, s_createSymbolName, -1, 0);
+                throw invocationException("createPresentationRuntime", s_createSymbolName,
+                        invocationFailure);
             }
             if (operationResult != s_operationSuccess) {
                 int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
-                libraryArena.close();
                 throw new NativePresentationRuntimeException(
                         "Native presentation runtime creation failed with operation result "
                                 + operationResult, s_createSymbolName, operationResult,
                         vulkanResult);
             }
             long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
-            return new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
-                    submitHandle, presentClearHandle, submitAndPresentClearFrameHandle,
-                    null, null, beginResult, priorMetrics, submitResult, null, runtimeAddress,
-                    createResult.get(ValueLayout.JAVA_INT, 12),
-                    createResult.get(ValueLayout.JAVA_INT, 16),
-                    createResult.get(ValueLayout.JAVA_INT, 20),
-                    createResult.get(ValueLayout.JAVA_INT, 24));
+            return completeRuntimeOwnershipTransfer(libraryArena, creationArena, destroyHandle,
+                    runtimeAddress,
+                    () -> new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
+                            submitHandle, presentClearHandle,
+                            submitAndPresentClearFrameHandle, null, null, beginResult,
+                            priorMetrics, submitResult, null, runtimeAddress,
+                            createResult.get(ValueLayout.JAVA_INT, 12),
+                            createResult.get(ValueLayout.JAVA_INT, 16),
+                            createResult.get(ValueLayout.JAVA_INT, 20),
+                            createResult.get(ValueLayout.JAVA_INT, 24)),
+                    s_createSymbolName);
+        } catch (NativePresentationRuntimeException creationFailure) {
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
+            throw creationFailure;
+        } catch (Throwable creationFailure) {
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
+            throw invocationException("createPresentationRuntime", s_createSymbolName,
+                    creationFailure);
         }
     }
 
@@ -339,6 +353,8 @@ public final class NativePresentationRuntime implements AutoCloseable {
      * @param int framesInFlightCount Number of in-flight frame slots
      * @param HostImagePresentationBinding hostImageBinding Borrowed host image description
      * @return NativePresentationRuntime The open thread-confined host-image runtime
+     * @throws IllegalArgumentException When framebuffer dimensions or framesInFlightCount are not
+     *         positive, or the host image dimensions differ from the framebuffer
      * @throws NativeLibraryLoadingException When the library or a required symbol cannot resolve
      * @throws NativePresentationRuntimeException When Native runtime creation fails
      * @warning MemoryOwnership: The returned runtime owns its confined library Arena, Native
@@ -353,6 +369,7 @@ public final class NativePresentationRuntime implements AutoCloseable {
         Objects.requireNonNull(nativeLibraryPath, "nativeLibraryPath");
         Objects.requireNonNull(bootstrapHandles, "bootstrapHandles");
         Objects.requireNonNull(hostImageBinding, "hostImageBinding");
+        validateCreateDimensions(framebufferWidth, framebufferHeight, framesInFlightCount);
         HostImagePresentationBinding validatedBinding = HostImagePresentationBinding.create(
                 hostImageBinding.hostImageHandle(), hostImageBinding.hostImageFormat(),
                 hostImageBinding.requestedSurfaceFormat(), hostImageBinding.width(),
@@ -437,45 +454,41 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     absoluteLibraryPath, s_createHostImageSymbolName, loadingFailure);
         }
 
-        try (Arena creationArena = Arena.ofConfined()) {
+        Arena creationArena = Arena.ofConfined();
+        try {
             MemorySegment createInfo = creationArena.allocate(s_hostImageCreateInfoLayout);
             writeHostImageCreateInfo(createInfo, bootstrapHandles, framebufferWidth,
                     framebufferHeight, framesInFlightCount, validatedBinding);
             MemorySegment createResult = creationArena.allocate(s_createResultByteSize, 8);
-            int operationResult;
-            try {
-                operationResult = (int) createHostImageHandle.invokeExact(createInfo, createResult);
-            } catch (Throwable invocationFailure) {
-                libraryArena.close();
-                throw invocationException("createHostImagePresentationRuntime",
-                        s_createHostImageSymbolName, invocationFailure);
-            }
+            int operationResult = invokeHostImageCreate(
+                    createHostImageHandle, createInfo, createResult);
             if (operationResult != s_operationSuccess) {
                 int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
-                libraryArena.close();
                 throw new NativePresentationRuntimeException(
                         "Native host-image presentation runtime creation failed with operation "
                                 + "result " + operationResult,
                         s_createHostImageSymbolName, operationResult, vulkanResult);
             }
             long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
-            return new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
-                    submitHandle, presentClearHandle, submitAndPresentClearFrameHandle,
-                    detachHostImageResourcesHandle, submitAndPresentHostImageFrameHandle,
-                    beginResult, priorMetrics, submitResult, detachResult, runtimeAddress,
-                    createResult.get(ValueLayout.JAVA_INT, 12),
-                    createResult.get(ValueLayout.JAVA_INT, 16),
-                    createResult.get(ValueLayout.JAVA_INT, 20),
-                    createResult.get(ValueLayout.JAVA_INT, 24));
+            return completeRuntimeOwnershipTransfer(libraryArena, creationArena, destroyHandle,
+                    runtimeAddress,
+                    () -> new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
+                            submitHandle, presentClearHandle,
+                            submitAndPresentClearFrameHandle, detachHostImageResourcesHandle,
+                            submitAndPresentHostImageFrameHandle, beginResult, priorMetrics,
+                            submitResult, detachResult, runtimeAddress,
+                            createResult.get(ValueLayout.JAVA_INT, 12),
+                            createResult.get(ValueLayout.JAVA_INT, 16),
+                            createResult.get(ValueLayout.JAVA_INT, 20),
+                            createResult.get(ValueLayout.JAVA_INT, 24)),
+                    s_createHostImageSymbolName);
         } catch (NativePresentationRuntimeException creationFailure) {
-            if (libraryArena.scope().isAlive()) {
-                libraryArena.close();
-            }
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
             throw creationFailure;
         } catch (Throwable creationFailure) {
-            if (libraryArena.scope().isAlive()) {
-                libraryArena.close();
-            }
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
             throw invocationException("createHostImagePresentationRuntime",
                     s_createHostImageSymbolName, creationFailure);
         }
@@ -830,6 +843,114 @@ public final class NativePresentationRuntime implements AutoCloseable {
     }
 
     /**
+     * @note ThreadSafety: Initialization-confined; invoke once after Native create succeeds.
+     * Transfers a newly created Native runtime address to a fully constructed Java owner. If Java
+     * owner construction fails, consumes the address through exactly one destroy attempt before
+     * closing the library Arena.
+     *
+     * @param Arena libraryArena Confined library Arena to transfer or close
+     * @param Arena creationArena Confined create-record Arena to close before committing handoff
+     * @param MethodHandle destroyHandle Non-critical Native runtime destroy handle
+     * @param long runtimeAddress Newly transferred nonzero Native runtime address
+     * @param PresentationRuntimeOwnerFactory ownerFactory Java owner constructor
+     * @param String createSymbolName Native create symbol responsible for this ownership transfer
+     * @return NativePresentationRuntime Fully constructed Java owner
+     * @throws NativePresentationRuntimeException When Java owner construction fails
+     * @warning MemoryOwnership: Native ownership transfers to the returned owner only when this
+     *          method returns successfully. On failure this method consumes runtimeAddress exactly
+     *          once and closes libraryArena regardless of destroy outcome.
+     */
+    static NativePresentationRuntime completeRuntimeOwnershipTransfer(
+            Arena libraryArena, Arena creationArena, MethodHandle destroyHandle,
+            long runtimeAddress,
+            PresentationRuntimeOwnerFactory ownerFactory, String createSymbolName)
+            throws NativePresentationRuntimeException {
+        try {
+            NativePresentationRuntime runtime = Objects.requireNonNull(
+                    ownerFactory.createRuntime(),
+                    "ownerFactory returned null");
+            creationArena.close();
+            return runtime;
+        } catch (Throwable initializationFailure) {
+            try {
+                int destroyOperationResult = (int) destroyHandle.invokeExact(runtimeAddress);
+                if (destroyOperationResult != s_operationSuccess) {
+                    initializationFailure.addSuppressed(new NativePresentationRuntimeException(
+                            "Native runtime handoff destroy reported operation result "
+                                    + destroyOperationResult,
+                            s_destroySymbolName, destroyOperationResult, 0));
+                }
+            } catch (Throwable destroyFailure) {
+                if (destroyFailure != initializationFailure) {
+                    initializationFailure.addSuppressed(destroyFailure);
+                }
+            }
+            closeArenaSuppressing(creationArena, initializationFailure);
+            closeArenaSuppressing(libraryArena, initializationFailure);
+            throw invocationException("initializePresentationRuntimeOwner", createSymbolName,
+                    initializationFailure);
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Initialization-confined; invoke once on the library Arena owner thread.
+     * Invokes the non-critical host-image create downcall while retaining any Java-side failure as
+     * the checked exception cause.
+     *
+     * @param MethodHandle createHostImageHandle Non-critical host-image create downcall handle
+     * @param MemorySegment createInfo Read-only host-image create-info segment
+     * @param MemorySegment createResult Writable host-image create result segment
+     * @return int Stable Native operation result
+     * @throws NativePresentationRuntimeException When the FFM invocation throws
+     * @warning MemoryOwnership: The caller owns both segments and their creation Arena. Native
+     *          borrows them synchronously and retains neither address.
+     */
+    static int invokeHostImageCreate(MethodHandle createHostImageHandle, MemorySegment createInfo,
+                                     MemorySegment createResult)
+            throws NativePresentationRuntimeException {
+        try {
+            return (int) createHostImageHandle.invokeExact(createInfo, createResult);
+        } catch (Throwable invocationFailure) {
+            throw invocationException("createHostImagePresentationRuntime",
+                    s_createHostImageSymbolName, invocationFailure);
+        }
+    }
+
+    /**
+     * Validates signed Java creation dimensions before they can be packed as Native uint32 values.
+     *
+     * @param int framebufferWidth Positive initial framebuffer width
+     * @param int framebufferHeight Positive initial framebuffer height
+     * @param int framesInFlightCount Positive number of in-flight frame slots
+     * @throws IllegalArgumentException When any value is zero or negative
+     */
+    private static void validateCreateDimensions(int framebufferWidth, int framebufferHeight,
+                                                 int framesInFlightCount) {
+        if (framebufferWidth <= 0 || framebufferHeight <= 0 || framesInFlightCount <= 0) {
+            throw new IllegalArgumentException(
+                    "Framebuffer dimensions and framesInFlightCount must be positive");
+        }
+    }
+
+    /**
+     * Closes one Arena without replacing an already active primary failure.
+     *
+     * @param Arena arena Arena to close when still alive
+     * @param Throwable primaryFailure Failure that must remain primary
+     */
+    private static void closeArenaSuppressing(Arena arena, Throwable primaryFailure) {
+        try {
+            if (arena.scope().isAlive()) {
+                arena.close();
+            }
+        } catch (Throwable arenaCloseFailure) {
+            if (arenaCloseFailure != primaryFailure) {
+                primaryFailure.addSuppressed(arenaCloseFailure);
+            }
+        }
+    }
+
+    /**
      * Creates a checked failure for an exception contained on the Java side of a downcall.
      *
      * @param String operationName Semantic operation name
@@ -841,7 +962,7 @@ public final class NativePresentationRuntime implements AutoCloseable {
             String operationName, String symbolName, Throwable invocationFailure) {
         return new NativePresentationRuntimeException(
                 "Native " + operationName + " invocation failed: " + invocationFailure,
-                symbolName, -1, 0);
+                symbolName, -1, 0, invocationFailure);
     }
 
     /**

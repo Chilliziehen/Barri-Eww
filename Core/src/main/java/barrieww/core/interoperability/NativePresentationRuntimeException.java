@@ -19,8 +19,23 @@ public final class NativePresentationRuntimeException extends Exception {
      * @param int vulkanResult Raw VkResult where a Vulkan call was involved, otherwise 0
      */
     public NativePresentationRuntimeException(String message, String nativeSymbolName,
-                                              int operationResultCode, int vulkanResult) {
-        super(message);
+                                               int operationResultCode, int vulkanResult) {
+        this(message, nativeSymbolName, operationResultCode, vulkanResult, null);
+    }
+
+    /**
+     * Creates an operation-level presentation runtime failure with its original cause.
+     *
+     * @param String message Human-readable failure description
+     * @param String nativeSymbolName Invoked Version 1 native symbol
+     * @param int operationResultCode Native operation result value
+     * @param int vulkanResult Raw VkResult where a Vulkan call was involved, otherwise 0
+     * @param Throwable cause Original Java-side boundary or initialization failure
+     */
+    public NativePresentationRuntimeException(String message, String nativeSymbolName,
+                                               int operationResultCode, int vulkanResult,
+                                               Throwable cause) {
+        super(message, cause);
         m_nativeSymbolName = nativeSymbolName;
         m_operationResultCode = operationResultCode;
         m_vulkanResult = vulkanResult;
