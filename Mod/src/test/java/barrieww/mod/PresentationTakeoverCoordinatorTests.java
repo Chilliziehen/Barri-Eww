@@ -273,6 +273,51 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.detachHostImagePresentationResources());
     }
 
+    /** Verifies configure close retains frame then detach context before terminal interception. */
+    @Test
+    void frameDetachAndCloseFailuresAggregateInDeterministicOrder() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        NativePresentationRuntimeException frameFailure = runtimeFailure("frame");
+        NativePresentationRuntimeException detachFailure = runtimeFailure("detach");
+        NativePresentationRuntimeException closeFailure = runtimeFailure("close");
+        runtimeFactory.m_nextRuntime = runtime;
+        Logger logger = mock(Logger.class);
+        PresentationTakeoverCoordinator coordinator =
+            new PresentationTakeoverCoordinator(runtimeFactory, logger);
+        assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
+        runtime.m_beginFailure = frameFailure;
+        runtime.m_detachFailure = detachFailure;
+        runtime.m_closeFailure = closeFailure;
+        coordinator.beginFrame();
+
+        assertFalse(coordinator.detachHostImagePresentationResources());
+        assertEquals(1, runtime.m_detachCount);
+        int[] preparationCount = {0};
+        assertTrue(coordinator.configure(() -> {
+            preparationCount[0]++;
+            return readyInputs(800, 600, 2L);
+        }));
+
+        assertEquals(0, preparationCount[0]);
+        assertEquals(1, runtime.m_closeCount);
+        assertEquals(2, closeFailure.getSuppressed().length);
+        assertSame(frameFailure, closeFailure.getSuppressed()[0]);
+        assertSame(detachFailure, closeFailure.getSuppressed()[1]);
+        assertEquals(0, frameFailure.getSuppressed().length);
+        assertEquals(0, detachFailure.getSuppressed().length);
+        verify(logger).error(any(String.class),
+            org.mockito.ArgumentMatchers.same(frameFailure));
+        verify(logger).error(any(String.class),
+            org.mockito.ArgumentMatchers.same(detachFailure));
+        verify(logger).error(any(String.class),
+            org.mockito.ArgumentMatchers.same(closeFailure));
+        verify(logger, times(3)).error(any(String.class), any(Throwable.class));
+        assertTrue(coordinator.isTakenOver());
+        assertFalse(coordinator.requiresReconfiguration());
+        assertFalse(coordinator.detachHostImagePresentationResources());
+    }
+
     /** Verifies every first invalid or unready input permanently commits the surface to vanilla. */
     @Test
     void invalidOrUnreadyInitialConfigurePermanentlyCommitsVanilla() {

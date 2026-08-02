@@ -76,7 +76,10 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             try {
                 oldRuntime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                addSuppressedFailure(closeFailure, retainedFailureContext());
+                addRetainedGenerationFailures(
+                    closeFailure,
+                    m_primaryFrameFailure,
+                    m_hostResourceDetachFailure);
                 m_runtime = null;
                 m_isTakeoverPermanentlyDisabled = true;
                 m_isTakenOver = true;
@@ -309,8 +312,10 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
             try {
                 runtime.close();
             } catch (NativePresentationRuntimeException closeFailure) {
-                addSuppressedFailure(closeFailure, primaryFrameFailure);
-                addSuppressedFailure(closeFailure, hostResourceDetachFailure);
+                addRetainedGenerationFailures(
+                    closeFailure,
+                    primaryFrameFailure,
+                    hostResourceDetachFailure);
                 throw closeFailure;
             }
         }
@@ -393,11 +398,23 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
         primaryFailure.addSuppressed(contextualFailure);
     }
 
-    /** Returns the retained failure context relevant to a generation close attempt. */
-    private NativePresentationRuntimeException retainedFailureContext() {
-        return m_primaryFrameFailure != null
-            ? m_primaryFrameFailure
-            : m_hostResourceDetachFailure;
+    /**
+     * @note ThreadSafety: Caller-confined; mutates only the supplied close failure.
+     * Attaches retained generation failures exactly once in deterministic frame-then-detach order.
+     *
+     * @param NativePresentationRuntimeException closeFailure Primary close failure to propagate or log
+     * @param NativePresentationRuntimeException primaryFrameFailure Earlier frame failure, or null
+     * @param NativePresentationRuntimeException hostResourceDetachFailure Earlier detach failure,
+     * or null
+     * @warning MemoryOwnership: Exception references are observed synchronously and neither retained
+     * nor transferred beyond standard Java suppressed-exception ownership.
+     */
+    private static void addRetainedGenerationFailures(
+        NativePresentationRuntimeException closeFailure,
+        NativePresentationRuntimeException primaryFrameFailure,
+        NativePresentationRuntimeException hostResourceDetachFailure) {
+        addSuppressedFailure(closeFailure, primaryFrameFailure);
+        addSuppressedFailure(closeFailure, hostResourceDetachFailure);
     }
 
     /**
