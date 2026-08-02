@@ -10,13 +10,15 @@
 
 #include "BarriEww/Vulkan/VulkanContext.hpp"
 #include "BarriEww/Vulkan/VulkanContextCreateInfo.hpp"
+#include "TestVulkanDeviceSelection.hpp"
 
 namespace barrieww::testing {
 
 /**
  * @note ThreadSafety: Not thread-safe; each test owns one harness on one thread.
- * @brief Test-only headless Vulkan bring-up: instance → first graphics-capable
- *        physical device → logical device with one graphics queue → command pool. No
+ * @brief Test-only headless Vulkan bring-up: instance → first queue satisfying the profile
+ *        → logical device with one queue → command pool. The general profile requires
+ *        graphics and compute; focused callers may explicitly request graphics only. No
  *        surface or window; Vulkan 1.2 devices enable KHR dynamic rendering when present.
  *        Tests execute on a real driver (lavapipe on CI, native driver locally). create()
  *        returns nullptr when no Vulkan driver is present so tests can SKIP.
@@ -29,23 +31,36 @@ namespace barrieww::testing {
  */
 class TestVulkanDeviceHarness {
 public:
-    /** Attempts full bring-up; returns nullptr when no usable driver/device exists. */
+    /**
+     * @note ThreadSafety: Creates one test-thread-confined harness per invocation.
+     * @brief Attempts general test bring-up with one queue supporting both graphics and
+     *        compute operations; returns nullptr when no suitable driver or device exists.
+     * @return std::unique_ptr<TestVulkanDeviceHarness> Owner, or nullptr when unavailable
+     * @warning MemoryOwnership: Transfers complete harness ownership to the caller.
+     */
     [[nodiscard]] static std::unique_ptr<TestVulkanDeviceHarness> create() {
         auto harness = std::unique_ptr<TestVulkanDeviceHarness>(new TestVulkanDeviceHarness());
-        return harness->initialize<false>() ? std::move(harness) : nullptr;
+        constexpr VkQueueFlags requiredQueueFlags =
+            VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+        return harness->initialize<false>(requiredQueueFlags)
+            ? std::move(harness)
+            : nullptr;
     }
 
     /**
      * @note ThreadSafety: Creates one test-thread-confined harness per invocation.
      * @brief Attempts bring-up constrained to Vulkan API 1.2 with the
      *        VK_KHR_dynamic_rendering extension and feature both required and enabled.
+     * @param VkQueueFlags requiredQueueFlags Every operation the selected queue must support
      * @return std::unique_ptr<TestVulkanDeviceHarness> Owner, or nullptr when unavailable
      * @warning MemoryOwnership: Transfers complete harness ownership to the caller.
      */
     [[nodiscard]] static std::unique_ptr<TestVulkanDeviceHarness>
-    createWithVulkan12DynamicRenderingExtension() {
+    createWithVulkan12DynamicRenderingExtension(VkQueueFlags requiredQueueFlags) {
         auto harness = std::unique_ptr<TestVulkanDeviceHarness>(new TestVulkanDeviceHarness());
-        return harness->initialize<true>() ? std::move(harness) : nullptr;
+        return harness->initialize<true>(requiredQueueFlags)
+            ? std::move(harness)
+            : nullptr;
     }
 
     TestVulkanDeviceHarness(const TestVulkanDeviceHarness&) = delete;
@@ -127,11 +142,12 @@ private:
      * @note ThreadSafety: Test-thread confined during harness creation.
      * @brief Performs full bring-up under either the existing general profile or the
      *        compile-time-selected Vulkan 1.2 dynamic-rendering-extension profile.
+     * @param VkQueueFlags requiredQueueFlags Every operation the selected queue must support
      * @return bool True when every required driver, device, feature, and object exists
      * @warning MemoryOwnership: Acquires all successful Vulkan objects into this harness.
      */
     template<bool requiresVulkan12DynamicRenderingExtension>
-    [[nodiscard]] bool initialize() {
+    [[nodiscard]] bool initialize(VkQueueFlags requiredQueueFlags) {
         VkApplicationInfo applicationInfo{};
         applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         applicationInfo.pApplicationName = "BarriEwwNativeTests";
@@ -153,14 +169,31 @@ private:
         std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
         vkEnumeratePhysicalDevices(m_instance, &physicalDeviceCount, physicalDevices.data());
 
-        // Presentation execution requires graphics; graphics queues also support transfer.
+        /** Every candidate remains eligible for inspection until all profile requirements
+         *  identify one suitable device and queue family. */
         for (VkPhysicalDevice candidateDevice : physicalDevices) {
             if constexpr (requiresVulkan12DynamicRenderingExtension) {
                 VkPhysicalDeviceProperties candidateProperties{};
                 vkGetPhysicalDeviceProperties(candidateDevice, &candidateProperties);
-                if (candidateProperties.apiVersion < VK_API_VERSION_1_2
-                    || !supportsDeviceExtension(
-                        candidateDevice, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+                const bool hasDynamicRenderingExtension = supportsDeviceExtension(
+                    candidateDevice, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+                bool hasDynamicRenderingFeature = false;
+                if (candidateProperties.apiVersion >= VK_API_VERSION_1_2
+                    && hasDynamicRenderingExtension) {
+                    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures{};
+                    dynamicRenderingFeatures.sType =
+                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+                    VkPhysicalDeviceFeatures2 candidateFeatures{};
+                    candidateFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                    candidateFeatures.pNext = &dynamicRenderingFeatures;
+                    vkGetPhysicalDeviceFeatures2(candidateDevice, &candidateFeatures);
+                    hasDynamicRenderingFeature =
+                        dynamicRenderingFeatures.dynamicRendering == VK_TRUE;
+                }
+                if (!isStrictDynamicRenderingDeviceEligible(
+                        candidateProperties.apiVersion,
+                        hasDynamicRenderingExtension,
+                        hasDynamicRenderingFeature)) {
                     continue;
                 }
             }
@@ -172,7 +205,8 @@ private:
                                                      queueFamilies.data());
             for (std::uint32_t familyIndex = 0; familyIndex < queueFamilyCount;
                  ++familyIndex) {
-                if ((queueFamilies[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0u) {
+                if (queueFamilySupportsRequiredOperations(
+                        queueFamilies[familyIndex].queueFlags, requiredQueueFlags)) {
                     m_physicalDevice = candidateDevice;
                     m_queueFamilyIndex = familyIndex;
                     break;

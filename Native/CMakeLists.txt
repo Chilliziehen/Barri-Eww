@@ -171,6 +171,7 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/VulkanImageTable.cpp
             src/Vulkan/VulkanImageViewTable.cpp
             src/Vulkan/VulkanGraphicsPipelineTable.cpp
+            src/Vulkan/VulkanHostImageCompositionResources.cpp
             src/Vulkan/VulkanHostImagePresentationResources.cpp
             src/Vulkan/VulkanPresentationRuntime.cpp)
     target_include_directories(BarriEwwNative

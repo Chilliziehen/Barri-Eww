@@ -18,6 +18,7 @@
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
 #include "BarriEww/Interoperability/PresentationImageFormat.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationImageFormatMapping.hpp"
+#include "BarriEww/Vulkan/VulkanHostImageCompositionResources.hpp"
 #include "BarriEww/Vulkan/VulkanHostImagePresentationResources.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
 #include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
@@ -2009,6 +2010,59 @@ TEST_CASE("Host image resources reject invalid borrowed inputs and matrix overfl
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().vulkanResult == VK_ERROR_INITIALIZATION_FAILED);
     REQUIRE(g_hostResourceCreationOrder.empty());
+}
+
+TEST_CASE("Host image composition resources own the common draw path",
+          "[presentationRuntime][hostComposition]") {
+    resetHostResourceState();
+    {
+        auto result = barrieww::VulkanHostImageCompositionResources::create({
+            reinterpret_cast<VkDevice>(0x3000u),
+            reinterpret_cast<VkImage>(0x4000u),
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VkExtent2D{1280u, 720u},
+        });
+        REQUIRE(result.has_value());
+        auto resources = std::move(result.value());
+        resources.recordCommands(
+            reinterpret_cast<VkCommandBuffer>(0xB100u),
+            reinterpret_cast<VkImageView>(0x7101u));
+
+        const std::vector<HostResourceOperation> expectedCreationOrder{
+            HostResourceOperation::ImageView,
+            HostResourceOperation::Sampler,
+            HostResourceOperation::DescriptorSetLayout,
+            HostResourceOperation::DescriptorPool,
+            HostResourceOperation::DescriptorSet,
+            HostResourceOperation::PipelineLayout,
+            HostResourceOperation::VertexShaderModule,
+            HostResourceOperation::FragmentShaderModule,
+            HostResourceOperation::GraphicsPipeline,
+        };
+        REQUIRE(g_hostResourceCreationOrder == expectedCreationOrder);
+        const std::array expectedEventTypes{
+            HostCommandEventType::BeginRendering,
+            HostCommandEventType::BindPipeline,
+            HostCommandEventType::BindDescriptors,
+            HostCommandEventType::Draw,
+            HostCommandEventType::EndRendering,
+        };
+        REQUIRE(g_hostCommandEvents.size() == expectedEventTypes.size());
+        for (std::size_t eventIndex = 0u; eventIndex < expectedEventTypes.size();
+             ++eventIndex) {
+            REQUIRE(std::get<0>(g_hostCommandEvents[eventIndex])
+                    == reinterpret_cast<VkCommandBuffer>(0xB100u));
+            REQUIRE(std::get<1>(g_hostCommandEvents[eventIndex])
+                    == expectedEventTypes[eventIndex]);
+        }
+    }
+    REQUIRE(g_destroyedPipelineCount == 1u);
+    REQUIRE(g_destroyedPipelineLayoutCount == 1u);
+    REQUIRE(g_destroyedDescriptorPoolCount == 1u);
+    REQUIRE(g_destroyedDescriptorSetLayoutCount == 1u);
+    REQUIRE(g_destroyedSamplerCount == 1u);
+    REQUIRE(g_destroyedImageViewCount == 1u);
 }
 
 TEST_CASE("Host image resources create the exact pipeline and prerecorded matrix",

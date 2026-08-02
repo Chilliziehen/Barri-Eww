@@ -26,6 +26,7 @@ set(BARRIEWW_TEST_SOURCES
 if(BARRIEWW_BACKEND_VULKAN)
     list(APPEND BARRIEWW_TEST_SOURCES
         VulkanContextTests.cpp
+        TestVulkanDeviceSelectionTests.cpp
         VulkanFormatMappingTests.cpp
         VulkanFrameLoopTests.cpp
         VulkanImageTableTests.cpp
@@ -120,6 +121,7 @@ if(BARRIEWW_BACKEND_VULKAN)
     add_executable(BarriEwwNativePresentationRuntimeTests
         NativePresentationRuntimeBoundaryTests.cpp
         ../src/Interoperability/NativePresentationRuntimeBoundary.cpp
+        ../src/Vulkan/VulkanHostImageCompositionResources.cpp
         ../src/Vulkan/VulkanHostImagePresentationResources.cpp
         ../src/Vulkan/VulkanPresentationRuntime.cpp)
     add_dependencies(BarriEwwNativePresentationRuntimeTests BarriEwwHostImagePresentationShaders)

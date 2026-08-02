@@ -50,7 +50,8 @@ void requireExecutionEnvironment(bool isAvailable, const char* unavailableMessag
  * @warning MemoryOwnership: Transfers harness ownership to the caller on success.
  */
 std::unique_ptr<TestVulkanDeviceHarness> createExecutionHarness() {
-    return TestVulkanDeviceHarness::createWithVulkan12DynamicRenderingExtension();
+    return TestVulkanDeviceHarness::createWithVulkan12DynamicRenderingExtension(
+        VK_QUEUE_GRAPHICS_BIT);
 }
 
 /**

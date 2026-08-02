@@ -3,10 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <vector>
 
 #include <vulkan/vulkan.h>
+
+#include "BarriEww/Vulkan/VulkanHostImageCompositionResources.hpp"
 
 namespace barrieww {
 
@@ -15,9 +18,8 @@ namespace barrieww {
  *       destruction must be serialized on the presentation render thread.
  * @brief Owns one host-image-dependent presentation generation and its prerecorded
  *        frame-slot by swapchain-image command matrix.
- * @warning MemoryOwnership: Owns the sampled host image view, sampler, descriptors,
- *          pipeline objects, command pool and command buffers. Borrows the logical
- *          device, host image, swapchain images, and swapchain image views.
+ * @warning MemoryOwnership: Owns common composition resources, command pool and command
+ *          buffers. Borrows the logical device, host image, swapchain images, and views.
  */
 class VulkanHostImagePresentationResources {
 public:
@@ -162,19 +164,13 @@ private:
      * @note ThreadSafety: Render-thread confined; no concurrent resource use is permitted.
      * @brief Destroys every currently attached Native-owned object in reverse dependency
      *        order and leaves this owner detached. A detached owner is a no-op.
-     * @warning MemoryOwnership: Releases owned command, pipeline, descriptor, sampler, and
-     *          image-view objects; never releases borrowed device or image objects.
+     * @warning MemoryOwnership: Releases owned command and composition resources; never
+     *          releases borrowed device, image, or image-view objects.
      */
     void destroyOwnedObjects() noexcept;
 
     VkDevice m_logicalDevice = VK_NULL_HANDLE;
-    VkImageView m_hostImageView = VK_NULL_HANDLE;
-    VkSampler m_sampler = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    std::optional<VulkanHostImageCompositionResources> m_compositionResources;
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> m_commandBuffers;
     std::size_t m_swapchainImageCount = 0u;
