@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,6 +17,21 @@ import org.junit.jupiter.api.Test;
  */
 final class MainRenderTargetGenerationTrackerTests {
     private MainRenderTargetResizeListener m_registeredListener;
+
+    /**
+     * @note ThreadSafety: Runs serially before each tracker test on the test thread.
+     * Restores the production initial generation so each test observes an isolated lifecycle.
+     *
+     * @throws ReflectiveOperationException When the private tracker generation cannot be restored
+     * @warning MemoryOwnership: Reflection borrows the static field and retains no tracker state.
+     */
+    @BeforeEach
+    void resetGeneration() throws ReflectiveOperationException {
+        Field generationField = MainRenderTargetGenerationTracker.class.getDeclaredField(
+            "s_currentGeneration");
+        generationField.setAccessible(true);
+        generationField.setLong(null, 1L);
+    }
 
     /**
      * @note ThreadSafety: Runs serially on the same test thread as tracker access.
@@ -65,6 +82,24 @@ final class MainRenderTargetGenerationTrackerTests {
         MainRenderTargetGenerationTracker.mainRenderTargetResizeSucceeded(
             currentMainRenderTarget, currentMainRenderTarget);
         assertEquals(initialGeneration + 1,
+            MainRenderTargetGenerationTracker.currentGeneration());
+    }
+
+    /** Verifies listener registration preserves a generation already advanced by successful resize. */
+    @Test
+    void listenerRegistrationDoesNotResetLaterGeneration() {
+        Object currentMainRenderTarget = new Object();
+        MainRenderTargetGenerationTracker.mainRenderTargetResizeSucceeded(
+            currentMainRenderTarget,
+            currentMainRenderTarget);
+        long generationAfterResize = MainRenderTargetGenerationTracker.currentGeneration();
+        m_registeredListener = () -> true;
+
+        MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
+
+        assertEquals(2L, generationAfterResize);
+        assertEquals(
+            generationAfterResize,
             MainRenderTargetGenerationTracker.currentGeneration());
     }
 

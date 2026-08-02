@@ -182,7 +182,16 @@ final class MinecraftLifecycleMixinTests {
             () -> Class.forName("barrieww.mod.MinecraftClearTakeoverReadiness"));
     }
 
-    /** Invokes one private injected callback while preserving its original failure. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; mutates only accessibility of the supplied method.
+     * Invokes one private injected callback and unwraps its original checked failure for diagnostics.
+     *
+     * @param Method callbackMethod Reflected injected callback method
+     * @param Object receiver Test-owned callback receiver
+     * @param Object[] arguments Exact callback arguments
+     * @throws Exception When callback lookup, access, or invocation reports a checked failure
+     * @warning MemoryOwnership: Receiver, arguments, and callback state remain test-owned.
+     */
     private static void invokeCallback(Method callbackMethod, Object receiver, Object... arguments)
         throws Exception {
         callbackMethod.setAccessible(true);

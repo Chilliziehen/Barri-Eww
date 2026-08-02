@@ -4,13 +4,16 @@ import java.util.Objects;
 
 /**
  * @note ThreadSafety: Render-thread-only. Every method must be called serially on the render thread.
- * Tracks successful current-main-target replacements and one active surface resize listener.
+ * Treats Minecraft's constructor-created main target as generation one, tracks successful later
+ * current-main-target resizes monotonically, and retains one active surface resize listener.
  * @warning MemoryOwnership: The tracker borrows the registered listener only until exact unregister;
  * target identity arguments are observed synchronously and never retained.
  */
 public final class MainRenderTargetGenerationTracker {
+    /** Minecraft constructs one valid main target before surface listener registration. */
+    private static final long s_initialGeneration = 1L;
     private static MainRenderTargetResizeListener s_resizeListener;
-    private static long s_currentGeneration;
+    private static long s_currentGeneration = s_initialGeneration;
 
     /** Prevents instantiation of the global render-thread lifecycle tracker. */
     private MainRenderTargetGenerationTracker() {
@@ -18,7 +21,8 @@ public final class MainRenderTargetGenerationTracker {
 
     /**
      * @note ThreadSafety: Render-thread-confined and non-reentrant.
-     * Registers the sole active surface listener without replacing an existing registration.
+     * Registers the sole active surface listener without replacing an existing registration or
+     * changing the current target generation.
      *
      * @param MainRenderTargetResizeListener resizeListener Listener borrowed until exact unregister
      * @throws NullPointerException When resizeListener is null
@@ -77,7 +81,7 @@ public final class MainRenderTargetGenerationTracker {
         }
     }
 
-    /** Returns the monotonically published successful main-target generation. */
+    /** Returns the current positive main-target generation, initially generation one. */
     public static long currentGeneration() {
         return s_currentGeneration;
     }

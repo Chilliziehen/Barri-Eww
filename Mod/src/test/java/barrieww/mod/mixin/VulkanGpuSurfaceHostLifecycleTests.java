@@ -2,6 +2,7 @@ package barrieww.mod.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,6 +36,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.slf4j.Logger;
@@ -51,13 +53,38 @@ final class VulkanGpuSurfaceHostLifecycleTests {
     private static final long s_firstHostImageHandle = 71L;
     private static final long s_secondHostImageHandle = 72L;
 
-    /** Verifies an exact already-sized target is extracted without a redundant complete resize. */
+    /**
+     * @note ThreadSafety: Runs serially before each lifecycle test on the test thread.
+     * Restores the production initial target generation so startup and resize scenarios are isolated.
+     *
+     * @throws ReflectiveOperationException When the private tracker generation cannot be restored
+     * @warning MemoryOwnership: Reflection borrows the static field and retains no tracker state.
+     */
+    @BeforeEach
+    void resetGeneration() throws ReflectiveOperationException {
+        Field generationField = MainRenderTargetGenerationTracker.class.getDeclaredField(
+            "s_currentGeneration");
+        generationField.setAccessible(true);
+        generationField.setLong(null, 1L);
+    }
+
+    /** Verifies startup accepts the already-sized initial target without a resize notification. */
     @Test
-    void prepareGenerationDoesNotResizeExactTarget() throws Exception {
+    void startupPreparesExactInitialTargetWithoutPriorResizeNotification() throws Exception {
         HostPreparationState hostState = hostPreparationState(
             s_framebufferWidth,
             s_framebufferHeight);
-        long generation = publishGeneration();
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        AtomicReference<PresentationGenerationInputs> capturedInputs = new AtomicReference<>();
+        setField(hostState.m_surfaceMixin,
+            "barrieww$m_presentationTakeoverCoordinator",
+            coordinator);
+        when(coordinator.configure(any(PresentationGenerationPreparation.class)))
+            .thenAnswer(invocation -> {
+                PresentationGenerationPreparation preparation = invocation.getArgument(0);
+                capturedInputs.set(preparation.prepare());
+                return capturedInputs.get() != null;
+            });
 
         try (MockedStatic<Minecraft> minecraftClass = mockStatic(Minecraft.class);
              MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
@@ -70,13 +97,19 @@ final class VulkanGpuSurfaceHostLifecycleTests {
                 handlesAdapter,
                 bindingExtractor,
                 binding(s_firstHostImageHandle));
+            CallbackInfo callbackInformation = new CallbackInfo("configure", true);
 
-            PresentationGenerationInputs inputs = invokePrepareGeneration(
+            invokeConfigure(
                 hostState.m_surfaceMixin,
-                configuration());
+                configuration(),
+                callbackInformation);
 
-            assertEquals(generation, inputs.hostTargetGeneration());
+            PresentationGenerationInputs inputs = capturedInputs.get();
+            assertNotNull(inputs);
+            assertEquals(1L, inputs.hostTargetGeneration());
             assertEquals(s_firstHostImageHandle, inputs.hostImageBinding().hostImageHandle());
+            verify(coordinator).configure(any(PresentationGenerationPreparation.class));
+            assertTrue(callbackInformation.isCancelled());
             verify(hostState.m_gameRenderer, never()).resize(anyInt(), anyInt());
         }
     }
@@ -291,7 +324,16 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         }
     }
 
-    /** Creates initialized mocked host state and one surface mixin. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; creates independent mocks for one invocation.
+     * Creates initialized Minecraft host state and one surface mixin with the requested target extent.
+     *
+     * @param int targetWidth Initial mocked main-target width in pixels
+     * @param int targetHeight Initial mocked main-target height in pixels
+     * @return HostPreparationState Complete test-owned host preparation fixture
+     * @throws Exception When reflective assignment of Minecraft or mixin state fails
+     * @warning MemoryOwnership: The returned fixture owns only mocks and borrowed scalar handles.
+     */
     private static HostPreparationState hostPreparationState(int targetWidth, int targetHeight)
         throws Exception {
         VulkanGpuSurfaceMixin surfaceMixin = new VulkanGpuSurfaceMixin() { };
@@ -314,7 +356,18 @@ final class VulkanGpuSurfaceHostLifecycleTests {
             mainRenderTarget);
     }
 
-    /** Configures all static host adapters for one stable preparation. */
+    /**
+     * @note ThreadSafety: Test-thread-confined while scoped static mocks are active.
+     * Configures Minecraft, bootstrap, and binding adapters for one stable preparation attempt.
+     *
+     * @param HostPreparationState hostState Test-owned Minecraft host fixture
+     * @param MockedStatic<Minecraft> minecraftClass Scoped Minecraft singleton replacement
+     * @param MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter Scoped bootstrap adapter
+     * @param MockedStatic<MinecraftHostImagePresentationBindingExtractor> bindingExtractor Scoped
+     * host-image binding extractor
+     * @param HostImagePresentationBinding hostImageBinding Extracted binding, or null for absence
+     * @warning MemoryOwnership: Scoped mocks and fixture resources remain owned by the caller.
+     */
     private static void prepareStaticAdapters(
         HostPreparationState hostState,
         MockedStatic<Minecraft> minecraftClass,
@@ -332,14 +385,29 @@ final class VulkanGpuSurfaceHostLifecycleTests {
             44)).thenReturn(Optional.ofNullable(hostImageBinding));
     }
 
-    /** Publishes one positive current-target generation and returns it. */
+    /**
+     * @note ThreadSafety: Test-thread-confined and serialized with all tracker access.
+     * Simulates one successful current-main-target resize notification for non-startup scenarios.
+     *
+     * @return long Monotonically advanced tracker generation
+     * @warning MemoryOwnership: Temporary target identities are not retained by the tracker.
+     */
     private static long publishGeneration() {
         Object target = new Object();
         MainRenderTargetGenerationTracker.mainRenderTargetResizeSucceeded(target, target);
         return MainRenderTargetGenerationTracker.currentGeneration();
     }
 
-    /** Invokes the surface's post-retirement generation preparation callback. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; invokes one isolated mixin instance reflectively.
+     * Invokes the surface post-retirement generation preparation callback with exact configuration.
+     *
+     * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+     * @param GpuSurface.Configuration configuration Requested framebuffer configuration
+     * @return PresentationGenerationInputs Prepared inputs, or null when readiness validation fails
+     * @throws Exception When callback lookup, access, or invocation fails
+     * @warning MemoryOwnership: Returned inputs contain borrowed scalar handles from test fixtures.
+     */
     private static PresentationGenerationInputs invokePrepareGeneration(
         VulkanGpuSurfaceMixin surfaceMixin,
         GpuSurface.Configuration configuration) throws Exception {
@@ -353,7 +421,16 @@ final class VulkanGpuSurfaceHostLifecycleTests {
             configuration);
     }
 
-    /** Invokes the exact configure HEAD callback. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; invokes one isolated mixin instance reflectively.
+     * Invokes the exact cancellable Vulkan surface configure HEAD callback.
+     *
+     * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+     * @param GpuSurface.Configuration configuration Requested framebuffer configuration
+     * @param CallbackInfo callbackInformation Cancellable callback state to inspect
+     * @throws Exception When callback lookup, access, or invocation fails
+     * @warning MemoryOwnership: Callback and mixin remain test-owned throughout invocation.
+     */
     private static void invokeConfigure(
         VulkanGpuSurfaceMixin surfaceMixin,
         GpuSurface.Configuration configuration,
@@ -366,7 +443,15 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         invoke(configureMethod, surfaceMixin, configuration, callbackInformation);
     }
 
-    /** Invokes the exact constructor TAIL callback. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; invokes one isolated mixin instance reflectively.
+     * Invokes the exact Vulkan surface constructor TAIL callback.
+     *
+     * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+     * @param VulkanDevice surfaceDevice Mocked Minecraft Vulkan device constructor argument
+     * @throws Exception When callback lookup, access, or invocation fails
+     * @warning MemoryOwnership: The mocked device and its scalar handles remain test-owned.
+     */
     private static void invokeConstructorTail(
         VulkanGpuSurfaceMixin surfaceMixin,
         VulkanDevice surfaceDevice) throws Exception {
@@ -379,7 +464,14 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         invoke(constructorMethod, surfaceMixin, surfaceDevice, 9L, null);
     }
 
-    /** Invokes the exact close HEAD callback. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; invokes one isolated mixin instance reflectively.
+     * Invokes the exact non-cancellable Vulkan surface close HEAD callback.
+     *
+     * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+     * @throws Exception When callback lookup, access, or invocation fails
+     * @warning MemoryOwnership: The callback triggers the mixin's tested coordinator release policy.
+     */
     private static void invokeClose(VulkanGpuSurfaceMixin surfaceMixin) throws Exception {
         Method closeMethod = VulkanGpuSurfaceMixin.class.getDeclaredMethod(
             "barrieww$closePresentationTakeover",
@@ -388,7 +480,17 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         invoke(closeMethod, surfaceMixin, new CallbackInfo("close", false));
     }
 
-    /** Invokes one callback and unwraps its original checked failure. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; mutates only accessibility of the supplied method.
+     * Invokes one callback and unwraps an original checked exception for precise test diagnostics.
+     *
+     * @param Method method Accessible reflected callback method
+     * @param Object receiver Test-owned callback receiver
+     * @param Object[] arguments Exact callback arguments
+     * @return Object Reflected callback return value, or null for void callbacks
+     * @throws Exception When the callback or reflection boundary reports a checked failure
+     * @warning MemoryOwnership: Arguments and return values remain owned by their test fixtures.
+     */
     private static Object invoke(Method method, Object receiver, Object... arguments)
         throws Exception {
         try {
@@ -401,7 +503,16 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         }
     }
 
-    /** Assigns one test-owned private, final, shadow, or unique field. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; mutates one isolated receiver through reflection.
+     * Assigns a named private, final, shadow, or unique field found in the receiver hierarchy.
+     *
+     * @param Object receiver Test-owned object whose field is assigned
+     * @param String fieldName Exact declared field name
+     * @param Object value Replacement field value
+     * @throws Exception When field lookup, access, or assignment fails
+     * @warning MemoryOwnership: Assignment transfers no ownership beyond ordinary test references.
+     */
     private static void setField(Object receiver, String fieldName, Object value) throws Exception {
         Class<?> declaringClass = receiver.getClass();
         Field field = null;
@@ -419,7 +530,16 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         field.set(receiver, value);
     }
 
-    /** Reads one test-owned private or unique surface field. */
+    /**
+     * @note ThreadSafety: Test-thread-confined; reads one isolated surface mixin instance.
+     * Reads a named private or unique field declared by the surface mixin.
+     *
+     * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+     * @param String fieldName Exact declared field name
+     * @return Object Current field value
+     * @throws Exception When field lookup, access, or reading fails
+     * @warning MemoryOwnership: The returned reference remains owned by the mixin or test fixture.
+     */
     private static Object getField(VulkanGpuSurfaceMixin surfaceMixin, String fieldName)
         throws Exception {
         Field field = VulkanGpuSurfaceMixin.class.getDeclaredField(fieldName);
@@ -427,12 +547,25 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         return field.get(surfaceMixin);
     }
 
-    /** Returns fixed complete borrowed bootstrap handles. */
+    /**
+     * @note ThreadSafety: Pure immutable test-value construction is concurrency-safe.
+     * Creates fixed complete borrowed bootstrap handles for one preparation scenario.
+     *
+     * @return PresentationBootstrapHandles Complete borrowed scalar handle fixture
+     * @warning MemoryOwnership: Primitive handle values own no Native or Minecraft resources.
+     */
     private static PresentationBootstrapHandles bootstrapHandles() {
         return new PresentationBootstrapHandles(1L, 2L, 3L, 4L, 5L, 5L, 6, 6);
     }
 
-    /** Returns one exact host image binding for the configured extent. */
+    /**
+     * @note ThreadSafety: Pure immutable test-value construction is concurrency-safe.
+     * Creates one exact host-image binding for the fixed configured extent.
+     *
+     * @param long hostImageHandle Borrowed nonzero host Vulkan image handle
+     * @return HostImagePresentationBinding Exact borrowed image binding fixture
+     * @warning MemoryOwnership: The primitive image handle owns no Native or Minecraft resource.
+     */
     private static HostImagePresentationBinding binding(long hostImageHandle) {
         return new HostImagePresentationBinding(
             hostImageHandle,
@@ -442,7 +575,13 @@ final class VulkanGpuSurfaceHostLifecycleTests {
             s_framebufferHeight);
     }
 
-    /** Returns the fixed requested surface generation configuration. */
+    /**
+     * @note ThreadSafety: Pure immutable test-value construction is concurrency-safe.
+     * Creates the fixed requested surface generation configuration.
+     *
+     * @return GpuSurface.Configuration Fixed positive framebuffer configuration
+     * @warning MemoryOwnership: The returned immutable record is owned by the calling test.
+     */
     private static GpuSurface.Configuration configuration() {
         return new GpuSurface.Configuration(
             s_framebufferWidth,
@@ -450,7 +589,11 @@ final class VulkanGpuSurfaceHostLifecycleTests {
             GpuSurface.PresentMode.FIFO);
     }
 
-    /** Groups one test-owned Minecraft host preparation state. */
+    /**
+     * @note ThreadSafety: Instances are confined to one test thread and never published.
+     * Groups one complete test-owned Minecraft host preparation state.
+     * @warning MemoryOwnership: The fixture owns only mock references and no Native resource.
+     */
     private static final class HostPreparationState {
         private final VulkanGpuSurfaceMixin m_surfaceMixin;
         private final VulkanDevice m_surfaceDevice;
@@ -458,7 +601,17 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         private final GameRenderer m_gameRenderer;
         private final RenderTarget m_mainRenderTarget;
 
-        /** Captures one complete host preparation fixture. */
+        /**
+         * @note ThreadSafety: Construction and use are confined to one test invocation.
+         * Captures one complete host preparation fixture without transferring resource ownership.
+         *
+         * @param VulkanGpuSurfaceMixin surfaceMixin Test-owned surface mixin instance
+         * @param VulkanDevice surfaceDevice Mocked Minecraft Vulkan device
+         * @param Minecraft minecraft Mocked Minecraft singleton
+         * @param GameRenderer gameRenderer Mocked current game renderer
+         * @param RenderTarget mainRenderTarget Mocked current main render target
+         * @warning MemoryOwnership: Every supplied mock remains owned by the creating test fixture.
+         */
         private HostPreparationState(
             VulkanGpuSurfaceMixin surfaceMixin,
             VulkanDevice surfaceDevice,
