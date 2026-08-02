@@ -9,8 +9,10 @@
 
 #include <vulkan/vulkan.h>
 
-#include "BarriEww/Interoperability/PresentationImageFormat.hpp"
+#include "BarriEww/Interoperability/NativeHostImagePresentationRuntimeCreateInfoVersion1.hpp"
+#include "BarriEww/Interoperability/NativePresentationDetachHostImageResourcesResultVersion1.hpp"
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
+#include "BarriEww/Interoperability/PresentationImageFormat.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationImageFormatMapping.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
 #include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
