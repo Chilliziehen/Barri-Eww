@@ -59,8 +59,22 @@ boundary，不宣称 resource materialization 或 GPU execution 已跨 FFM。
 
 ## §4.4 CI 构建矩阵 (已确认基线)
 
-MVP 阶段 CI 矩阵：`OS {Windows, Linux} × 后端 {Vulkan} × 开关 {THREADED_RECORDING on/off}`。
-Vulkan 集成测试在 CI 无 GPU 环境下，使用 headless + 软件实现 (SwiftShader / lavapipe) 运行。
+MVP 阶段 Native CI 使用分层矩阵（P29）：
+
+| 操作系统 | Native backend | `THREADED_RECORDING` | 运行门禁 |
+| -------- | -------------- | -------------------- | -------- |
+| Linux | `BARRIEWW_BACKEND_VULKAN=ON` | `ON` / `OFF` | build + Catch2 + lavapipe Vulkan integration |
+| Windows | `BARRIEWW_BACKEND_VULKAN=OFF` | `ON` / `OFF` | backend-neutral build + Catch2 |
+
+固定规则：
+
+1. Linux 缺失 lavapipe、required Vulkan capability 或 headless execution 环境时必须 FAIL，
+   不得 SKIP 后伪装通过。
+2. Windows cell 只证明 backend-neutral C++/FFM build compatibility，不宣称 Windows Vulkan
+   backend 或 GPU execution 已通过 CI。
+3. Windows Vulkan compatibility 是显式 coverage gap；在取得可靠、可复现的 Windows Vulkan
+   SDK + software ICD 分发和安装方案后，须先修订本矩阵再启用，不得静默改变。
+4. C++ coverage gate 由 Linux Vulkan `THREADED_RECORDING=ON` cell 执行并保持 §4.5 的 90%。
 
 ## §4.5 覆盖率门槛 (已确认，CI 硬门禁)
 

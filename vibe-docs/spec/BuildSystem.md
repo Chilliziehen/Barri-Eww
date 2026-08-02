@@ -137,7 +137,7 @@ build.sh|build.bat
   code，以便被 shared target 复用。
 - `BarriEwwNativeFfm` 是 Java FFM 唯一可直接加载的 **SHARED** target：Windows 产出
   `BarriEwwNativeFfm.dll`，Linux 产出 `libBarriEwwNativeFfm.so`。
-- shared target 默认隐藏 symbol，只显式导出 §6.6 固化的 Versioned C ABI。export decoration
+- shared target 默认隐藏 symbol，只显式导出 §6 固化的 Versioned C ABI。export decoration
   只控制编译期可见性，不是功能开关，不新增 CMake option 或运行时分支。
 - 所有 generator/configuration 的 shared artifact 统一输出到所选 Native build directory 下的
   `ffm/`。Core integration test 通过 Gradle property
