@@ -26,6 +26,9 @@
   D5.4 —— 依所有者补充裁决，为 P28 增加 idempotent non-critical host-resource detach symbol；
   固定 open-frame fence 排除、clear runtime 保留与 detach 失败时取消完整 host resize 的 ownership
   规则，补齐 D10.3 fallback 所需的跨边界操作。
+- [修改] §6.7.4 [FfmBinding.md](FfmBinding.md) —— 为 P28 detach 增加固定 8-byte
+  `NativePresentationDetachHostImageResourcesResultVersion1` output，保留 fence wait 的 raw
+  `VkResult` 并规定 failure 时不得销毁 ownership 不确定的 host resources。
 - [修改] §4.4 [Testing.md](Testing.md) —— 所有者裁决并提升 P29：Native CI 改为分层矩阵，
   Linux Vulkan + lavapipe execution 覆盖 `THREADED_RECORDING` on/off，Windows backend-neutral
   build/test 覆盖同一开关；明确 Windows Vulkan 是未验证 compatibility gap，不再以

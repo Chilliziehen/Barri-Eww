@@ -197,7 +197,15 @@ presentation 中立 format 固定为：
 | 92 | `hostImageHeight` | `uint32` |
 
 该 record 固定 `sizeof == 96`、`alignof == 8`，必须以 Native compile-time assertions 与
-Core layout tests 双侧钉死。新增三个完整命名的 C symbols：
+Core layout tests 双侧钉死。detach output record 固定为：
+
+| offset | `NativePresentationDetachHostImageResourcesResultVersion1` 字段 | 类型 |
+| ------ | -------------------------------------------------------------- | ---- |
+| 0 | `vulkanResult` | `int32` |
+| 4 | `reserved` | `uint32` |
+
+该 output 固定 `sizeof == 8`、`alignof == 4`；boundary 在其他工作前清零，成功保持全零，
+driver wait failure 保留 raw `VkResult`。新增三个完整命名的 C symbols：
 
 ```cpp
 NativePresentationRuntimeOperationResult
@@ -207,7 +215,8 @@ barriEwwCreateHostImagePresentationRuntimeVersion1(
 
 NativePresentationRuntimeOperationResult
 barriEwwDetachHostImagePresentationResourcesVersion1(
-    std::uint64_t runtimeAddress) noexcept;
+    std::uint64_t runtimeAddress,
+    NativePresentationDetachHostImageResourcesResultVersion1* detachResult) noexcept;
 
 NativePresentationRuntimeOperationResult
 barriEwwSubmitAndPresentHostImageFrameVersion1(
@@ -227,7 +236,8 @@ barriEwwSubmitAndPresentHostImageFrameVersion1(
    不允许静默替换为 SRGB format，也不在 shader 内做色彩空间抵消。
 5. detach 幂等；等待仍可能引用 host resources 的已提交 frame-slot fences 后销毁 host
    command matrix、pipeline、descriptor、sampler 与 sampled view，但保留 swapchain、frame sync、
-   open acquired frame 与 clear path。frame open 时禁止等待刚 reset 且尚未 submit 的当前 slot fence。
+   open acquired frame 与 clear path。frame open 时禁止等待刚 reset 且尚未 submit 的当前 slot fence；
+   wait failure 通过 detach output 返回 raw `VkResult`，且不得销毁 ownership 仍不确定的资源。
 6. create、detach 与 submit 涉及分配、driver synchronization 或 queue operation，FFM downcall固定
    non-critical；binding 构造期解析一次 handle，frame path 不做 symbol lookup。
 7. submit 要求已有 open frame 且 host resources 仍 attached，并以该 frame 的固定 slot/image

@@ -74,11 +74,14 @@ framebuffer, or selected swapchain extent mismatch. It never silently substitute
 SRGB format for the requested UNORM format.
 
 `barriEwwDetachHostImagePresentationResourcesVersion1` accepts the opaque runtime
-address. It is idempotent and non-critical. It waits only submitted frame-slot fences
-that can still reference host resources, destroys the host command matrix, pipeline,
-descriptor, sampler, and borrowed-image view, and preserves the swapchain, frame
-synchronization, open acquired frame, and clear path. When a frame is open it must not
-wait the current slot's reset-but-unsubmitted fence.
+address and an 8-byte `NativePresentationDetachHostImageResourcesResultVersion1`
+containing `int32 vulkanResult` and a zero reserved field. It is idempotent and
+non-critical. It waits only submitted frame-slot fences that can still reference host
+resources, destroys the host command matrix, pipeline, descriptor, sampler, and
+borrowed-image view, and preserves the swapchain, frame synchronization, open acquired
+frame, and clear path. When a frame is open it must not wait the current slot's
+reset-but-unsubmitted fence. A wait failure returns its raw `VkResult` without
+destroying resources whose ownership remains uncertain.
 
 `barriEwwSubmitAndPresentHostImageFrameVersion1` accepts the opaque runtime address and
 the existing submit result. It is non-critical because queue submission and
