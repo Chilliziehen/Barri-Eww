@@ -1391,6 +1391,9 @@ TEST_CASE("Host image resources reject invalid borrowed inputs and matrix overfl
 
 TEST_CASE("Host image resources create the exact pipeline and prerecorded matrix",
           "[presentationRuntime][hostResources]") {
+    STATIC_REQUIRE(
+        barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags
+        == (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT));
     resetHostResourceState();
     auto result = barrieww::VulkanHostImagePresentationResources::create(
         makeHostResourceCreateInfo());

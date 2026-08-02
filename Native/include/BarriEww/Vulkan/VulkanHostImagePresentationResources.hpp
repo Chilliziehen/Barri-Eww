@@ -21,6 +21,13 @@ namespace barrieww {
  */
 class VulkanHostImagePresentationResources {
 public:
+    /**
+     * @note ThreadSafety: Immutable input consumed on the presentation render thread.
+     * @brief Describes borrowed Vulkan objects and fixed dimensions for one host-image
+     *        presentation generation. Image and image-view spans must have equal lengths.
+     * @warning MemoryOwnership: Every handle and span element remains owned by the caller
+     *          and must outlive the created resource owner.
+     */
     struct CreateInfo {
         VkDevice logicalDevice;
         std::uint32_t graphicsQueueFamilyIndex;
@@ -33,9 +40,23 @@ public:
         std::uint32_t frameSlotCount;
     };
 
+    /**
+     * @note ThreadSafety: Immutable value returned to the presentation render thread.
+     * @brief Preserves the exact Vulkan result from creation, allocation, or command
+     *        recording; invalid input is represented by VK_ERROR_INITIALIZATION_FAILED.
+     * @warning MemoryOwnership: Contains no owned memory or Vulkan object.
+     */
     struct CreationFailure {
         VkResult vulkanResult;
     };
+
+    /**
+     * @note ThreadSafety: Compile-time constant requiring no synchronization.
+     * @brief Required swapchain usage policy for the clear priming path and host-image
+     *        color-attachment composition path. Runtime surface validation consumes it.
+     */
+    static constexpr VkImageUsageFlags s_requiredSwapchainImageUsageFlags =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
     /**
      * @note ThreadSafety: Render-thread confined; external synchronization is required.
@@ -45,27 +66,71 @@ public:
      * @return std::expected<VulkanHostImagePresentationResources, CreationFailure> The
      *         complete owner, or the exact Vulkan failure; invalid input reports
      *         VK_ERROR_INITIALIZATION_FAILED.
+     * @warning MemoryOwnership: Success transfers newly created Vulkan objects into the
+     *          returned owner; all CreateInfo handles and span elements remain borrowed.
      */
     [[nodiscard]] static std::expected<VulkanHostImagePresentationResources,
                                        CreationFailure>
     create(const CreateInfo& createInfo);
 
+    /**
+     * @note ThreadSafety: Copying is unavailable under every threading condition.
+     * @brief Prevents duplication of unique Vulkan resource ownership.
+     * @param const VulkanHostImagePresentationResources& copiedFrom Source that would copy
+     * @warning MemoryOwnership: No resources are copied or transferred.
+     */
     VulkanHostImagePresentationResources(
-        const VulkanHostImagePresentationResources&) = delete;
-    VulkanHostImagePresentationResources& operator=(
-        const VulkanHostImagePresentationResources&) = delete;
+        const VulkanHostImagePresentationResources& copiedFrom) = delete;
 
-    /** Move transfers all owned resources and leaves the source detached. */
+    /**
+     * @note ThreadSafety: Copy assignment is unavailable under every threading condition.
+     * @brief Prevents replacement through duplicated Vulkan resource ownership.
+     * @param const VulkanHostImagePresentationResources& copiedFrom Source that would copy
+     * @return VulkanHostImagePresentationResources& Unavailable because the operation is deleted
+     * @warning MemoryOwnership: No resources are copied, transferred, or destroyed.
+     */
+    VulkanHostImagePresentationResources& operator=(
+        const VulkanHostImagePresentationResources& copiedFrom) = delete;
+
+    /**
+     * @note ThreadSafety: Render-thread confined; movement must not overlap resource use.
+     * @brief Transfers every owned Vulkan object and leaves the source detached.
+     * @param VulkanHostImagePresentationResources&& movedFrom Source owner to detach
+     * @warning MemoryOwnership: Transfers all owned resources to this instance; borrowed
+     *          device, image, and image-view lifetimes remain the caller's responsibility.
+     */
     VulkanHostImagePresentationResources(
         VulkanHostImagePresentationResources&& movedFrom) noexcept;
 
+    /**
+     * @note ThreadSafety: Move assignment is unavailable under every threading condition.
+     * @brief Prevents implicit destruction of attached resources during replacement.
+     * @param VulkanHostImagePresentationResources&& movedFrom Source that would transfer
+     * @return VulkanHostImagePresentationResources& Unavailable because the operation is deleted
+     * @warning MemoryOwnership: No resources are transferred or destroyed.
+     */
     VulkanHostImagePresentationResources& operator=(
-        VulkanHostImagePresentationResources&&) = delete;
+        VulkanHostImagePresentationResources&& movedFrom) = delete;
 
-    /** Destroys attached resources; caller guarantees that no submission references them. */
+    /**
+     * @note ThreadSafety: Render-thread confined; destruction must not overlap submission.
+     * @brief Destroys attached resources. The caller guarantees no in-flight submission
+     *        references them when destruction occurs without explicit detachment.
+     * @warning MemoryOwnership: Destroys only Native-owned dependent objects and never
+     *          destroys the borrowed device, host image, swapchain images, or their views.
+     */
     ~VulkanHostImagePresentationResources();
 
-    /** Returns the prevalidated O(1) matrix entry for the given frame slot and image. */
+    /**
+     * @note ThreadSafety: Render-thread confined read; no concurrent detachment is allowed.
+     * @brief Selects one prerecorded primary command buffer in constant time. Both indices
+     *        must be within the dimensions validated at creation.
+     * @param std::uint32_t frameSlotIndex Frame-slot row in the command matrix
+     * @param std::uint32_t imageIndex Swapchain-image column in the command matrix
+     * @return VkCommandBuffer Borrowed prerecorded primary command buffer
+     * @warning MemoryOwnership: The returned command buffer remains owned by this resource
+     *          owner and becomes invalid when the owner detaches or is destroyed.
+     */
     [[nodiscard]] VkCommandBuffer commandBuffer(std::uint32_t frameSlotIndex,
                                                 std::uint32_t imageIndex) const noexcept;
 
@@ -78,6 +143,8 @@ public:
      * @param VkFence unsubmittedOpenFrameFence Fence to omit, or VK_NULL_HANDLE
      * @return std::expected<void, VkResult> Success after destruction, or the exact wait
      *         failure with all resources retained.
+     * @warning MemoryOwnership: On success destroys every Native-owned dependent resource;
+     *          on failure retains all ownership unchanged. Fence ownership remains external.
      */
     [[nodiscard]] std::expected<void, VkResult> destroyAfterSubmittedFrames(
         std::span<const VkFence> submittedFrameFences,

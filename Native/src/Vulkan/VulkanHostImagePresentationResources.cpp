@@ -13,7 +13,7 @@ namespace barrieww {
 
 namespace {
 
-constexpr VkImageSubresourceRange s_colorSubresourceRange{
+constexpr VkImageSubresourceRange g_colorSubresourceRange{
     VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
 
 /**
@@ -102,7 +102,7 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
         createInfo.hostImageFormat,
         VkComponentMapping{VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                            VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
-        s_colorSubresourceRange,
+        g_colorSubresourceRange,
     };
     VkResult vulkanResult = vkCreateImageView(createInfo.logicalDevice,
                                               &imageViewCreateInfo, nullptr,
@@ -347,6 +347,41 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
         return std::unexpected(creationFailure(vulkanResult));
     }
 
+    /**
+     * @note ThreadSafety: Creation is render-thread confined and no command buffer is
+     *       externally visible until the complete matrix has been recorded.
+     * @brief Records a fixed row-major command matrix. Each frame slot owns one row and
+     *        each swapchain image owns one column, so matrixIndex equals
+     *        frameSlotIndex * swapchainImageCount + imageIndex. The host image remains in
+     *        GENERAL and is made visible to fragment sampling; the selected swapchain image
+     *        is fully overwritten by dynamic rendering and then prepared for presentation.
+     *
+     * Invariants and assumptions:
+     * - hostImage remains GENERAL and its producer submission precedes this command buffer;
+     * - host and swapchain extents are exact, positive, and fixed for the generation;
+     * - borrowed images and image views outlive every recorded command buffer;
+     * - dynamic rendering is enabled and every swapchain image supports color attachment;
+     * - full overwrite permits discarding prior swapchain contents with UNDEFINED.
+     *
+     * Semantic pseudocode:
+     * for each frameSlotIndex in frameSlotCount:
+     *     for each imageIndex in swapchainImageCount:
+     *         matrixIndex = frameSlotIndex * swapchainImageCount + imageIndex
+     *         begin commandBuffers[matrixIndex]
+     *         barrier hostImage GENERAL -> GENERAL from
+     *             COLOR_ATTACHMENT_OUTPUT | TRANSFER and MEMORY_WRITE to
+     *             FRAGMENT_SHADER and SHADER_READ
+     *         barrier swapchainImages[imageIndex] UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
+     *         begin dynamic rendering with DONT_CARE load and STORE output
+     *         bind pipeline and descriptor set zero; draw three vertices
+     *         end dynamic rendering
+     *         barrier swapchainImages[imageIndex]
+     *             COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
+     *         end commandBuffers[matrixIndex]
+     *
+     * Creation complexity is O(frameSlotCount * swapchainImageCount) time and storage.
+     * commandBuffer lookup is O(1) time with no allocation or recording.
+     */
     for (std::uint32_t frameSlotIndex = 0u;
          frameSlotIndex < createInfo.frameSlotCount; ++frameSlotIndex) {
         for (std::size_t imageIndex = 0u;
@@ -375,7 +410,7 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
                 VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED,
                 createInfo.hostImage,
-                s_colorSubresourceRange,
+                g_colorSubresourceRange,
             };
             vkCmdPipelineBarrier(
                 commandBuffer,
@@ -394,7 +429,7 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
                 VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED,
                 createInfo.swapchainImages[imageIndex],
-                s_colorSubresourceRange,
+                g_colorSubresourceRange,
             };
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -444,7 +479,7 @@ VulkanHostImagePresentationResources::create(const CreateInfo& createInfo) {
                 VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED,
                 createInfo.swapchainImages[imageIndex],
-                s_colorSubresourceRange,
+                g_colorSubresourceRange,
             };
             vkCmdPipelineBarrier(commandBuffer,
                                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
