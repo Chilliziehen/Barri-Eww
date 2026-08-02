@@ -22,16 +22,6 @@ namespace barrieww {
  */
 class VulkanPresentationRuntime {
 public:
-    /** Creation-only checkpoints exposed for deterministic exception transaction tests. */
-    enum class CreationCheckpoint : std::uint32_t {
-        AfterSwapchainCreation = 0u,
-        AfterFirstFrameSlotCreation = 1u,
-        AfterCommandPoolCreation = 2u,
-    };
-
-    /** Creation-only exception seam; production callers leave it null. */
-    using CreationCheckpointOperation = void (*)(CreationCheckpoint creationCheckpoint);
-
     struct CreateInfo {
         VkPhysicalDevice physicalDevice;
         VkDevice logicalDevice;
@@ -43,7 +33,6 @@ public:
         std::uint32_t framebufferWidth;
         std::uint32_t framebufferHeight;
         std::uint32_t framesInFlightCount;
-        CreationCheckpointOperation creationCheckpointOperation = nullptr;
     };
 
     struct CreationFailure {
@@ -144,7 +133,8 @@ public:
 
     /**
      * @brief Waits the next frame slot, acquires a swapchain image and reports the metrics
-     *        of the previous frame that reused that slot.
+     *        of the previous frame that reused that slot. A post-acquire synchronization
+     *        failure makes the runtime recreate-only; later calls perform no Vulkan work.
      * @param framebufferWidth Current framebuffer width; 0 means the surface is unavailable
      * @param framebufferHeight Current framebuffer height; 0 means the surface is unavailable
      */
@@ -278,14 +268,14 @@ private:
 
     VulkanPresentationRuntime(VkDevice logicalDevice, VkQueue graphicsQueue,
                               VkQueue presentQueue, VkSurfaceKHR surface,
-                               VkSwapchainKHR swapchain, VkCommandPool commandPool,
-                               VkSurfaceFormatKHR surfaceFormat,
-                               VkPresentModeKHR presentMode, VkSharingMode sharingMode,
-                               std::vector<VkImage> images,
-                               std::vector<VkImageView> imageViews,
-                               std::vector<VkFence> imageInFlightFences,
-                               std::vector<VkCommandBuffer> frameCommandBuffers,
-                               std::vector<FrameSlot> frameSlots) noexcept;
+                              VkSwapchainKHR swapchain, VkCommandPool commandPool,
+                              VkSurfaceFormatKHR surfaceFormat,
+                              VkPresentModeKHR presentMode, VkSharingMode sharingMode,
+                              std::vector<VkImage> images,
+                              std::vector<VkImageView> imageViews,
+                              std::vector<VkFence> imageInFlightFences,
+                              std::vector<VkCommandBuffer> frameCommandBuffers,
+                              std::vector<FrameSlot> frameSlots) noexcept;
 
     /**
      * @note ThreadSafety: Creation is confined to one presentation thread.
@@ -344,6 +334,8 @@ private:
     std::uint32_t m_currentFrameSlot = 0u;
     std::uint32_t m_acquiredImageIndex = 0u;
     bool m_isFrameOpen = false;
+    bool m_isRecreationRequired = false;
+    std::int32_t m_recreationVulkanResult = VK_SUCCESS;
     FrameMetrics m_openFrameMetrics{};
     std::chrono::steady_clock::time_point m_frameStartTimePoint{};
 };

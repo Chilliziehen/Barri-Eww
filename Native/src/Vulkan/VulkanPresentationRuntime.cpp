@@ -7,6 +7,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(BARRIEWW_PRESENTATION_RUNTIME_TEST_SEAM)
+    #include "VulkanPresentationRuntimeTestSeam.hpp"
+#endif
+
 namespace barrieww {
 
 namespace {
@@ -264,9 +268,10 @@ VulkanPresentationRuntime::createSwapchainRuntime(
         return std::unexpected(CreationFailure{vulkanResult, false});
     }
     SwapchainCreationRollback rollback{createInfo.logicalDevice, swapchain};
-    if (createInfo.creationCheckpointOperation != nullptr) {
-        createInfo.creationCheckpointOperation(CreationCheckpoint::AfterSwapchainCreation);
-    }
+#if defined(BARRIEWW_PRESENTATION_RUNTIME_TEST_SEAM)
+    testing::reachVulkanPresentationRuntimeCreationCheckpoint(
+        testing::VulkanPresentationRuntimeCreationCheckpoint::AfterSwapchainCreation);
+#endif
 
     std::uint32_t actualImageCount = 0u;
     vulkanResult = vkGetSwapchainImagesKHR(
@@ -329,10 +334,13 @@ VulkanPresentationRuntime::createSwapchainRuntime(
                 : VK_ERROR_OUT_OF_DEVICE_MEMORY;
             return std::unexpected(CreationFailure{reportedResult, false});
         }
-        if (frameSlotIndex == 0u && createInfo.creationCheckpointOperation != nullptr) {
-            createInfo.creationCheckpointOperation(
-                CreationCheckpoint::AfterFirstFrameSlotCreation);
+#if defined(BARRIEWW_PRESENTATION_RUNTIME_TEST_SEAM)
+        if (frameSlotIndex == 0u) {
+            testing::reachVulkanPresentationRuntimeCreationCheckpoint(
+                testing::VulkanPresentationRuntimeCreationCheckpoint::
+                    AfterFirstFrameSlotCreation);
         }
+#endif
     }
 
     VkCommandPoolCreateInfo commandPoolCreateInfo{};
@@ -347,10 +355,10 @@ VulkanPresentationRuntime::createSwapchainRuntime(
             : VK_ERROR_OUT_OF_DEVICE_MEMORY;
         return std::unexpected(CreationFailure{reportedResult, false});
     }
-    if (createInfo.creationCheckpointOperation != nullptr) {
-        createInfo.creationCheckpointOperation(
-            CreationCheckpoint::AfterCommandPoolCreation);
-    }
+#if defined(BARRIEWW_PRESENTATION_RUNTIME_TEST_SEAM)
+    testing::reachVulkanPresentationRuntimeCreationCheckpoint(
+        testing::VulkanPresentationRuntimeCreationCheckpoint::AfterCommandPoolCreation);
+#endif
     rollback.m_frameCommandBuffers.resize(createInfo.framesInFlightCount, VK_NULL_HANDLE);
     VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
     commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -459,6 +467,8 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     , m_currentFrameSlot(movedFrom.m_currentFrameSlot)
     , m_acquiredImageIndex(movedFrom.m_acquiredImageIndex)
     , m_isFrameOpen(movedFrom.m_isFrameOpen)
+    , m_isRecreationRequired(movedFrom.m_isRecreationRequired)
+    , m_recreationVulkanResult(movedFrom.m_recreationVulkanResult)
     , m_openFrameMetrics(movedFrom.m_openFrameMetrics)
     , m_frameStartTimePoint(movedFrom.m_frameStartTimePoint) {
     movedFrom.m_swapchain = VK_NULL_HANDLE;
@@ -470,6 +480,8 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     movedFrom.m_frameCommandBuffers.clear();
     movedFrom.m_hostImagePresentationResources.reset();
     movedFrom.m_isFrameOpen = false;
+    movedFrom.m_isRecreationRequired = false;
+    movedFrom.m_recreationVulkanResult = VK_SUCCESS;
 }
 
 void VulkanPresentationRuntime::destroyOwnedObjects() noexcept {
@@ -512,6 +524,11 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
     BeginFrameResult beginResult{};
     beginResult.frameSlotIndex = m_currentFrameSlot;
     beginResult.swapchainGeneration = m_swapchainGeneration;
+    if (m_isRecreationRequired) {
+        beginResult.status = FrameStatus::RecreateRequired;
+        beginResult.vulkanResult = m_recreationVulkanResult;
+        return beginResult;
+    }
     if (framebufferWidth == 0u || framebufferHeight == 0u) {
         beginResult.status = FrameStatus::SurfaceUnavailable;
         return beginResult;
@@ -537,17 +554,17 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
 
     const auto acquireStart = std::chrono::steady_clock::now();
     std::uint32_t imageIndex = 0u;
-    vulkanResult = vkAcquireNextImageKHR(m_logicalDevice, m_swapchain, UINT64_MAX,
-                                         frameSlot.imageAvailableSemaphore, VK_NULL_HANDLE,
-                                         &imageIndex);
-    if (vulkanResult == VK_ERROR_OUT_OF_DATE_KHR) {
+    const VkResult acquireResult = vkAcquireNextImageKHR(
+        m_logicalDevice, m_swapchain, UINT64_MAX, frameSlot.imageAvailableSemaphore,
+        VK_NULL_HANDLE, &imageIndex);
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
         beginResult.status = FrameStatus::RecreateRequired;
-        beginResult.vulkanResult = vulkanResult;
+        beginResult.vulkanResult = acquireResult;
         return beginResult;
     }
-    if (vulkanResult != VK_SUCCESS && vulkanResult != VK_SUBOPTIMAL_KHR) {
+    if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
         beginResult.status = FrameStatus::RecreateRequired;
-        beginResult.vulkanResult = vulkanResult;
+        beginResult.vulkanResult = acquireResult;
         return beginResult;
     }
     m_openFrameMetrics.acquireNanoseconds = elapsedNanosecondsSince(acquireStart);
@@ -558,13 +575,14 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
      *        succeeds. The slot fence was already waited, proving its prior submission done.
      *        A prior image fence, when present, is then waited before the slot fence is reset.
      *        Only a successful reset permits publishing the new image-to-slot association and
-     *        opening the frame. Every failure leaves the old image association intact and the
-     *        frame closed, so destruction and host-resource detach never trust a failed reset.
+     *        opening the frame. Every post-acquire failure leaves the old image association
+     *        intact, closes the frame, and makes the runtime recreate-only because the binary
+     *        acquire semaphore is signaled and the acquired image remains outstanding.
      *
      * Semantic pseudocode:
      * if acquiredImage has priorFence:
-     *     wait priorFence; on failure return RecreateRequired without mutation
-     * reset currentSlotFence; on failure return RecreateRequired without mutation
+     *     wait priorFence; on failure enter recreate-only state and return first raw result
+     * reset currentSlotFence; on failure enter recreate-only state and return first raw result
      * imageInFlightFences[acquiredImage] = currentSlotFence
      * acquiredImageIndex = acquiredImage
      * frameOpen = true
@@ -574,6 +592,9 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
                                        &m_imageInFlightFences[imageIndex], VK_TRUE,
                                        UINT64_MAX);
         if (vulkanResult != VK_SUCCESS) {
+            m_isRecreationRequired = true;
+            m_recreationVulkanResult = vulkanResult;
+            m_isFrameOpen = false;
             beginResult.status = FrameStatus::RecreateRequired;
             beginResult.vulkanResult = vulkanResult;
             return beginResult;
@@ -581,6 +602,9 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
     }
     vulkanResult = vkResetFences(m_logicalDevice, 1u, &frameSlot.inFlightFence);
     if (vulkanResult != VK_SUCCESS) {
+        m_isRecreationRequired = true;
+        m_recreationVulkanResult = vulkanResult;
+        m_isFrameOpen = false;
         beginResult.status = FrameStatus::RecreateRequired;
         beginResult.vulkanResult = vulkanResult;
         return beginResult;
@@ -591,12 +615,12 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
     m_isFrameOpen = true;
     m_frameStartTimePoint = std::chrono::steady_clock::now();
 
-    beginResult.status = vulkanResult == VK_SUBOPTIMAL_KHR
+    beginResult.status = acquireResult == VK_SUBOPTIMAL_KHR
         ? FrameStatus::Suboptimal
         : FrameStatus::Success;
     beginResult.imageIndex = imageIndex;
     beginResult.frameSequence = m_frameSequence;
-    beginResult.vulkanResult = vulkanResult;
+    beginResult.vulkanResult = acquireResult;
     return beginResult;
 }
 

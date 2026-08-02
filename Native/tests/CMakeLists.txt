@@ -109,7 +109,8 @@ if(BARRIEWW_BACKEND_VULKAN)
             ${Vulkan_INCLUDE_DIRS})
     target_compile_definitions(BarriEwwNativePresentationRuntimeTests
         PRIVATE
-            BARRIEWW_NATIVE_FFM_EXPORTS=1)
+            BARRIEWW_NATIVE_FFM_EXPORTS=1
+            BARRIEWW_PRESENTATION_RUNTIME_TEST_SEAM=1)
     target_link_libraries(BarriEwwNativePresentationRuntimeTests
         PRIVATE
             Catch2::Catch2WithMain)

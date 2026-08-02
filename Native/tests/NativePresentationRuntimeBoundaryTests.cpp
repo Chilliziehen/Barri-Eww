@@ -21,11 +21,20 @@
 #include "BarriEww/Vulkan/VulkanHostImagePresentationResources.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
 #include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
+#include "../src/Vulkan/VulkanPresentationRuntimeTestSeam.hpp"
 
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
 using barrieww::NativePresentationRuntimeOperationResult;
 using barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1;
+
+template <typename ValueType>
+concept HasPresentationCreationCheckpointOperation = requires(ValueType value) {
+    value.creationCheckpointOperation;
+};
+
+static_assert(!HasPresentationCreationCheckpointOperation<
+              barrieww::VulkanPresentationRuntime::CreateInfo>);
 
 static_assert(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::R8G8B8A8Unorm)
               == 1u);
@@ -138,6 +147,8 @@ VkExtent2D g_observedSwapchainExtent{};
 VkCompositeAlphaFlagBitsKHR g_observedCompositeAlpha =
     VK_COMPOSITE_ALPHA_FLAG_BITS_MAX_ENUM_KHR;
 VkResult g_acquireResult = VK_SUCCESS;
+std::uint32_t g_acquireCallCount = 0u;
+std::vector<VkSemaphore> g_acquireSemaphores;
 VkResult g_submitResult = VK_SUCCESS;
 VkResult g_presentResult = VK_SUCCESS;
 std::uint32_t g_acquiredImageIndex = 0u;
@@ -158,7 +169,7 @@ std::size_t g_injectedFenceWaitResultIndex = 0u;
 VkResult g_resetFenceResult = VK_SUCCESS;
 std::vector<VkFence> g_resetFences;
 bool g_offerDynamicRenderingFunctions = true;
-std::optional<barrieww::VulkanPresentationRuntime::CreationCheckpoint>
+std::optional<barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint>
     g_throwingPresentationCreationCheckpoint;
 
 enum class HostResourceOperation {
@@ -343,6 +354,8 @@ void resetPresentationState() {
     g_observedSwapchainExtent = {};
     g_observedCompositeAlpha = VK_COMPOSITE_ALPHA_FLAG_BITS_MAX_ENUM_KHR;
     g_acquireResult = VK_SUCCESS;
+    g_acquireCallCount = 0u;
+    g_acquireSemaphores.clear();
     g_submitResult = VK_SUCCESS;
     g_presentResult = VK_SUCCESS;
     g_acquiredImageIndex = 0u;
@@ -364,6 +377,7 @@ void resetPresentationState() {
     g_resetFences.clear();
     g_offerDynamicRenderingFunctions = true;
     g_throwingPresentationCreationCheckpoint.reset();
+    barrieww::testing::g_vulkanPresentationRuntimeCreationCheckpointOperation = nullptr;
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -406,12 +420,12 @@ TEST_CASE("Presentation image format values map strictly to Vulkan formats",
 /**
  * @note ThreadSafety: Test-thread confined through deterministic global mock state.
  * @brief Throws only at the configured swapchain creation checkpoint.
- * @param barrieww::VulkanPresentationRuntime::CreationCheckpoint creationCheckpoint Current
- *        creation checkpoint
+ * @param barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint creationCheckpoint
+ *        Current creation checkpoint
  * @warning MemoryOwnership: Does not acquire or release any Vulkan object.
  */
 void injectPresentationCreationException(
-    barrieww::VulkanPresentationRuntime::CreationCheckpoint creationCheckpoint) {
+    barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint creationCheckpoint) {
     if (g_throwingPresentationCreationCheckpoint == creationCheckpoint) {
         throw std::runtime_error{"Injected presentation creation failure"};
     }
@@ -829,7 +843,8 @@ extern "C" VkResult VKAPI_CALL vkCreateSemaphore(
     static_cast<void>(device);
     static_cast<void>(createInfo);
     static_cast<void>(allocationCallbacks);
-    *semaphore = reinterpret_cast<VkSemaphore>(0x8000u);
+    *semaphore = reinterpret_cast<VkSemaphore>(
+        static_cast<std::uintptr_t>(0x8000u + g_createdSemaphoreCount));
     ++g_createdSemaphoreCount;
     return VK_SUCCESS;
 }
@@ -898,8 +913,9 @@ extern "C" VkResult VKAPI_CALL vkAcquireNextImageKHR(
     static_cast<void>(device);
     static_cast<void>(swapchain);
     static_cast<void>(timeout);
-    static_cast<void>(semaphore);
     static_cast<void>(fence);
+    ++g_acquireCallCount;
+    g_acquireSemaphores.push_back(semaphore);
     *imageIndex = g_acquiredImageIndex;
     return g_acquireResult;
 }
@@ -1724,6 +1740,22 @@ TEST_CASE("Presentation frame maps out-of-date and suboptimal to recreate/subopt
         REQUIRE(g_presentCallCount == 1u);
     }
 
+    SECTION("suboptimal acquisition remains open after successful fence transitions") {
+        g_acquireResult = VK_SUBOPTIMAL_KHR;
+        g_acquiredImageIndex = 2u;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(beginResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Suboptimal));
+        REQUIRE(beginResult.vulkanResult == VK_SUBOPTIMAL_KHR);
+        REQUIRE(beginResult.imageIndex == 2u);
+        REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(g_submitCallCount == 1u);
+    }
+
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
 }
@@ -1763,6 +1795,24 @@ TEST_CASE("Presentation frame preserves image ownership when its prior fence wai
             == NativePresentationRuntimeOperationResult::InvalidArgument);
     REQUIRE(g_submitCallCount == 1u);
 
+    const std::uint32_t acquireCallCountAfterFailure = g_acquireCallCount;
+    const std::size_t fenceWaitCallCountAfterFailure = g_fenceWaitCalls.size();
+    const std::size_t resetFenceCountAfterFailure = g_resetFences.size();
+    g_injectedFenceWaitResults.clear();
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+    REQUIRE(beginResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_acquireCallCount == acquireCallCountAfterFailure);
+    REQUIRE(g_fenceWaitCalls.size() == fenceWaitCallCountAfterFailure);
+    REQUIRE(g_resetFences.size() == resetFenceCountAfterFailure);
+    REQUIRE(g_acquireSemaphores
+            == std::vector<VkSemaphore>{reinterpret_cast<VkSemaphore>(0x8000u),
+                                        reinterpret_cast<VkSemaphore>(0x8002u)});
+
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
 }
@@ -1792,21 +1842,24 @@ TEST_CASE("Presentation frame does not publish image ownership when fence reset 
             == NativePresentationRuntimeOperationResult::InvalidArgument);
     REQUIRE(g_submitCallCount == 0u);
 
+    const std::uint32_t acquireCallCountAfterFailure = g_acquireCallCount;
+    const std::size_t fenceWaitCallCountAfterFailure = g_fenceWaitCalls.size();
+    const std::size_t resetFenceCountAfterFailure = g_resetFences.size();
     g_resetFenceResult = VK_SUCCESS;
-    g_fenceWaitCalls.clear();
     REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
                                                    &beginResult, &priorMetrics)
             == NativePresentationRuntimeOperationResult::Success);
     REQUIRE(beginResult.frameStatusValue
             == static_cast<std::uint32_t>(
-                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
-    REQUIRE(g_fenceWaitCalls
-            == std::vector<std::vector<VkFence>>{
-                {reinterpret_cast<VkFence>(0x9000u)}});
-    REQUIRE(std::ranges::find(g_signaledFences, reinterpret_cast<VkFence>(0x9000u))
-            == g_signaledFences.end());
+                barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+    REQUIRE(beginResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_acquireCallCount == acquireCallCountAfterFailure);
+    REQUIRE(g_fenceWaitCalls.size() == fenceWaitCallCountAfterFailure);
+    REQUIRE(g_resetFences.size() == resetFenceCountAfterFailure);
+    REQUIRE(g_acquireSemaphores
+            == std::vector<VkSemaphore>{reinterpret_cast<VkSemaphore>(0x8000u)});
     REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
-            == NativePresentationRuntimeOperationResult::Success);
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
@@ -1857,11 +1910,13 @@ TEST_CASE("Presentation runtime creation rolls back Vulkan ownership on exceptio
         720u,
         2u,
     };
-    createInfo.creationCheckpointOperation = &injectPresentationCreationException;
+    barrieww::testing::g_vulkanPresentationRuntimeCreationCheckpointOperation =
+        &injectPresentationCreationException;
 
     SECTION("immediately after swapchain creation") {
         g_throwingPresentationCreationCheckpoint =
-            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterSwapchainCreation;
+            barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint::
+                AfterSwapchainCreation;
         REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
                           std::runtime_error);
         REQUIRE(g_destroyedSwapchainCount == 1u);
@@ -1873,7 +1928,8 @@ TEST_CASE("Presentation runtime creation rolls back Vulkan ownership on exceptio
 
     SECTION("after image views and one frame slot") {
         g_throwingPresentationCreationCheckpoint =
-            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterFirstFrameSlotCreation;
+            barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint::
+                AfterFirstFrameSlotCreation;
         REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
                           std::runtime_error);
         REQUIRE(g_destroyedSwapchainCount == 1u);
@@ -1885,7 +1941,8 @@ TEST_CASE("Presentation runtime creation rolls back Vulkan ownership on exceptio
 
     SECTION("after command pool creation") {
         g_throwingPresentationCreationCheckpoint =
-            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterCommandPoolCreation;
+            barrieww::testing::VulkanPresentationRuntimeCreationCheckpoint::
+                AfterCommandPoolCreation;
         REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
                           std::runtime_error);
         REQUIRE(g_destroyedSwapchainCount == 1u);
