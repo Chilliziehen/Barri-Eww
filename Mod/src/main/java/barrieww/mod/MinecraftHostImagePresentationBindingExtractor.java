@@ -22,7 +22,10 @@ public final class MinecraftHostImagePresentationBindingExtractor {
     private static final int s_requiredUsage = GpuTexture.USAGE_COPY_SRC
         | GpuTexture.USAGE_TEXTURE_BINDING;
 
-    /** Prevents helper instantiation. */
+    /**
+     * @note ThreadSafety: Construction is unavailable; no instance state exists.
+     * Prevents utility class instantiation.
+     */
     private MinecraftHostImagePresentationBindingExtractor() {
     }
 

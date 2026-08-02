@@ -62,22 +62,50 @@ final class MinecraftHostImagePresentationBindingExtractorTests {
 
     /**
      * @note ThreadSafety: Test-local mocks are not shared.
-     * Rejects absent renderer, target, color view, and color texture initialization.
+     * Rejects absent renderer and main target initialization.
      */
     @Test
-    void rejectsAbsentHostObjects() {
+    void rejectsAbsentRendererOrMainTarget() {
         assertEmpty(null, s_framebufferWidth, s_framebufferHeight, 37);
 
         HostState hostState = readyHostState();
         when(hostState.m_gameRenderer.mainRenderTarget()).thenReturn(null);
         assertEmpty(hostState, 37);
+    }
 
-        hostState = readyHostState();
-        when(hostState.m_mainRenderTarget.getColorTextureView()).thenReturn(null);
+    /**
+     * @note ThreadSafety: Test-local mocks are not shared.
+     * Rejects an absent target color texture while the target color view remains valid.
+     */
+    @Test
+    void rejectsAbsentTargetColorTexture() {
+        HostState hostState = readyHostState();
+        when(hostState.m_mainRenderTarget.getColorTexture()).thenReturn(null);
+
         assertEmpty(hostState, 37);
+    }
 
-        hostState = readyHostState();
+    /**
+     * @note ThreadSafety: Test-local mocks are not shared.
+     * Rejects absent target color view initialization.
+     */
+    @Test
+    void rejectsAbsentTargetColorView() {
+        HostState hostState = readyHostState();
+        when(hostState.m_mainRenderTarget.getColorTextureView()).thenReturn(null);
+
+        assertEmpty(hostState, 37);
+    }
+
+    /**
+     * @note ThreadSafety: Test-local mocks are not shared.
+     * Rejects a Vulkan color view whose underlying texture is absent.
+     */
+    @Test
+    void rejectsAbsentViewTexture() {
+        HostState hostState = readyHostState();
         when(hostState.m_textureView.texture()).thenReturn(null);
+
         assertEmpty(hostState, 37);
     }
 
