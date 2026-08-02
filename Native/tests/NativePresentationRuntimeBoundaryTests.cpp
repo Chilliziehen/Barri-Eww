@@ -1588,6 +1588,27 @@ TEST_CASE("Presentation clear submission propagates submit and present results",
         REQUIRE(g_clearImageCallCount == 1u);
         REQUIRE(g_submitCallCount == 1u);
         REQUIRE(g_presentCallCount == 0u);
+
+        const std::uint32_t acquireCallCountAfterFailure = g_acquireCallCount;
+        const std::size_t fenceWaitCallCountAfterFailure = g_fenceWaitCalls.size();
+        const std::size_t resetFenceCountAfterFailure = g_resetFences.size();
+        const std::uint32_t submitCallCountAfterFailure = g_submitCallCount;
+        const std::uint32_t presentCallCountAfterFailure = g_presentCallCount;
+        for (std::uint32_t subsequentBeginIndex = 0u; subsequentBeginIndex < 2u;
+             ++subsequentBeginIndex) {
+            REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                           &beginResult, &priorMetrics)
+                    == NativePresentationRuntimeOperationResult::Success);
+            REQUIRE(beginResult.frameStatusValue
+                    == static_cast<std::uint32_t>(
+                        barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+            REQUIRE(beginResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+            REQUIRE(g_acquireCallCount == acquireCallCountAfterFailure);
+            REQUIRE(g_fenceWaitCalls.size() == fenceWaitCallCountAfterFailure);
+            REQUIRE(g_resetFences.size() == resetFenceCountAfterFailure);
+            REQUIRE(g_submitCallCount == submitCallCountAfterFailure);
+            REQUIRE(g_presentCallCount == presentCallCountAfterFailure);
+        }
     }
 
     SECTION("suboptimal present preserves the normal status and raw result") {

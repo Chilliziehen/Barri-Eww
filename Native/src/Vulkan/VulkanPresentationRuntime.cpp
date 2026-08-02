@@ -657,6 +657,8 @@ VulkanPresentationRuntime::submitAndPresentFrameWithResourceTracking(
                                           frameSlot.inFlightFence);
     m_openFrameMetrics.nativeSubmitCallNanoseconds = elapsedNanosecondsSince(submitStart);
     if (vulkanResult != VK_SUCCESS) {
+        m_isRecreationRequired = true;
+        m_recreationVulkanResult = vulkanResult;
         m_isFrameOpen = false;
         submitResult.status = FrameStatus::RecreateRequired;
         submitResult.vulkanResult = vulkanResult;
