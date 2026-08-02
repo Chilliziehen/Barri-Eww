@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -148,7 +149,30 @@ enum class HostResourceOperation {
     EndCommandBuffer,
 };
 
+enum class HostCommandEventType {
+    BeginCommandBuffer,
+    HostBarrier,
+    SwapchainToColorBarrier,
+    BeginRendering,
+    BindPipeline,
+    BindDescriptors,
+    Draw,
+    EndRendering,
+    SwapchainToPresentBarrier,
+    EndCommandBuffer,
+};
+
+/** Ordered command event with barrier, rendering, attachment, and scalar payload slots. */
+using HostCommandEvent =
+    std::tuple<VkCommandBuffer, HostCommandEventType, VkPipelineStageFlags,
+               VkPipelineStageFlags, VkImageMemoryBarrier, VkRenderingInfo,
+               VkRenderingAttachmentInfo, std::uint32_t>;
+
 std::optional<HostResourceOperation> g_failedHostResourceOperation;
+std::uint32_t g_failedHostResourceInvocationOrdinal = 1u;
+std::array<std::uint32_t,
+           static_cast<std::size_t>(HostResourceOperation::EndCommandBuffer) + 1u>
+    g_hostResourceOperationInvocationCounts{};
 VkResult g_injectedHostResourceResult = VK_ERROR_OUT_OF_HOST_MEMORY;
 std::vector<HostResourceOperation> g_hostResourceCreationOrder;
 std::vector<HostResourceOperation> g_hostResourceDestructionOrder;
@@ -165,18 +189,7 @@ VkViewport g_observedViewport{};
 VkRect2D g_observedScissor{};
 VkPipelineColorBlendAttachmentState g_observedColorBlendAttachment{};
 VkSampleCountFlagBits g_observedRasterizationSamples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
-std::vector<VkImageMemoryBarrier> g_observedHostBarriers;
-std::vector<VkImageMemoryBarrier> g_observedSwapchainBarriers;
-std::vector<VkPipelineStageFlags> g_observedHostSourceStages;
-std::vector<VkPipelineStageFlags> g_observedHostDestinationStages;
-std::vector<VkPipelineStageFlags> g_observedSwapchainSourceStages;
-std::vector<VkPipelineStageFlags> g_observedSwapchainDestinationStages;
-std::vector<VkAttachmentLoadOp> g_observedLoadOperations;
-std::vector<VkAttachmentStoreOp> g_observedStoreOperations;
-std::vector<VkImageView> g_observedRenderingImageViews;
-std::vector<VkCommandBuffer> g_boundPipelineCommandBuffers;
-std::vector<VkCommandBuffer> g_boundDescriptorCommandBuffers;
-std::vector<std::uint32_t> g_drawVertexCounts;
+std::vector<HostCommandEvent> g_hostCommandEvents;
 std::vector<VkFence> g_waitedHostResourceFences;
 VkResult g_hostResourceWaitResult = VK_SUCCESS;
 std::uint32_t g_hostResourceWaitCallCount = 0u;
@@ -196,6 +209,8 @@ std::uint32_t g_observedCommandPoolQueueFamilyIndex = 0u;
  */
 void resetHostResourceState() {
     g_failedHostResourceOperation.reset();
+    g_failedHostResourceInvocationOrdinal = 1u;
+    g_hostResourceOperationInvocationCounts.fill(0u);
     g_injectedHostResourceResult = VK_ERROR_OUT_OF_HOST_MEMORY;
     g_hostResourceCreationOrder.clear();
     g_hostResourceDestructionOrder.clear();
@@ -212,18 +227,7 @@ void resetHostResourceState() {
     g_observedScissor = {};
     g_observedColorBlendAttachment = {};
     g_observedRasterizationSamples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
-    g_observedHostBarriers.clear();
-    g_observedSwapchainBarriers.clear();
-    g_observedHostSourceStages.clear();
-    g_observedHostDestinationStages.clear();
-    g_observedSwapchainSourceStages.clear();
-    g_observedSwapchainDestinationStages.clear();
-    g_observedLoadOperations.clear();
-    g_observedStoreOperations.clear();
-    g_observedRenderingImageViews.clear();
-    g_boundPipelineCommandBuffers.clear();
-    g_boundDescriptorCommandBuffers.clear();
-    g_drawVertexCounts.clear();
+    g_hostCommandEvents.clear();
     g_waitedHostResourceFences.clear();
     g_hostResourceWaitResult = VK_SUCCESS;
     g_hostResourceWaitCallCount = 0u;
@@ -241,14 +245,19 @@ void resetHostResourceState() {
 
 /**
  * @note ThreadSafety: Test-thread confined; mutates global mock creation history.
- * @brief Records an attempted host-resource operation and applies deterministic injection.
+ * @brief Records an attempted host-resource operation and applies deterministic injection
+ *        when its one-based invocation ordinal matches the configured ordinal.
  * @param HostResourceOperation operation Vulkan operation being intercepted
  * @return bool True when the selected operation must return the injected failure
  * @warning MemoryOwnership: Does not acquire, release, or transfer Vulkan object ownership.
  */
 bool shouldFailHostResourceOperation(HostResourceOperation operation) {
     g_hostResourceCreationOrder.push_back(operation);
-    return g_failedHostResourceOperation == operation;
+    const std::size_t operationIndex = static_cast<std::size_t>(operation);
+    ++g_hostResourceOperationInvocationCounts[operationIndex];
+    return g_failedHostResourceOperation == operation
+        && g_hostResourceOperationInvocationCounts[operationIndex]
+            == g_failedHostResourceInvocationOrdinal;
 }
 
 const std::array<VkImage, 3> g_hostResourceSwapchainImages{
@@ -951,8 +960,10 @@ extern "C" VkResult VKAPI_CALL vkResetCommandBuffer(
 
 extern "C" VkResult VKAPI_CALL vkBeginCommandBuffer(
     VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo* beginInfo) {
-    static_cast<void>(commandBuffer);
     static_cast<void>(beginInfo);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::BeginCommandBuffer, 0u, 0u,
+        VkImageMemoryBarrier{}, VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
     if (shouldFailHostResourceOperation(HostResourceOperation::BeginCommandBuffer)) {
         return g_injectedHostResourceResult;
     }
@@ -967,7 +978,6 @@ extern "C" void VKAPI_CALL vkCmdPipelineBarrier(
     const VkBufferMemoryBarrier* bufferMemoryBarriers,
     std::uint32_t imageMemoryBarrierCount,
     const VkImageMemoryBarrier* imageMemoryBarriers) {
-    static_cast<void>(commandBuffer);
     static_cast<void>(dependencyFlags);
     static_cast<void>(memoryBarrierCount);
     static_cast<void>(memoryBarriers);
@@ -975,39 +985,55 @@ extern "C" void VKAPI_CALL vkCmdPipelineBarrier(
     static_cast<void>(bufferMemoryBarriers);
     if (imageMemoryBarrierCount == 1u
         && imageMemoryBarriers[0].image == reinterpret_cast<VkImage>(0x4000u)) {
-        g_observedHostBarriers.push_back(imageMemoryBarriers[0]);
-        g_observedHostSourceStages.push_back(sourceStageMask);
-        g_observedHostDestinationStages.push_back(destinationStageMask);
+        g_hostCommandEvents.emplace_back(
+            commandBuffer, HostCommandEventType::HostBarrier, sourceStageMask,
+            destinationStageMask, imageMemoryBarriers[0], VkRenderingInfo{},
+            VkRenderingAttachmentInfo{}, 0u);
     } else if (imageMemoryBarrierCount == 1u) {
-        g_observedSwapchainBarriers.push_back(imageMemoryBarriers[0]);
-        g_observedSwapchainSourceStages.push_back(sourceStageMask);
-        g_observedSwapchainDestinationStages.push_back(destinationStageMask);
+        const HostCommandEventType eventType =
+            imageMemoryBarriers[0].newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                ? HostCommandEventType::SwapchainToPresentBarrier
+                : HostCommandEventType::SwapchainToColorBarrier;
+        g_hostCommandEvents.emplace_back(
+            commandBuffer, eventType, sourceStageMask, destinationStageMask,
+            imageMemoryBarriers[0], VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
     }
 }
 
 /**
  * @note ThreadSafety: Test-thread confined through global mock state.
- * @brief Captures dynamic-rendering attachment load, store, and image-view fields.
+ * @brief Captures complete dynamic-rendering and color-attachment structures while
+ *        replacing their borrowed pointers with explicit presence flags.
  * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
  * @param const VkRenderingInfo* renderingInfo Borrowed dynamic-rendering structure
- * @warning MemoryOwnership: Copies observed scalar handles and retains no input pointer.
+ * @warning MemoryOwnership: Copies observed structures and retains no input pointer.
  */
 extern "C" void VKAPI_CALL vkCmdBeginRenderingKHR(
     VkCommandBuffer commandBuffer, const VkRenderingInfo* renderingInfo) {
-    static_cast<void>(commandBuffer);
-    g_observedLoadOperations.push_back(renderingInfo->pColorAttachments[0].loadOp);
-    g_observedStoreOperations.push_back(renderingInfo->pColorAttachments[0].storeOp);
-    g_observedRenderingImageViews.push_back(renderingInfo->pColorAttachments[0].imageView);
+    VkRenderingInfo capturedRenderingInfo = *renderingInfo;
+    const std::uint32_t attachmentPointerFlags =
+        (renderingInfo->pColorAttachments != nullptr ? 0x1u : 0u)
+        | (renderingInfo->pDepthAttachment != nullptr ? 0x2u : 0u)
+        | (renderingInfo->pStencilAttachment != nullptr ? 0x4u : 0u);
+    capturedRenderingInfo.pColorAttachments = nullptr;
+    capturedRenderingInfo.pDepthAttachment = nullptr;
+    capturedRenderingInfo.pStencilAttachment = nullptr;
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::BeginRendering, 0u, 0u,
+        VkImageMemoryBarrier{}, capturedRenderingInfo,
+        renderingInfo->pColorAttachments[0], attachmentPointerFlags);
 }
 
 /**
  * @note ThreadSafety: Test-thread confined; does not mutate shared ownership state.
- * @brief Intercepts the end of one dynamic-rendering scope.
+ * @brief Records the end of one dynamic-rendering scope in command order.
  * @param VkCommandBuffer commandBuffer Borrowed recording command-buffer handle
  * @warning MemoryOwnership: Does not acquire, release, or retain the command buffer.
  */
 extern "C" void VKAPI_CALL vkCmdEndRenderingKHR(VkCommandBuffer commandBuffer) {
-    static_cast<void>(commandBuffer);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::EndRendering, 0u, 0u,
+        VkImageMemoryBarrier{}, VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
 }
 
 /**
@@ -1023,7 +1049,9 @@ extern "C" void VKAPI_CALL vkCmdBindPipeline(
     VkPipeline pipeline) {
     static_cast<void>(pipelineBindPoint);
     static_cast<void>(pipeline);
-    g_boundPipelineCommandBuffers.push_back(commandBuffer);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::BindPipeline, 0u, 0u,
+        VkImageMemoryBarrier{}, VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
 }
 
 /**
@@ -1051,7 +1079,9 @@ extern "C" void VKAPI_CALL vkCmdBindDescriptorSets(
     static_cast<void>(descriptorSets);
     static_cast<void>(dynamicOffsetCount);
     static_cast<void>(dynamicOffsets);
-    g_boundDescriptorCommandBuffers.push_back(commandBuffer);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::BindDescriptors, 0u, 0u,
+        VkImageMemoryBarrier{}, VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
 }
 
 /**
@@ -1068,11 +1098,12 @@ extern "C" void VKAPI_CALL vkCmdDraw(
     VkCommandBuffer commandBuffer, std::uint32_t vertexCount,
     std::uint32_t instanceCount, std::uint32_t firstVertex,
     std::uint32_t firstInstance) {
-    static_cast<void>(commandBuffer);
     REQUIRE(instanceCount == 1u);
     REQUIRE(firstVertex == 0u);
     REQUIRE(firstInstance == 0u);
-    g_drawVertexCounts.push_back(vertexCount);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::Draw, 0u, 0u, VkImageMemoryBarrier{},
+        VkRenderingInfo{}, VkRenderingAttachmentInfo{}, vertexCount);
 }
 
 extern "C" void VKAPI_CALL vkCmdClearColorImage(
@@ -1090,7 +1121,9 @@ extern "C" void VKAPI_CALL vkCmdClearColorImage(
 }
 
 extern "C" VkResult VKAPI_CALL vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
-    static_cast<void>(commandBuffer);
+    g_hostCommandEvents.emplace_back(
+        commandBuffer, HostCommandEventType::EndCommandBuffer, 0u, 0u,
+        VkImageMemoryBarrier{}, VkRenderingInfo{}, VkRenderingAttachmentInfo{}, 0u);
     if (shouldFailHostResourceOperation(HostResourceOperation::EndCommandBuffer)) {
         return g_injectedHostResourceResult;
     }
@@ -1563,14 +1596,8 @@ TEST_CASE("Host image resources reject invalid borrowed inputs and matrix overfl
     SECTION("mismatched swapchain views") {
         createInfo.swapchainImageViews = createInfo.swapchainImageViews.first(2u);
     }
-    SECTION("matrix size overflow") {
-        createInfo.swapchainImages = std::span<const VkImage>{
-            reinterpret_cast<const VkImage*>(0x1000u),
-            std::numeric_limits<std::uint32_t>::max()};
-        createInfo.swapchainImageViews = std::span<const VkImageView>{
-            reinterpret_cast<const VkImageView*>(0x2000u),
-            std::numeric_limits<std::uint32_t>::max()};
-        createInfo.frameSlotCount = 2u;
+    SECTION("command-buffer count overflow") {
+        createInfo.frameSlotCount = std::numeric_limits<std::uint32_t>::max();
     }
 
     const auto result = barrieww::VulkanHostImagePresentationResources::create(createInfo);
@@ -1585,118 +1612,194 @@ TEST_CASE("Host image resources create the exact pipeline and prerecorded matrix
         barrieww::VulkanHostImagePresentationResources::s_requiredSwapchainImageUsageFlags
         == (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT));
     resetHostResourceState();
-    auto result = barrieww::VulkanHostImagePresentationResources::create(
-        makeHostResourceCreateInfo());
-    REQUIRE(result.has_value());
-    auto resources = std::move(result.value());
+    {
+        auto result = barrieww::VulkanHostImagePresentationResources::create(
+            makeHostResourceCreateInfo());
+        REQUIRE(result.has_value());
+        {
+            auto resources = std::move(result.value());
 
-    const std::vector<HostResourceOperation> expectedCreationPrefix{
-        HostResourceOperation::ImageView,
-        HostResourceOperation::Sampler,
-        HostResourceOperation::DescriptorSetLayout,
-        HostResourceOperation::DescriptorPool,
-        HostResourceOperation::DescriptorSet,
-        HostResourceOperation::PipelineLayout,
-        HostResourceOperation::VertexShaderModule,
-        HostResourceOperation::FragmentShaderModule,
-        HostResourceOperation::GraphicsPipeline,
-        HostResourceOperation::CommandPool,
-        HostResourceOperation::CommandBuffers,
-    };
-    REQUIRE(g_hostResourceCreationOrder.size() >= expectedCreationPrefix.size());
-    REQUIRE(std::equal(expectedCreationPrefix.begin(), expectedCreationPrefix.end(),
-                       g_hostResourceCreationOrder.begin()));
-    REQUIRE(g_observedHostImageViewCreateInfo.image == reinterpret_cast<VkImage>(0x4000u));
-    REQUIRE(g_observedHostImageViewCreateInfo.format == VK_FORMAT_R8G8B8A8_UNORM);
-    REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.aspectMask
-            == VK_IMAGE_ASPECT_COLOR_BIT);
-    REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.levelCount == 1u);
-    REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.layerCount == 1u);
-    REQUIRE(g_observedSamplerCreateInfo.magFilter == VK_FILTER_NEAREST);
-    REQUIRE(g_observedSamplerCreateInfo.minFilter == VK_FILTER_NEAREST);
-    REQUIRE(g_observedSamplerCreateInfo.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-    REQUIRE(g_observedSamplerCreateInfo.addressModeV == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-    REQUIRE(g_observedSamplerCreateInfo.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-    REQUIRE(g_observedDescriptorBinding.binding == 0u);
-    REQUIRE(g_observedDescriptorBinding.descriptorType
-            == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-    REQUIRE(g_observedDescriptorBinding.descriptorCount == 1u);
-    REQUIRE(g_observedDescriptorBinding.stageFlags == VK_SHADER_STAGE_FRAGMENT_BIT);
-    REQUIRE(g_observedDescriptorImageInfo.imageLayout == VK_IMAGE_LAYOUT_GENERAL);
-    REQUIRE(g_observedPipelineColorFormat == VK_FORMAT_B8G8R8A8_UNORM);
-    REQUIRE(g_observedVertexInputState.vertexBindingDescriptionCount == 0u);
-    REQUIRE(g_observedVertexInputState.vertexAttributeDescriptionCount == 0u);
-    REQUIRE(g_observedInputAssemblyState.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    REQUIRE(g_observedViewport.width == 1280.0f);
-    REQUIRE(g_observedViewport.height == 720.0f);
-    REQUIRE(g_observedScissor.extent.width == 1280u);
-    REQUIRE(g_observedScissor.extent.height == 720u);
-    REQUIRE(g_observedRasterizationSamples == VK_SAMPLE_COUNT_1_BIT);
-    REQUIRE(g_observedColorBlendAttachment.blendEnable == VK_FALSE);
-    REQUIRE(g_destroyedShaderModuleCount == 2u);
-    REQUIRE(g_observedCommandPoolQueueFamilyIndex == 7u);
+            const std::vector<HostResourceOperation> expectedCreationPrefix{
+                HostResourceOperation::ImageView,
+                HostResourceOperation::Sampler,
+                HostResourceOperation::DescriptorSetLayout,
+                HostResourceOperation::DescriptorPool,
+                HostResourceOperation::DescriptorSet,
+                HostResourceOperation::PipelineLayout,
+                HostResourceOperation::VertexShaderModule,
+                HostResourceOperation::FragmentShaderModule,
+                HostResourceOperation::GraphicsPipeline,
+                HostResourceOperation::CommandPool,
+                HostResourceOperation::CommandBuffers,
+            };
+            REQUIRE(g_hostResourceCreationOrder.size() >= expectedCreationPrefix.size());
+            REQUIRE(std::equal(expectedCreationPrefix.begin(), expectedCreationPrefix.end(),
+                               g_hostResourceCreationOrder.begin()));
+            REQUIRE(g_observedHostImageViewCreateInfo.image
+                    == reinterpret_cast<VkImage>(0x4000u));
+            REQUIRE(g_observedHostImageViewCreateInfo.format == VK_FORMAT_R8G8B8A8_UNORM);
+            REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.aspectMask
+                    == VK_IMAGE_ASPECT_COLOR_BIT);
+            REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.levelCount == 1u);
+            REQUIRE(g_observedHostImageViewCreateInfo.subresourceRange.layerCount == 1u);
+            REQUIRE(g_observedSamplerCreateInfo.magFilter == VK_FILTER_NEAREST);
+            REQUIRE(g_observedSamplerCreateInfo.minFilter == VK_FILTER_NEAREST);
+            REQUIRE(g_observedSamplerCreateInfo.addressModeU
+                    == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            REQUIRE(g_observedSamplerCreateInfo.addressModeV
+                    == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            REQUIRE(g_observedSamplerCreateInfo.addressModeW
+                    == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            REQUIRE(g_observedDescriptorBinding.binding == 0u);
+            REQUIRE(g_observedDescriptorBinding.descriptorType
+                    == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            REQUIRE(g_observedDescriptorBinding.descriptorCount == 1u);
+            REQUIRE(g_observedDescriptorBinding.stageFlags == VK_SHADER_STAGE_FRAGMENT_BIT);
+            REQUIRE(g_observedDescriptorImageInfo.imageLayout == VK_IMAGE_LAYOUT_GENERAL);
+            REQUIRE(g_observedPipelineColorFormat == VK_FORMAT_B8G8R8A8_UNORM);
+            REQUIRE(g_observedVertexInputState.vertexBindingDescriptionCount == 0u);
+            REQUIRE(g_observedVertexInputState.vertexAttributeDescriptionCount == 0u);
+            REQUIRE(g_observedInputAssemblyState.topology
+                    == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            REQUIRE(g_observedViewport.width == 1280.0f);
+            REQUIRE(g_observedViewport.height == 720.0f);
+            REQUIRE(g_observedScissor.extent.width == 1280u);
+            REQUIRE(g_observedScissor.extent.height == 720u);
+            REQUIRE(g_observedRasterizationSamples == VK_SAMPLE_COUNT_1_BIT);
+            REQUIRE(g_observedColorBlendAttachment.blendEnable == VK_FALSE);
+            REQUIRE(g_destroyedShaderModuleCount == 2u);
+            REQUIRE(g_observedCommandPoolQueueFamilyIndex == 7u);
+            REQUIRE(g_hostCommandEvents.size() == 60u);
 
-    for (std::uint32_t frameSlotIndex = 0u; frameSlotIndex < 2u; ++frameSlotIndex) {
-        for (std::uint32_t imageIndex = 0u; imageIndex < 3u; ++imageIndex) {
-            const std::size_t matrixIndex = frameSlotIndex * 3u + imageIndex;
-            REQUIRE(resources.commandBuffer(frameSlotIndex, imageIndex)
-                    == reinterpret_cast<VkCommandBuffer>(0xB000u + matrixIndex));
+            const std::array expectedEventTypes{
+                HostCommandEventType::BeginCommandBuffer,
+                HostCommandEventType::HostBarrier,
+                HostCommandEventType::SwapchainToColorBarrier,
+                HostCommandEventType::BeginRendering,
+                HostCommandEventType::BindPipeline,
+                HostCommandEventType::BindDescriptors,
+                HostCommandEventType::Draw,
+                HostCommandEventType::EndRendering,
+                HostCommandEventType::SwapchainToPresentBarrier,
+                HostCommandEventType::EndCommandBuffer,
+            };
+            for (std::uint32_t frameSlotIndex = 0u; frameSlotIndex < 2u;
+                 ++frameSlotIndex) {
+                for (std::uint32_t imageIndex = 0u; imageIndex < 3u; ++imageIndex) {
+                    const std::size_t matrixIndex = frameSlotIndex * 3u + imageIndex;
+                    const VkCommandBuffer expectedCommandBuffer =
+                        reinterpret_cast<VkCommandBuffer>(0xB000u + matrixIndex);
+                    REQUIRE(resources.commandBuffer(frameSlotIndex, imageIndex)
+                            == expectedCommandBuffer);
+                    const std::size_t firstEventIndex =
+                        matrixIndex * expectedEventTypes.size();
+                    for (std::size_t eventOffset = 0u;
+                         eventOffset < expectedEventTypes.size(); ++eventOffset) {
+                        const auto& event =
+                            g_hostCommandEvents[firstEventIndex + eventOffset];
+                        REQUIRE(std::get<0>(event) == expectedCommandBuffer);
+                        REQUIRE(std::get<1>(event) == expectedEventTypes[eventOffset]);
+                    }
+
+                    const auto& hostBarrierEvent =
+                        g_hostCommandEvents[firstEventIndex + 1u];
+                    const auto& hostBarrier = std::get<4>(hostBarrierEvent);
+                    REQUIRE(std::get<2>(hostBarrierEvent)
+                            == (VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                | VK_PIPELINE_STAGE_TRANSFER_BIT));
+                    REQUIRE(std::get<3>(hostBarrierEvent)
+                            == VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    REQUIRE(hostBarrier.oldLayout == VK_IMAGE_LAYOUT_GENERAL);
+                    REQUIRE(hostBarrier.newLayout == VK_IMAGE_LAYOUT_GENERAL);
+                    REQUIRE(hostBarrier.srcAccessMask == VK_ACCESS_MEMORY_WRITE_BIT);
+                    REQUIRE(hostBarrier.dstAccessMask == VK_ACCESS_SHADER_READ_BIT);
+                    REQUIRE(hostBarrier.subresourceRange.aspectMask
+                            == VK_IMAGE_ASPECT_COLOR_BIT);
+                    REQUIRE(hostBarrier.subresourceRange.levelCount == 1u);
+                    REQUIRE(hostBarrier.subresourceRange.layerCount == 1u);
+
+                    const auto& colorBarrierEvent =
+                        g_hostCommandEvents[firstEventIndex + 2u];
+                    const auto& colorBarrier = std::get<4>(colorBarrierEvent);
+                    REQUIRE(std::get<2>(colorBarrierEvent)
+                            == VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+                    REQUIRE(std::get<3>(colorBarrierEvent)
+                            == VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                    REQUIRE(colorBarrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+                    REQUIRE(colorBarrier.newLayout
+                            == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    REQUIRE(colorBarrier.srcAccessMask == 0u);
+                    REQUIRE(colorBarrier.dstAccessMask
+                            == VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+                    const auto& renderingEvent =
+                        g_hostCommandEvents[firstEventIndex + 3u];
+                    const auto& renderingInfo = std::get<5>(renderingEvent);
+                    const auto& colorAttachment = std::get<6>(renderingEvent);
+                    REQUIRE(renderingInfo.sType == VK_STRUCTURE_TYPE_RENDERING_INFO);
+                    REQUIRE(renderingInfo.pNext == nullptr);
+                    REQUIRE(renderingInfo.flags == 0u);
+                    REQUIRE(renderingInfo.renderArea.offset.x == 0);
+                    REQUIRE(renderingInfo.renderArea.offset.y == 0);
+                    REQUIRE(renderingInfo.renderArea.extent.width == 1280u);
+                    REQUIRE(renderingInfo.renderArea.extent.height == 720u);
+                    REQUIRE(renderingInfo.layerCount == 1u);
+                    REQUIRE(renderingInfo.viewMask == 0u);
+                    REQUIRE(renderingInfo.colorAttachmentCount == 1u);
+                    REQUIRE((std::get<7>(renderingEvent) & 0x1u) != 0u);
+                    REQUIRE((std::get<7>(renderingEvent) & 0x2u) == 0u);
+                    REQUIRE((std::get<7>(renderingEvent) & 0x4u) == 0u);
+                    REQUIRE(renderingInfo.pColorAttachments == nullptr);
+                    REQUIRE(renderingInfo.pDepthAttachment == nullptr);
+                    REQUIRE(renderingInfo.pStencilAttachment == nullptr);
+                    REQUIRE(colorAttachment.sType
+                            == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+                    REQUIRE(colorAttachment.pNext == nullptr);
+                    REQUIRE(colorAttachment.imageView
+                            == g_hostResourceSwapchainImageViews[imageIndex]);
+                    REQUIRE(colorAttachment.imageLayout
+                            == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    REQUIRE(colorAttachment.resolveMode == VK_RESOLVE_MODE_NONE);
+                    REQUIRE(colorAttachment.resolveImageView == VK_NULL_HANDLE);
+                    REQUIRE(colorAttachment.resolveImageLayout
+                            == VK_IMAGE_LAYOUT_UNDEFINED);
+                    REQUIRE(colorAttachment.loadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+                    REQUIRE(colorAttachment.storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+                    REQUIRE(std::get<7>(g_hostCommandEvents[firstEventIndex + 6u]) == 3u);
+
+                    const auto& presentBarrierEvent =
+                        g_hostCommandEvents[firstEventIndex + 8u];
+                    const auto& presentBarrier = std::get<4>(presentBarrierEvent);
+                    REQUIRE(std::get<2>(presentBarrierEvent)
+                            == VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                    REQUIRE(std::get<3>(presentBarrierEvent)
+                            == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                    REQUIRE(presentBarrier.oldLayout
+                            == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    REQUIRE(presentBarrier.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    REQUIRE(presentBarrier.srcAccessMask
+                            == VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+                    REQUIRE(presentBarrier.dstAccessMask == 0u);
+                }
+            }
         }
+        REQUIRE(g_destroyedCommandPoolCount == 1u);
+        REQUIRE(g_destroyedPipelineCount == 1u);
+        REQUIRE(g_destroyedPipelineLayoutCount == 1u);
+        REQUIRE(g_destroyedDescriptorPoolCount == 1u);
+        REQUIRE(g_destroyedDescriptorSetLayoutCount == 1u);
+        REQUIRE(g_destroyedSamplerCount == 1u);
+        REQUIRE(g_destroyedImageViewCount == 1u);
+        REQUIRE(g_destroyedShaderModuleCount == 2u);
     }
-    REQUIRE(g_observedHostBarriers.size() == 6u);
-    REQUIRE(g_observedSwapchainBarriers.size() == 12u);
-    REQUIRE(g_boundPipelineCommandBuffers.size() == 6u);
-    REQUIRE(g_boundDescriptorCommandBuffers.size() == 6u);
-    REQUIRE(g_drawVertexCounts == std::vector<std::uint32_t>(6u, 3u));
-    REQUIRE(g_observedLoadOperations == std::vector<VkAttachmentLoadOp>(6u,
-                                                                       VK_ATTACHMENT_LOAD_OP_DONT_CARE));
-    REQUIRE(g_observedStoreOperations == std::vector<VkAttachmentStoreOp>(6u,
-                                                                          VK_ATTACHMENT_STORE_OP_STORE));
-    REQUIRE(g_observedRenderingImageViews
-            == std::vector<VkImageView>{
-                g_hostResourceSwapchainImageViews[0],
-                g_hostResourceSwapchainImageViews[1],
-                g_hostResourceSwapchainImageViews[2],
-                g_hostResourceSwapchainImageViews[0],
-                g_hostResourceSwapchainImageViews[1],
-                g_hostResourceSwapchainImageViews[2]});
-    for (std::size_t matrixIndex = 0u; matrixIndex < 6u; ++matrixIndex) {
-        const auto& hostBarrier = g_observedHostBarriers[matrixIndex];
-        REQUIRE(hostBarrier.oldLayout == VK_IMAGE_LAYOUT_GENERAL);
-        REQUIRE(hostBarrier.newLayout == VK_IMAGE_LAYOUT_GENERAL);
-        REQUIRE(hostBarrier.srcAccessMask == VK_ACCESS_MEMORY_WRITE_BIT);
-        REQUIRE(hostBarrier.dstAccessMask == VK_ACCESS_SHADER_READ_BIT);
-        REQUIRE(hostBarrier.subresourceRange.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
-        REQUIRE(hostBarrier.subresourceRange.levelCount == 1u);
-        REQUIRE(hostBarrier.subresourceRange.layerCount == 1u);
-        REQUIRE(g_observedHostSourceStages[matrixIndex]
-                == (VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                    | VK_PIPELINE_STAGE_TRANSFER_BIT));
-        REQUIRE(g_observedHostDestinationStages[matrixIndex]
-                == VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u].oldLayout
-                == VK_IMAGE_LAYOUT_UNDEFINED);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u].newLayout
-                == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u].srcAccessMask == 0u);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u].dstAccessMask
-                == VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-        REQUIRE(g_observedSwapchainSourceStages[matrixIndex * 2u]
-                == VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
-        REQUIRE(g_observedSwapchainDestinationStages[matrixIndex * 2u]
-                == VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u + 1u].oldLayout
-                == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u + 1u].newLayout
-                == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u + 1u].srcAccessMask
-                == VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-        REQUIRE(g_observedSwapchainBarriers[matrixIndex * 2u + 1u].dstAccessMask == 0u);
-        REQUIRE(g_observedSwapchainSourceStages[matrixIndex * 2u + 1u]
-                == VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        REQUIRE(g_observedSwapchainDestinationStages[matrixIndex * 2u + 1u]
-                == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    }
+    REQUIRE(g_destroyedCommandPoolCount == 1u);
+    REQUIRE(g_destroyedPipelineCount == 1u);
+    REQUIRE(g_destroyedPipelineLayoutCount == 1u);
+    REQUIRE(g_destroyedDescriptorPoolCount == 1u);
+    REQUIRE(g_destroyedDescriptorSetLayoutCount == 1u);
+    REQUIRE(g_destroyedSamplerCount == 1u);
+    REQUIRE(g_destroyedImageViewCount == 1u);
+    REQUIRE(g_destroyedShaderModuleCount == 2u);
 }
 
 TEST_CASE("Host image resource creation preserves every practical Vulkan failure",
@@ -1768,6 +1871,46 @@ TEST_CASE("Host image resource creation preserves every practical Vulkan failure
                     ? 0u
                     : (failedOperation == HostResourceOperation::FragmentShaderModule ? 1u : 2u);
             REQUIRE(g_destroyedShaderModuleCount == expectedDestroyedShaderModuleCount);
+        }
+    }
+
+    const std::array lateRecordingFailures{
+        HostResourceOperation::BeginCommandBuffer,
+        HostResourceOperation::EndCommandBuffer,
+    };
+    for (const HostResourceOperation failedOperation : lateRecordingFailures) {
+        DYNAMIC_SECTION("fourth invocation of operation "
+                        << static_cast<int>(failedOperation)) {
+            resetHostResourceState();
+            g_failedHostResourceOperation = failedOperation;
+            g_failedHostResourceInvocationOrdinal = 4u;
+            g_injectedHostResourceResult = VK_ERROR_DEVICE_LOST;
+
+            const auto result = barrieww::VulkanHostImagePresentationResources::create(
+                makeHostResourceCreateInfo());
+
+            REQUIRE_FALSE(result.has_value());
+            REQUIRE(result.error().vulkanResult == VK_ERROR_DEVICE_LOST);
+            REQUIRE(g_hostResourceOperationInvocationCounts[
+                        static_cast<std::size_t>(failedOperation)] == 4u);
+            REQUIRE(g_destroyedCommandPoolCount == 1u);
+            REQUIRE(g_destroyedPipelineCount == 1u);
+            REQUIRE(g_destroyedPipelineLayoutCount == 1u);
+            REQUIRE(g_destroyedDescriptorPoolCount == 1u);
+            REQUIRE(g_destroyedDescriptorSetLayoutCount == 1u);
+            REQUIRE(g_destroyedSamplerCount == 1u);
+            REQUIRE(g_destroyedImageViewCount == 1u);
+            REQUIRE(g_destroyedShaderModuleCount == 2u);
+            REQUIRE(std::get<0>(g_hostCommandEvents.back())
+                    == reinterpret_cast<VkCommandBuffer>(0xB003u));
+            REQUIRE(std::get<1>(g_hostCommandEvents.back())
+                    == (failedOperation == HostResourceOperation::BeginCommandBuffer
+                            ? HostCommandEventType::BeginCommandBuffer
+                            : HostCommandEventType::EndCommandBuffer));
+            REQUIRE(g_hostCommandEvents.size()
+                    == (failedOperation == HostResourceOperation::BeginCommandBuffer
+                            ? 31u
+                            : 40u));
         }
     }
 }
