@@ -22,6 +22,16 @@ namespace barrieww {
  */
 class VulkanPresentationRuntime {
 public:
+    /** Creation-only checkpoints exposed for deterministic exception transaction tests. */
+    enum class CreationCheckpoint : std::uint32_t {
+        AfterSwapchainCreation = 0u,
+        AfterFirstFrameSlotCreation = 1u,
+        AfterCommandPoolCreation = 2u,
+    };
+
+    /** Creation-only exception seam; production callers leave it null. */
+    using CreationCheckpointOperation = void (*)(CreationCheckpoint creationCheckpoint);
+
     struct CreateInfo {
         VkPhysicalDevice physicalDevice;
         VkDevice logicalDevice;
@@ -33,6 +43,7 @@ public:
         std::uint32_t framebufferWidth;
         std::uint32_t framebufferHeight;
         std::uint32_t framesInFlightCount;
+        CreationCheckpointOperation creationCheckpointOperation = nullptr;
     };
 
     struct CreationFailure {
@@ -230,14 +241,50 @@ private:
         bool hasSubmittedHostImageResources = false;
     };
 
+    /**
+     * @note ThreadSafety: Creation-thread confined and never externally visible.
+     * @brief Owns every partially created swapchain-generation object until a completed
+     *        runtime takes ownership. Destruction rolls back in reverse dependency order.
+     * @warning MemoryOwnership: Owns all non-null Vulkan handles and contained handle arrays;
+     *          borrows only the logical device.
+     */
+    struct SwapchainCreationRollback {
+        VkDevice m_logicalDevice = VK_NULL_HANDLE;
+        VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+        VkCommandPool m_commandPool = VK_NULL_HANDLE;
+        std::vector<VkImage> m_images;
+        std::vector<VkImageView> m_imageViews;
+        std::vector<VkFence> m_imageInFlightFences;
+        std::vector<VkCommandBuffer> m_frameCommandBuffers;
+        std::vector<FrameSlot> m_frameSlots;
+
+        /**
+         * @note ThreadSafety: Creation-thread confined.
+         * @brief Begins ownership of a newly created swapchain with empty dependent state.
+         * @param VkDevice logicalDevice Borrowed logical device
+         * @param VkSwapchainKHR swapchain Newly created owned swapchain
+         * @warning MemoryOwnership: Acquires swapchain ownership and borrows logicalDevice.
+         */
+        SwapchainCreationRollback(VkDevice logicalDevice,
+                                  VkSwapchainKHR swapchain) noexcept;
+
+        /**
+         * @note ThreadSafety: Creation-thread confined.
+         * @brief Rolls back every still-owned partial object in reverse dependency order.
+         * @warning MemoryOwnership: Releases all non-null owned handles and no borrowed object.
+         */
+        ~SwapchainCreationRollback();
+    };
+
     VulkanPresentationRuntime(VkDevice logicalDevice, VkQueue graphicsQueue,
                               VkQueue presentQueue, VkSurfaceKHR surface,
-                              VkSwapchainKHR swapchain, VkCommandPool commandPool,
-                              VkSurfaceFormatKHR surfaceFormat,
-                              VkPresentModeKHR presentMode, VkSharingMode sharingMode,
-                              std::vector<VkImage> images,
-                              std::vector<VkImageView> imageViews,
-                              std::vector<VkCommandBuffer> frameCommandBuffers,
+                               VkSwapchainKHR swapchain, VkCommandPool commandPool,
+                               VkSurfaceFormatKHR surfaceFormat,
+                               VkPresentModeKHR presentMode, VkSharingMode sharingMode,
+                               std::vector<VkImage> images,
+                               std::vector<VkImageView> imageViews,
+                               std::vector<VkFence> imageInFlightFences,
+                               std::vector<VkCommandBuffer> frameCommandBuffers,
                                std::vector<FrameSlot> frameSlots) noexcept;
 
     /**

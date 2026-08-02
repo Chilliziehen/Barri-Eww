@@ -115,6 +115,7 @@ static_assert(std::is_same_v<
 namespace {
 
 VkImageUsageFlags g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+VkCompositeAlphaFlagsKHR g_supportedCompositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 VkExtent2D g_surfaceCurrentExtent{1280u, 720u};
 VkResult g_surfaceFormatCountResult = VK_SUCCESS;
 std::uint32_t g_minImageCount = 2u;
@@ -134,6 +135,8 @@ VkImageUsageFlags g_observedSwapchainImageUsage = 0u;
 VkFormat g_observedSwapchainImageFormat = VK_FORMAT_UNDEFINED;
 VkColorSpaceKHR g_observedSwapchainImageColorSpace = VK_COLOR_SPACE_MAX_ENUM_KHR;
 VkExtent2D g_observedSwapchainExtent{};
+VkCompositeAlphaFlagBitsKHR g_observedCompositeAlpha =
+    VK_COMPOSITE_ALPHA_FLAG_BITS_MAX_ENUM_KHR;
 VkResult g_acquireResult = VK_SUCCESS;
 VkResult g_submitResult = VK_SUCCESS;
 VkResult g_presentResult = VK_SUCCESS;
@@ -145,7 +148,18 @@ std::uint32_t g_recordedCommandBufferCount = 0u;
 VkCommandBuffer g_observedSubmittedCommandBuffer = VK_NULL_HANDLE;
 std::array<float, 4> g_observedClearColor{};
 std::uint32_t g_createdFenceCount = 0u;
+std::uint32_t g_destroyedFenceCount = 0u;
+std::uint32_t g_createdSemaphoreCount = 0u;
+std::uint32_t g_destroyedSemaphoreCount = 0u;
+std::vector<VkFence> g_signaledFences;
+std::vector<std::vector<VkFence>> g_fenceWaitCalls;
+std::vector<VkResult> g_injectedFenceWaitResults;
+std::size_t g_injectedFenceWaitResultIndex = 0u;
+VkResult g_resetFenceResult = VK_SUCCESS;
+std::vector<VkFence> g_resetFences;
 bool g_offerDynamicRenderingFunctions = true;
+std::optional<barrieww::VulkanPresentationRuntime::CreationCheckpoint>
+    g_throwingPresentationCreationCheckpoint;
 
 enum class HostResourceOperation {
     ImageView,
@@ -307,6 +321,7 @@ barrieww::VulkanHostImagePresentationResources::CreateInfo makeHostResourceCreat
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
     g_supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    g_supportedCompositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     g_surfaceCurrentExtent = VkExtent2D{1280u, 720u};
     g_surfaceFormatCountResult = VK_SUCCESS;
     g_minImageCount = 2u;
@@ -326,6 +341,7 @@ void resetPresentationState() {
     g_observedSwapchainImageFormat = VK_FORMAT_UNDEFINED;
     g_observedSwapchainImageColorSpace = VK_COLOR_SPACE_MAX_ENUM_KHR;
     g_observedSwapchainExtent = {};
+    g_observedCompositeAlpha = VK_COMPOSITE_ALPHA_FLAG_BITS_MAX_ENUM_KHR;
     g_acquireResult = VK_SUCCESS;
     g_submitResult = VK_SUCCESS;
     g_presentResult = VK_SUCCESS;
@@ -337,7 +353,17 @@ void resetPresentationState() {
     g_observedSubmittedCommandBuffer = VK_NULL_HANDLE;
     g_observedClearColor = {};
     g_createdFenceCount = 0u;
+    g_destroyedFenceCount = 0u;
+    g_createdSemaphoreCount = 0u;
+    g_destroyedSemaphoreCount = 0u;
+    g_signaledFences.clear();
+    g_fenceWaitCalls.clear();
+    g_injectedFenceWaitResults.clear();
+    g_injectedFenceWaitResultIndex = 0u;
+    g_resetFenceResult = VK_SUCCESS;
+    g_resetFences.clear();
     g_offerDynamicRenderingFunctions = true;
+    g_throwingPresentationCreationCheckpoint.reset();
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -375,6 +401,20 @@ TEST_CASE("Presentation image format values map strictly to Vulkan formats",
     REQUIRE(barrieww::mapPresentationImageFormat(
                 static_cast<barrieww::PresentationImageFormat>(UINT32_MAX))
             == VK_FORMAT_UNDEFINED);
+}
+
+/**
+ * @note ThreadSafety: Test-thread confined through deterministic global mock state.
+ * @brief Throws only at the configured swapchain creation checkpoint.
+ * @param barrieww::VulkanPresentationRuntime::CreationCheckpoint creationCheckpoint Current
+ *        creation checkpoint
+ * @warning MemoryOwnership: Does not acquire or release any Vulkan object.
+ */
+void injectPresentationCreationException(
+    barrieww::VulkanPresentationRuntime::CreationCheckpoint creationCheckpoint) {
+    if (g_throwingPresentationCreationCheckpoint == creationCheckpoint) {
+        throw std::runtime_error{"Injected presentation creation failure"};
+    }
 }
 
 namespace {
@@ -469,6 +509,7 @@ extern "C" VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     surfaceCapabilities->maxImageExtent = VkExtent2D{4096u, 4096u};
     surfaceCapabilities->currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     surfaceCapabilities->supportedUsageFlags = g_supportedUsageFlags;
+    surfaceCapabilities->supportedCompositeAlpha = g_supportedCompositeAlpha;
     return VK_SUCCESS;
 }
 
@@ -531,6 +572,7 @@ extern "C" VkResult VKAPI_CALL vkCreateSwapchainKHR(
     g_observedSwapchainImageFormat = createInfo->imageFormat;
     g_observedSwapchainImageColorSpace = createInfo->imageColorSpace;
     g_observedSwapchainExtent = createInfo->imageExtent;
+    g_observedCompositeAlpha = createInfo->compositeAlpha;
     *swapchain = reinterpret_cast<VkSwapchainKHR>(0x5000u);
     return VK_SUCCESS;
 }
@@ -788,6 +830,7 @@ extern "C" VkResult VKAPI_CALL vkCreateSemaphore(
     static_cast<void>(createInfo);
     static_cast<void>(allocationCallbacks);
     *semaphore = reinterpret_cast<VkSemaphore>(0x8000u);
+    ++g_createdSemaphoreCount;
     return VK_SUCCESS;
 }
 
@@ -797,6 +840,7 @@ extern "C" void VKAPI_CALL vkDestroySemaphore(
     static_cast<void>(device);
     static_cast<void>(semaphore);
     static_cast<void>(allocationCallbacks);
+    ++g_destroyedSemaphoreCount;
 }
 
 extern "C" VkResult VKAPI_CALL vkCreateFence(
@@ -807,6 +851,7 @@ extern "C" VkResult VKAPI_CALL vkCreateFence(
     static_cast<void>(allocationCallbacks);
     *fence = reinterpret_cast<VkFence>(
         static_cast<std::uintptr_t>(0x9000u + g_createdFenceCount));
+    g_signaledFences.push_back(*fence);
     ++g_createdFenceCount;
     return VK_SUCCESS;
 }
@@ -814,8 +859,9 @@ extern "C" VkResult VKAPI_CALL vkCreateFence(
 extern "C" void VKAPI_CALL vkDestroyFence(
     VkDevice device, VkFence fence, const VkAllocationCallbacks* allocationCallbacks) {
     static_cast<void>(device);
-    static_cast<void>(fence);
     static_cast<void>(allocationCallbacks);
+    std::erase(g_signaledFences, fence);
+    ++g_destroyedFenceCount;
 }
 
 extern "C" VkResult VKAPI_CALL vkWaitForFences(
@@ -826,15 +872,24 @@ extern "C" VkResult VKAPI_CALL vkWaitForFences(
     static_cast<void>(timeout);
     ++g_hostResourceWaitCallCount;
     g_waitedHostResourceFences.assign(fences, fences + fenceCount);
+    g_fenceWaitCalls.emplace_back(fences, fences + fenceCount);
+    if (g_injectedFenceWaitResultIndex < g_injectedFenceWaitResults.size()) {
+        return g_injectedFenceWaitResults[g_injectedFenceWaitResultIndex++];
+    }
     return g_hostResourceWaitResult;
 }
 
 extern "C" VkResult VKAPI_CALL vkResetFences(
     VkDevice device, std::uint32_t fenceCount, const VkFence* fences) {
     static_cast<void>(device);
-    static_cast<void>(fenceCount);
-    static_cast<void>(fences);
-    return VK_SUCCESS;
+    g_resetFences.insert(g_resetFences.end(), fences, fences + fenceCount);
+    if (g_resetFenceResult != VK_SUCCESS) {
+        return g_resetFenceResult;
+    }
+    for (std::uint32_t fenceIndex = 0u; fenceIndex < fenceCount; ++fenceIndex) {
+        std::erase(g_signaledFences, fences[fenceIndex]);
+    }
+    return g_resetFenceResult;
 }
 
 extern "C" VkResult VKAPI_CALL vkAcquireNextImageKHR(
@@ -858,6 +913,10 @@ extern "C" VkResult VKAPI_CALL vkQueueSubmit(
         : submitInfo->pCommandBuffers[0];
     static_cast<void>(fence);
     ++g_submitCallCount;
+    if (g_submitResult == VK_SUCCESS
+        && std::ranges::find(g_signaledFences, fence) == g_signaledFences.end()) {
+        g_signaledFences.push_back(fence);
+    }
     return g_submitResult;
 }
 
@@ -1289,6 +1348,7 @@ TEST_CASE("Presentation runtime boundary selects MAILBOX and preferred format",
     REQUIRE(createResult.swapchainImageCount == 3u);
     REQUIRE(g_createdImageViewCount == 3u);
     REQUIRE(g_observedQueueFamilyCount == 0u);
+    REQUIRE(g_observedCompositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(createResult.runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
@@ -1666,6 +1726,174 @@ TEST_CASE("Presentation frame maps out-of-date and suboptimal to recreate/subopt
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation frame preserves image ownership when its prior fence wait fails",
+          "[presentationRuntime][fenceFailure]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    g_acquiredImageIndex = 0u;
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    const std::size_t resetFenceCountBeforeFailure = g_resetFences.size();
+
+    g_fenceWaitCalls.clear();
+    g_injectedFenceWaitResults = {VK_SUCCESS, VK_ERROR_DEVICE_LOST};
+    g_injectedFenceWaitResultIndex = 0u;
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+    REQUIRE(beginResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_fenceWaitCalls
+            == std::vector<std::vector<VkFence>>{
+                {reinterpret_cast<VkFence>(0x9001u)},
+                {reinterpret_cast<VkFence>(0x9000u)}});
+    REQUIRE(g_resetFences.size() == resetFenceCountBeforeFailure);
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(g_submitCallCount == 1u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation frame does not publish image ownership when fence reset fails",
+          "[presentationRuntime][fenceFailure]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+    g_acquiredImageIndex = 1u;
+    g_resetFenceResult = VK_ERROR_DEVICE_LOST;
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+    REQUIRE(beginResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+    REQUIRE(g_resetFences
+            == std::vector<VkFence>{reinterpret_cast<VkFence>(0x9000u)});
+    REQUIRE(std::ranges::find(g_signaledFences, reinterpret_cast<VkFence>(0x9000u))
+            != g_signaledFences.end());
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(g_submitCallCount == 0u);
+
+    g_resetFenceResult = VK_SUCCESS;
+    g_fenceWaitCalls.clear();
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(beginResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    REQUIRE(g_fenceWaitCalls
+            == std::vector<std::vector<VkFence>>{
+                {reinterpret_cast<VkFence>(0x9000u)}});
+    REQUIRE(std::ranges::find(g_signaledFences, reinterpret_cast<VkFence>(0x9000u))
+            == g_signaledFences.end());
+    REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation runtime selects a supported composite alpha deterministically",
+          "[presentationRuntime][compositeAlpha]") {
+    resetPresentationState();
+    g_supportedCompositeAlpha =
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR | VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    const auto createInfo = makeCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+
+    REQUIRE(barriEwwCreatePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(g_observedCompositeAlpha == VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR);
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(createResult.runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation runtime rejects a surface without composite alpha support",
+          "[presentationRuntime][compositeAlpha]") {
+    resetPresentationState();
+    g_supportedCompositeAlpha = 0u;
+    const auto createInfo = makeCreateInfo();
+    NativePresentationRuntimeCreateResultVersion1 createResult{};
+
+    REQUIRE(barriEwwCreatePresentationRuntimeVersion1(&createInfo, &createResult)
+            == NativePresentationRuntimeOperationResult::UnsupportedSurface);
+    REQUIRE(createResult.vulkanResult == VK_SUCCESS);
+    REQUIRE(createResult.runtimeAddress == 0u);
+    REQUIRE(g_destroyedSwapchainCount == 0u);
+}
+
+TEST_CASE("Presentation runtime creation rolls back Vulkan ownership on exceptions",
+          "[presentationRuntime][creationRollback]") {
+    resetPresentationState();
+    resetHostResourceState();
+    barrieww::VulkanPresentationRuntime::CreateInfo createInfo{
+        reinterpret_cast<VkPhysicalDevice>(2u),
+        reinterpret_cast<VkDevice>(3u),
+        reinterpret_cast<VkSurfaceKHR>(4u),
+        reinterpret_cast<VkQueue>(5u),
+        reinterpret_cast<VkQueue>(5u),
+        0u,
+        0u,
+        1280u,
+        720u,
+        2u,
+    };
+    createInfo.creationCheckpointOperation = &injectPresentationCreationException;
+
+    SECTION("immediately after swapchain creation") {
+        g_throwingPresentationCreationCheckpoint =
+            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterSwapchainCreation;
+        REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
+                          std::runtime_error);
+        REQUIRE(g_destroyedSwapchainCount == 1u);
+        REQUIRE(g_destroyedImageViewCount == 0u);
+        REQUIRE(g_destroyedSemaphoreCount == 0u);
+        REQUIRE(g_destroyedFenceCount == 0u);
+        REQUIRE(g_destroyedCommandPoolCount == 0u);
+    }
+
+    SECTION("after image views and one frame slot") {
+        g_throwingPresentationCreationCheckpoint =
+            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterFirstFrameSlotCreation;
+        REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
+                          std::runtime_error);
+        REQUIRE(g_destroyedSwapchainCount == 1u);
+        REQUIRE(g_destroyedImageViewCount == 3u);
+        REQUIRE(g_destroyedSemaphoreCount == 2u);
+        REQUIRE(g_destroyedFenceCount == 1u);
+        REQUIRE(g_destroyedCommandPoolCount == 0u);
+    }
+
+    SECTION("after command pool creation") {
+        g_throwingPresentationCreationCheckpoint =
+            barrieww::VulkanPresentationRuntime::CreationCheckpoint::AfterCommandPoolCreation;
+        REQUIRE_THROWS_AS(barrieww::VulkanPresentationRuntime::create(createInfo),
+                          std::runtime_error);
+        REQUIRE(g_destroyedSwapchainCount == 1u);
+        REQUIRE(g_destroyedImageViewCount == 3u);
+        REQUIRE(g_destroyedSemaphoreCount == 4u);
+        REQUIRE(g_destroyedFenceCount == 2u);
+        REQUIRE(g_destroyedCommandPoolCount == 1u);
+    }
 }
 
 TEST_CASE("Host image resources reject invalid borrowed inputs and matrix overflow",

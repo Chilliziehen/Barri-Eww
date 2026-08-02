@@ -104,11 +104,16 @@ VulkanPresentationRuntime::createSwapchainRuntime(
      * enumerate formats and select legacy preference or exact requested format
      * enumerate present modes and select MAILBOX else FIFO
      * calculate surface extent; reject mismatch when exact extent is required
+     * select OPAQUE else PRE_MULTIPLIED else POST_MULTIPLIED else INHERIT composite alpha
+     * reject the surface when no standard composite alpha is supported
      * create swapchain with the supplied usage policy
-     * create every swapchain view and frame synchronization object
-     * create the clear command pool and command buffers
-     * on any failure, destroy all completed objects in reverse ownership order
-     * publish the complete runtime
+     * transfer swapchain immediately into the partial rollback owner
+     * create every swapchain view and frame synchronization object into that owner
+     * create the clear command pool and command buffers into that owner
+     * preallocate image-fence ownership state while rollback remains active
+     * move every array into a completed runtime through its non-allocating constructor
+     * release scalar rollback ownership only after runtime construction completes
+     * on any Vulkan or C++ failure, rollback destroys completed objects in reverse order
      *
      * The algorithm is O(surfaceFormatCount + presentModeCount + swapchainImageCount +
      * framesInFlightCount) time and O(the same counts) temporary/owned storage.
@@ -218,6 +223,20 @@ VulkanPresentationRuntime::createSwapchainRuntime(
     const VkSharingMode sharingMode = splitQueueFamilies
         ? VK_SHARING_MODE_CONCURRENT
         : VK_SHARING_MODE_EXCLUSIVE;
+    constexpr std::array compositeAlphaPreference{
+        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+    };
+    const auto selectedCompositeAlpha = std::ranges::find_if(
+        compositeAlphaPreference,
+        [&surfaceCapabilities](VkCompositeAlphaFlagBitsKHR candidate) {
+            return (surfaceCapabilities.supportedCompositeAlpha & candidate) != 0u;
+        });
+    if (selectedCompositeAlpha == compositeAlphaPreference.end()) {
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
+    }
 
     VkSwapchainCreateInfoKHR swapchainCreateInfo{};
     swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -233,7 +252,7 @@ VulkanPresentationRuntime::createSwapchainRuntime(
     swapchainCreateInfo.pQueueFamilyIndices =
         splitQueueFamilies ? queueFamilyIndices.data() : nullptr;
     swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
-    swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapchainCreateInfo.compositeAlpha = *selectedCompositeAlpha;
     swapchainCreateInfo.presentMode = presentMode;
     swapchainCreateInfo.clipped = VK_TRUE;
     swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
@@ -244,76 +263,56 @@ VulkanPresentationRuntime::createSwapchainRuntime(
     if (vulkanResult != VK_SUCCESS) {
         return std::unexpected(CreationFailure{vulkanResult, false});
     }
-
-    const auto failAfterSwapchain = [&](std::vector<VkImageView>& imageViews,
-                                        std::vector<FrameSlot>& frameSlots,
-                                        VkResult failureResult, bool unsupportedSurface) {
-        for (const FrameSlot& frameSlot : frameSlots) {
-            if (frameSlot.imageAvailableSemaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(createInfo.logicalDevice,
-                                   frameSlot.imageAvailableSemaphore, nullptr);
-            }
-            if (frameSlot.renderFinishedSemaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(createInfo.logicalDevice,
-                                   frameSlot.renderFinishedSemaphore, nullptr);
-            }
-            if (frameSlot.inFlightFence != VK_NULL_HANDLE) {
-                vkDestroyFence(createInfo.logicalDevice, frameSlot.inFlightFence, nullptr);
-            }
-        }
-        for (VkImageView createdView : imageViews) {
-            vkDestroyImageView(createInfo.logicalDevice, createdView, nullptr);
-        }
-        vkDestroySwapchainKHR(createInfo.logicalDevice, swapchain, nullptr);
-        return std::unexpected(CreationFailure{failureResult, unsupportedSurface});
-    };
+    SwapchainCreationRollback rollback{createInfo.logicalDevice, swapchain};
+    if (createInfo.creationCheckpointOperation != nullptr) {
+        createInfo.creationCheckpointOperation(CreationCheckpoint::AfterSwapchainCreation);
+    }
 
     std::uint32_t actualImageCount = 0u;
-    std::vector<VkImageView> imageViews;
-    std::vector<FrameSlot> frameSlots;
     vulkanResult = vkGetSwapchainImagesKHR(
         createInfo.logicalDevice, swapchain, &actualImageCount, nullptr);
     if (vulkanResult != VK_SUCCESS) {
-        return failAfterSwapchain(
-            imageViews, frameSlots, vulkanResult,
-            preservesExactCreationFailures ? false : actualImageCount == 0u);
+        return std::unexpected(CreationFailure{
+            vulkanResult,
+            preservesExactCreationFailures ? false : actualImageCount == 0u});
     }
     if (actualImageCount == 0u) {
-        return failAfterSwapchain(imageViews, frameSlots, VK_SUCCESS, true);
+        return std::unexpected(CreationFailure{VK_SUCCESS, true});
     }
-    std::vector<VkImage> images(actualImageCount);
+    rollback.m_images.resize(actualImageCount);
     vulkanResult = vkGetSwapchainImagesKHR(
-        createInfo.logicalDevice, swapchain, &actualImageCount, images.data());
+        createInfo.logicalDevice, swapchain, &actualImageCount, rollback.m_images.data());
     if (vulkanResult != VK_SUCCESS) {
-        return failAfterSwapchain(imageViews, frameSlots, vulkanResult, false);
+        return std::unexpected(CreationFailure{vulkanResult, false});
     }
 
-    imageViews.reserve(images.size());
-    for (VkImage image : images) {
+    rollback.m_imageViews.resize(rollback.m_images.size(), VK_NULL_HANDLE);
+    for (std::size_t imageIndex = 0u; imageIndex < rollback.m_images.size(); ++imageIndex) {
         VkImageViewCreateInfo imageViewCreateInfo{};
         imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        imageViewCreateInfo.image = image;
+        imageViewCreateInfo.image = rollback.m_images[imageIndex];
         imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         imageViewCreateInfo.format = surfaceFormat.format;
         imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         imageViewCreateInfo.subresourceRange.levelCount = 1u;
         imageViewCreateInfo.subresourceRange.layerCount = 1u;
-        VkImageView imageView = VK_NULL_HANDLE;
         vulkanResult = vkCreateImageView(
-            createInfo.logicalDevice, &imageViewCreateInfo, nullptr, &imageView);
+            createInfo.logicalDevice, &imageViewCreateInfo, nullptr,
+            &rollback.m_imageViews[imageIndex]);
         if (vulkanResult != VK_SUCCESS) {
-            return failAfterSwapchain(imageViews, frameSlots, vulkanResult, false);
+            return std::unexpected(CreationFailure{vulkanResult, false});
         }
-        imageViews.push_back(imageView);
     }
 
-    frameSlots.resize(createInfo.framesInFlightCount);
+    rollback.m_frameSlots.resize(createInfo.framesInFlightCount);
     VkSemaphoreCreateInfo semaphoreCreateInfo{};
     semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     VkFenceCreateInfo fenceCreateInfo{};
     fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    for (FrameSlot& frameSlot : frameSlots) {
+    for (std::size_t frameSlotIndex = 0u;
+         frameSlotIndex < rollback.m_frameSlots.size(); ++frameSlotIndex) {
+        FrameSlot& frameSlot = rollback.m_frameSlots[frameSlotIndex];
         vulkanResult = vkCreateSemaphore(createInfo.logicalDevice, &semaphoreCreateInfo,
                                          nullptr, &frameSlot.imageAvailableSemaphore);
         if (vulkanResult == VK_SUCCESS) {
@@ -328,7 +327,11 @@ VulkanPresentationRuntime::createSwapchainRuntime(
             const VkResult reportedResult = preservesExactCreationFailures
                 ? vulkanResult
                 : VK_ERROR_OUT_OF_DEVICE_MEMORY;
-            return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
+            return std::unexpected(CreationFailure{reportedResult, false});
+        }
+        if (frameSlotIndex == 0u && createInfo.creationCheckpointOperation != nullptr) {
+            createInfo.creationCheckpointOperation(
+                CreationCheckpoint::AfterFirstFrameSlotCreation);
         }
     }
 
@@ -336,38 +339,77 @@ VulkanPresentationRuntime::createSwapchainRuntime(
     commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     commandPoolCreateInfo.queueFamilyIndex = createInfo.graphicsQueueFamilyIndex;
-    VkCommandPool commandPool = VK_NULL_HANDLE;
     vulkanResult = vkCreateCommandPool(createInfo.logicalDevice, &commandPoolCreateInfo,
-                                       nullptr, &commandPool);
+                                       nullptr, &rollback.m_commandPool);
     if (vulkanResult != VK_SUCCESS) {
         const VkResult reportedResult = preservesExactCreationFailures
             ? vulkanResult
             : VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
+        return std::unexpected(CreationFailure{reportedResult, false});
     }
-    std::vector<VkCommandBuffer> frameCommandBuffers(createInfo.framesInFlightCount,
-                                                     VK_NULL_HANDLE);
+    if (createInfo.creationCheckpointOperation != nullptr) {
+        createInfo.creationCheckpointOperation(
+            CreationCheckpoint::AfterCommandPoolCreation);
+    }
+    rollback.m_frameCommandBuffers.resize(createInfo.framesInFlightCount, VK_NULL_HANDLE);
     VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
     commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    commandBufferAllocateInfo.commandPool = commandPool;
+    commandBufferAllocateInfo.commandPool = rollback.m_commandPool;
     commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     commandBufferAllocateInfo.commandBufferCount = createInfo.framesInFlightCount;
     vulkanResult = vkAllocateCommandBuffers(createInfo.logicalDevice,
                                             &commandBufferAllocateInfo,
-                                            frameCommandBuffers.data());
+                                            rollback.m_frameCommandBuffers.data());
     if (vulkanResult != VK_SUCCESS) {
-        vkDestroyCommandPool(createInfo.logicalDevice, commandPool, nullptr);
         const VkResult reportedResult = preservesExactCreationFailures
             ? vulkanResult
             : VK_ERROR_OUT_OF_DEVICE_MEMORY;
-        return failAfterSwapchain(imageViews, frameSlots, reportedResult, false);
+        return std::unexpected(CreationFailure{reportedResult, false});
     }
 
-    return VulkanPresentationRuntime{
+    rollback.m_imageInFlightFences.resize(rollback.m_images.size(), VK_NULL_HANDLE);
+    VulkanPresentationRuntime runtime{
         createInfo.logicalDevice, createInfo.graphicsQueue, createInfo.presentQueue,
-        createInfo.surface, swapchain, commandPool, surfaceFormat, presentMode, sharingMode,
-        std::move(images), std::move(imageViews), std::move(frameCommandBuffers),
-        std::move(frameSlots)};
+        createInfo.surface, rollback.m_swapchain, rollback.m_commandPool, surfaceFormat,
+        presentMode, sharingMode, std::move(rollback.m_images),
+        std::move(rollback.m_imageViews), std::move(rollback.m_imageInFlightFences),
+        std::move(rollback.m_frameCommandBuffers), std::move(rollback.m_frameSlots)};
+    rollback.m_swapchain = VK_NULL_HANDLE;
+    rollback.m_commandPool = VK_NULL_HANDLE;
+    return runtime;
+}
+
+VulkanPresentationRuntime::SwapchainCreationRollback::SwapchainCreationRollback(
+    VkDevice logicalDevice, VkSwapchainKHR swapchain) noexcept
+    : m_logicalDevice(logicalDevice), m_swapchain(swapchain) {}
+
+VulkanPresentationRuntime::SwapchainCreationRollback::~SwapchainCreationRollback() {
+    if (m_commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(m_logicalDevice, m_commandPool, nullptr);
+    }
+    for (auto frameSlotIterator = m_frameSlots.rbegin();
+         frameSlotIterator != m_frameSlots.rend(); ++frameSlotIterator) {
+        const FrameSlot& frameSlot = *frameSlotIterator;
+        if (frameSlot.inFlightFence != VK_NULL_HANDLE) {
+            vkDestroyFence(m_logicalDevice, frameSlot.inFlightFence, nullptr);
+        }
+        if (frameSlot.renderFinishedSemaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(m_logicalDevice, frameSlot.renderFinishedSemaphore, nullptr);
+        }
+        if (frameSlot.imageAvailableSemaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(m_logicalDevice, frameSlot.imageAvailableSemaphore, nullptr);
+        }
+    }
+    for (auto imageViewIterator = m_imageViews.rbegin();
+         imageViewIterator != m_imageViews.rend(); ++imageViewIterator) {
+        const VkImageView imageView = *imageViewIterator;
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_logicalDevice, imageView, nullptr);
+        }
+    }
+    if (m_swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_logicalDevice, m_swapchain, nullptr);
+    }
 }
 
 VulkanPresentationRuntime::VulkanPresentationRuntime(
@@ -376,6 +418,7 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     VkSurfaceFormatKHR surfaceFormat, VkPresentModeKHR presentMode,
     VkSharingMode sharingMode, std::vector<VkImage> images,
     std::vector<VkImageView> imageViews,
+    std::vector<VkFence> imageInFlightFences,
     std::vector<VkCommandBuffer> frameCommandBuffers,
     std::vector<FrameSlot> frameSlots) noexcept
     : m_logicalDevice(logicalDevice)
@@ -389,7 +432,7 @@ VulkanPresentationRuntime::VulkanPresentationRuntime(
     , m_sharingMode(sharingMode)
     , m_images(std::move(images))
     , m_imageViews(std::move(imageViews))
-    , m_imageInFlightFences(m_images.size(), VK_NULL_HANDLE)
+    , m_imageInFlightFences(std::move(imageInFlightFences))
     , m_frameCommandBuffers(std::move(frameCommandBuffers))
     , m_frameSlots(std::move(frameSlots)) {}
 
@@ -509,12 +552,40 @@ VulkanPresentationRuntime::BeginFrameResult VulkanPresentationRuntime::beginFram
     }
     m_openFrameMetrics.acquireNanoseconds = elapsedNanosecondsSince(acquireStart);
 
+    /**
+     * @note ThreadSafety: Frame access is presentation-thread confined.
+     * @brief Commits acquired-image fence ownership only after every prerequisite transition
+     *        succeeds. The slot fence was already waited, proving its prior submission done.
+     *        A prior image fence, when present, is then waited before the slot fence is reset.
+     *        Only a successful reset permits publishing the new image-to-slot association and
+     *        opening the frame. Every failure leaves the old image association intact and the
+     *        frame closed, so destruction and host-resource detach never trust a failed reset.
+     *
+     * Semantic pseudocode:
+     * if acquiredImage has priorFence:
+     *     wait priorFence; on failure return RecreateRequired without mutation
+     * reset currentSlotFence; on failure return RecreateRequired without mutation
+     * imageInFlightFences[acquiredImage] = currentSlotFence
+     * acquiredImageIndex = acquiredImage
+     * frameOpen = true
+     */
     if (m_imageInFlightFences[imageIndex] != VK_NULL_HANDLE) {
-        vkWaitForFences(m_logicalDevice, 1u, &m_imageInFlightFences[imageIndex], VK_TRUE,
-                        UINT64_MAX);
+        vulkanResult = vkWaitForFences(m_logicalDevice, 1u,
+                                       &m_imageInFlightFences[imageIndex], VK_TRUE,
+                                       UINT64_MAX);
+        if (vulkanResult != VK_SUCCESS) {
+            beginResult.status = FrameStatus::RecreateRequired;
+            beginResult.vulkanResult = vulkanResult;
+            return beginResult;
+        }
+    }
+    vulkanResult = vkResetFences(m_logicalDevice, 1u, &frameSlot.inFlightFence);
+    if (vulkanResult != VK_SUCCESS) {
+        beginResult.status = FrameStatus::RecreateRequired;
+        beginResult.vulkanResult = vulkanResult;
+        return beginResult;
     }
     m_imageInFlightFences[imageIndex] = frameSlot.inFlightFence;
-    vkResetFences(m_logicalDevice, 1u, &frameSlot.inFlightFence);
 
     m_acquiredImageIndex = imageIndex;
     m_isFrameOpen = true;
