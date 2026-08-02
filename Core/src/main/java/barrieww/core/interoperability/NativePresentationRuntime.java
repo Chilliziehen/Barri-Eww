@@ -303,32 +303,19 @@ public final class NativePresentationRuntime implements AutoCloseable {
             createInfo.set(ValueLayout.JAVA_INT, 68, 0);
 
             MemorySegment createResult = creationArena.allocate(s_createResultByteSize, 8);
-            int operationResult;
-            try {
-                operationResult = (int) createHandle.invokeExact(createInfo, createResult);
-            } catch (Throwable invocationFailure) {
-                throw invocationException("createPresentationRuntime", s_createSymbolName,
-                        invocationFailure);
-            }
-            if (operationResult != s_operationSuccess) {
-                int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
-                throw new NativePresentationRuntimeException(
-                        "Native presentation runtime creation failed with operation result "
-                                + operationResult, s_createSymbolName, operationResult,
-                        vulkanResult);
-            }
-            long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
-            return completeRuntimeOwnershipTransfer(libraryArena, creationArena, destroyHandle,
-                    runtimeAddress,
+            PresentationRuntimeOwnerFactory ownerFactory =
                     () -> new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
                             submitHandle, presentClearHandle,
                             submitAndPresentClearFrameHandle, null, null, beginResult,
-                            priorMetrics, submitResult, null, runtimeAddress,
+                            priorMetrics, submitResult, null,
+                            createResult.get(ValueLayout.JAVA_LONG, 0),
                             createResult.get(ValueLayout.JAVA_INT, 12),
                             createResult.get(ValueLayout.JAVA_INT, 16),
                             createResult.get(ValueLayout.JAVA_INT, 20),
-                            createResult.get(ValueLayout.JAVA_INT, 24)),
-                    s_createSymbolName);
+                            createResult.get(ValueLayout.JAVA_INT, 24));
+            return invokeCreateAndCompleteRuntimeOwnershipTransfer(
+                    createHandle, createInfo, createResult, libraryArena, creationArena,
+                    destroyHandle, ownerFactory, s_createSymbolName);
         } catch (NativePresentationRuntimeException creationFailure) {
             closeArenaSuppressing(creationArena, creationFailure);
             closeArenaSuppressing(libraryArena, creationFailure);
@@ -460,28 +447,20 @@ public final class NativePresentationRuntime implements AutoCloseable {
             writeHostImageCreateInfo(createInfo, bootstrapHandles, framebufferWidth,
                     framebufferHeight, framesInFlightCount, validatedBinding);
             MemorySegment createResult = creationArena.allocate(s_createResultByteSize, 8);
-            int operationResult = invokeHostImageCreate(
-                    createHostImageHandle, createInfo, createResult);
-            if (operationResult != s_operationSuccess) {
-                int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
-                throw new NativePresentationRuntimeException(
-                        "Native host-image presentation runtime creation failed with operation "
-                                + "result " + operationResult,
-                        s_createHostImageSymbolName, operationResult, vulkanResult);
-            }
-            long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
-            return completeRuntimeOwnershipTransfer(libraryArena, creationArena, destroyHandle,
-                    runtimeAddress,
+            PresentationRuntimeOwnerFactory ownerFactory =
                     () -> new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
                             submitHandle, presentClearHandle,
                             submitAndPresentClearFrameHandle, detachHostImageResourcesHandle,
                             submitAndPresentHostImageFrameHandle, beginResult, priorMetrics,
-                            submitResult, detachResult, runtimeAddress,
+                            submitResult, detachResult,
+                            createResult.get(ValueLayout.JAVA_LONG, 0),
                             createResult.get(ValueLayout.JAVA_INT, 12),
                             createResult.get(ValueLayout.JAVA_INT, 16),
                             createResult.get(ValueLayout.JAVA_INT, 20),
-                            createResult.get(ValueLayout.JAVA_INT, 24)),
-                    s_createHostImageSymbolName);
+                            createResult.get(ValueLayout.JAVA_INT, 24));
+            return invokeCreateAndCompleteRuntimeOwnershipTransfer(
+                    createHostImageHandle, createInfo, createResult, libraryArena, creationArena,
+                    destroyHandle, ownerFactory, s_createHostImageSymbolName);
         } catch (NativePresentationRuntimeException creationFailure) {
             closeArenaSuppressing(creationArena, creationFailure);
             closeArenaSuppressing(libraryArena, creationFailure);
@@ -843,6 +822,56 @@ public final class NativePresentationRuntime implements AutoCloseable {
     }
 
     /**
+     * @note ThreadSafety: Initialization-confined; invoke once with an owner factory prepared
+     *       before the Native create call.
+     * Invokes one non-critical create downcall and immediately enters guarded ownership handoff
+     * when Native reports success.
+     *
+     * @param MethodHandle createHandle Non-critical presentation create downcall handle
+     * @param MemorySegment createInfo Read-only presentation create-info segment
+     * @param MemorySegment createResult Writable presentation create-result segment
+     * @param Arena libraryArena Confined library Arena transferred to the resulting owner
+     * @param Arena creationArena Confined temporary create-record Arena
+     * @param MethodHandle destroyHandle Non-critical compensating destroy handle
+     * @param PresentationRuntimeOwnerFactory ownerFactory Owner factory prepared before invocation
+     * @param String createSymbolName Exact Version 1 create symbol
+     * @return NativePresentationRuntime Fully constructed Java owner
+     * @throws NativePresentationRuntimeException When create invocation, operation or handoff fails
+     * @warning MemoryOwnership: Before Native success this method owns both Arena cleanup paths.
+     *          After success completeRuntimeOwnershipTransfer consumes runtimeAddress exactly once
+     *          on failure or transfers it to the returned owner.
+     */
+    static NativePresentationRuntime invokeCreateAndCompleteRuntimeOwnershipTransfer(
+            MethodHandle createHandle, MemorySegment createInfo, MemorySegment createResult,
+            Arena libraryArena, Arena creationArena, MethodHandle destroyHandle,
+            PresentationRuntimeOwnerFactory ownerFactory, String createSymbolName)
+            throws NativePresentationRuntimeException {
+        try {
+            int operationResult = invokePresentationCreate(
+                    createHandle, createInfo, createResult, createSymbolName);
+            if (operationResult != s_operationSuccess) {
+                int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
+                throw new NativePresentationRuntimeException(
+                        "Native presentation runtime creation failed with operation result "
+                                + operationResult,
+                        createSymbolName, operationResult, vulkanResult);
+            }
+            long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
+            return completeRuntimeOwnershipTransfer(libraryArena, creationArena, destroyHandle,
+                    runtimeAddress, ownerFactory, createSymbolName);
+        } catch (NativePresentationRuntimeException creationFailure) {
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
+            throw creationFailure;
+        } catch (Throwable creationFailure) {
+            closeArenaSuppressing(creationArena, creationFailure);
+            closeArenaSuppressing(libraryArena, creationFailure);
+            throw invocationException("createPresentationRuntime", createSymbolName,
+                    creationFailure);
+        }
+    }
+
+    /**
      * @note ThreadSafety: Initialization-confined; invoke once after Native create succeeds.
      * Transfers a newly created Native runtime address to a fully constructed Java owner. If Java
      * owner construction fails, consumes the address through exactly one destroy attempt before
@@ -894,25 +923,26 @@ public final class NativePresentationRuntime implements AutoCloseable {
 
     /**
      * @note ThreadSafety: Initialization-confined; invoke once on the library Arena owner thread.
-     * Invokes the non-critical host-image create downcall while retaining any Java-side failure as
+     * Invokes a non-critical presentation create downcall while retaining any Java-side failure as
      * the checked exception cause.
      *
-     * @param MethodHandle createHostImageHandle Non-critical host-image create downcall handle
-     * @param MemorySegment createInfo Read-only host-image create-info segment
-     * @param MemorySegment createResult Writable host-image create result segment
+     * @param MethodHandle createHandle Non-critical presentation create downcall handle
+     * @param MemorySegment createInfo Read-only presentation create-info segment
+     * @param MemorySegment createResult Writable presentation create result segment
+     * @param String createSymbolName Exact Version 1 create symbol
      * @return int Stable Native operation result
      * @throws NativePresentationRuntimeException When the FFM invocation throws
      * @warning MemoryOwnership: The caller owns both segments and their creation Arena. Native
      *          borrows them synchronously and retains neither address.
      */
-    static int invokeHostImageCreate(MethodHandle createHostImageHandle, MemorySegment createInfo,
-                                     MemorySegment createResult)
+    static int invokePresentationCreate(MethodHandle createHandle, MemorySegment createInfo,
+                                        MemorySegment createResult, String createSymbolName)
             throws NativePresentationRuntimeException {
         try {
-            return (int) createHostImageHandle.invokeExact(createInfo, createResult);
+            return (int) createHandle.invokeExact(createInfo, createResult);
         } catch (Throwable invocationFailure) {
-            throw invocationException("createHostImagePresentationRuntime",
-                    s_createHostImageSymbolName, invocationFailure);
+            throw invocationException("createPresentationRuntime", createSymbolName,
+                    invocationFailure);
         }
     }
 

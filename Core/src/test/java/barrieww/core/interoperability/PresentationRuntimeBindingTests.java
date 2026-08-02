@@ -289,6 +289,38 @@ class PresentationRuntimeBindingTests {
     }
 
     @Test
+    void ownerFactoryIsPreparedBeforeNativeCreateAndSuccessImmediatelyEntersGuard()
+            throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        Arena creationArena = Arena.ofConfined();
+        InitializationOrderObserver observer = new InitializationOrderObserver();
+        MethodHandles.Lookup methodLookup = MethodHandles.lookup();
+        MethodHandle createHandle = methodLookup.findVirtual(
+                InitializationOrderObserver.class, "createNativeRuntime",
+                MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class))
+                .bindTo(observer);
+        MethodHandle destroyHandle = methodLookup.findVirtual(
+                InitializationOrderObserver.class, "destroyNativeRuntime",
+                MethodType.methodType(int.class, long.class)).bindTo(observer);
+        MemorySegment createInfo = creationArena.allocate(96, 8);
+        MemorySegment createResult = creationArena.allocate(32, 8);
+
+        NativePresentationRuntimeException runtimeException = assertThrows(
+                NativePresentationRuntimeException.class,
+                () -> NativePresentationRuntime.invokeCreateAndCompleteRuntimeOwnershipTransfer(
+                        createHandle, createInfo, createResult, libraryArena, creationArena,
+                        destroyHandle, observer,
+                        NativePresentationRuntime.s_createHostImageSymbolName));
+
+        assertSame(observer.m_initializationFailure, runtimeException.getCause());
+        assertEquals(List.of("factoryPrepared", "nativeCreate", "guardedOwnerCreation", "destroy"),
+                observer.m_events);
+        assertEquals(1, observer.m_destroyInvocationCount);
+        assertFalse(libraryArena.scope().isAlive());
+        assertFalse(creationArena.scope().isAlive());
+    }
+
+    @Test
     void hostInvocationFailuresPreserveExactCausesAndStacks() throws Exception {
         RuntimeException createFailure = new RuntimeException("host create invocation");
         MethodHandle createHandle = MethodHandles.lookup().findStatic(
@@ -298,9 +330,10 @@ class PresentationRuntimeBindingTests {
         try (Arena invocationArena = Arena.ofConfined()) {
             NativePresentationRuntimeException createException = assertThrows(
                     NativePresentationRuntimeException.class,
-                    () -> NativePresentationRuntime.invokeHostImageCreate(
+                    () -> NativePresentationRuntime.invokePresentationCreate(
                             createHandle, invocationArena.allocate(96, 8),
-                            invocationArena.allocate(32, 8)));
+                            invocationArena.allocate(32, 8),
+                            NativePresentationRuntime.s_createHostImageSymbolName));
             assertSame(createFailure, createException.getCause());
             assertTrue(createException.getCause().getStackTrace().length > 0);
         }
@@ -926,6 +959,70 @@ class PresentationRuntimeBindingTests {
             ++m_invocationCount;
             m_runtimeAddress = runtimeAddress;
             throw m_destroyFailure;
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; one test thread drives each ordered callback serially.
+     * Records owner-factory preparation, Native create, guarded owner construction and destroy.
+     * @warning MemoryOwnership: The observer borrows test-owned create segments synchronously and
+     *          stores only event strings and scalar counters.
+     */
+    private static final class InitializationOrderObserver
+            implements PresentationRuntimeOwnerFactory {
+        private final List<String> m_events = new ArrayList<>();
+        private final RuntimeException m_initializationFailure =
+                new RuntimeException("ordered owner initialization");
+        private int m_destroyInvocationCount;
+
+        /** Creates the prepared owner factory and records that preparation immediately. */
+        private InitializationOrderObserver() {
+            m_events.add("factoryPrepared");
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke once after factory preparation.
+         * Writes a successful synthetic Native create result.
+         *
+         * @param MemorySegment createInfo Synthetic create-info segment
+         * @param MemorySegment createResult Writable synthetic create-result segment
+         * @return int Native success operation result
+         * @warning MemoryOwnership: The test owns both segments; this method writes synchronously
+         *          and retains neither address.
+         */
+        private int createNativeRuntime(MemorySegment createInfo, MemorySegment createResult) {
+            m_events.add("nativeCreate");
+            createResult.set(ValueLayout.JAVA_LONG, 0, 91L);
+            return 0;
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke once inside the ownership guard.
+         * Records guarded owner construction and throws the deterministic primary failure.
+         *
+         * @return NativePresentationRuntime Never returns
+         * @warning MemoryOwnership: The enclosing guard retains and cleans the synthetic Native
+         *          runtime address after this failure.
+         */
+        @Override
+        public NativePresentationRuntime createRuntime() {
+            m_events.add("guardedOwnerCreation");
+            throw m_initializationFailure;
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke exactly once after owner construction fails.
+         * Records the compensating destroy attempt.
+         *
+         * @param long runtimeAddress Synthetic Native runtime address
+         * @return int Success only for the expected transferred address
+         * @warning MemoryOwnership: This sole attempt consumes runtimeAddress and stores no Native
+         *          pointer or allocation.
+         */
+        private int destroyNativeRuntime(long runtimeAddress) {
+            m_events.add("destroy");
+            ++m_destroyInvocationCount;
+            return runtimeAddress == 91L ? 0 : 1;
         }
     }
 
