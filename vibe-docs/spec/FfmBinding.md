@@ -225,3 +225,6 @@ barriEwwSubmitAndPresentHostImageFrameVersion1(
    non-critical；binding 构造期解析一次 handle，frame path 不做 symbol lookup。
 6. submit 要求已有 open frame，并以该 frame 的固定 slot/image index 选择预录 command；
    operation/result/exception containment 与既有 presentation Version 1 规则一致。
+7. 旧 clear/standalone create binding 不得为普通 runtime 强制解析新增 host-image symbols；
+   只有 host-image factory 在构造对应 binding 时解析并固定持有新增 create/submit handles。
+   因此旧 Core → 新 Native 与新 Core clear path → 旧 Native 均保持可用。

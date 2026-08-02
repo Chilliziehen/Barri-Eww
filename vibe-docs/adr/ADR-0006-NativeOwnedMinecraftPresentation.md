@@ -306,6 +306,9 @@ Screenshot.takeScreenshot(this.mainRenderTarget, ...);         // GameRenderer.j
 - 换代时重建导入绑定、sampled view 与依赖其句柄的预录命令缓冲；沿用 ADR-0004 D3 的
   old-swapchain 与 generation 退休策略，不依赖全局 `vkDeviceWaitIdle`。
 - 句柄在一个 generation 内不变（Context 事实 2），故可被预录命令缓冲直接引用。
+- `resize()` HEAD 必须先退休所有引用旧宿主 image 的 view/descriptor/预录命令；若此时已
+  acquire，保留同一 Native swapchain runtime 并使该帧走 clear 输出，TAIL 发布新 generation
+  并请求 configure。禁止进入「已接管但无 runtime」状态，以维持 D10.3 每帧有输出不变式。
 - 若未来实测发现该纹理改为来自 `GraphicsResourceAllocator` 池化分配，回退方案为按
   `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
 
@@ -339,8 +342,8 @@ Minecraft 每帧只有这一次 `submit()`(`blitFromTexture` 在 `:1294` 仅录�
 
 由此，**同步无需任何 semaphore 交互**：Vulkan 的 submission order 语义规定 pipeline barrier
 的第一同步域覆盖同一队列上提交顺序更早的所有命令，因此我方 primary 起始处的一次 barrier
-(src = `COLOR_ATTACHMENT_OUTPUT | TRANSFER`，srcAccess = `COLOR_ATTACHMENT_WRITE |
-TRANSFER_WRITE`)即与 Minecraft 的 GUI 写入建立执行与内存依赖。
+(src = `COLOR_ATTACHMENT_OUTPUT | TRANSFER`，srcAccess = `MEMORY_WRITE`)即与 Minecraft
+的 GUI 写入建立执行与内存依赖。该 access 契约与 D5.3 一致；stage mask 仍限制实际执行依赖范围。
 
 #### 接管点与现有 API 一一对应
 
@@ -536,6 +539,10 @@ D9 第 2 步起导入/合成宿主 GUI 纹理时，readiness 必须在 Minecraft
 - `RecreateRequired` / `SurfaceUnavailable` → 换代重建，跳过本帧；
 - 不可恢复失败 → 记入 failure context，本帧呈现黑帧或上一帧内容，并置位
   **延迟回退**标志：下一个 generation（如 resize）不再接管，由 Minecraft 自建 swapchain 恢复原版路径。
+
+宿主 main target 的预期 generation replacement 不等同于不可恢复失败：按 D5.4 在销毁旧
+image 前只 detach imported-host resources，保留 clear-capable Native runtime；该帧 clear 并
+present，同时请求 configure。由此 replacement 慢路径同样满足下述每帧输出不变式。
 
 **不变式：已接管即每帧必须有输出。** 不允许出现「已接管但不 present」的状态——那将表现为
 画面冻结或黑屏而无任何诊断线索。

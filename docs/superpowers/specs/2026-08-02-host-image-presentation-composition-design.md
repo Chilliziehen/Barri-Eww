@@ -79,10 +79,12 @@ presentation can block. It requires an open frame and submits the prerecorded pr
 for that frame's fixed slot/image pair. Existing create, clear-submit, and standalone
 symbols retain their exact layouts and semantics.
 
-Core resolves both new downcall handles once per binding instance and retains them as
-immutable members of the lookup Arena owner. Java call segments remain confined and
-bounded by the runtime. Destroy permanently invalidates the runtime address after one
-attempt, including an unsuccessful attempt.
+Core resolves both new downcall handles once per host-image binding instance and
+retains them as immutable members of the lookup Arena owner. The ordinary
+clear/standalone factory does not require those additive symbols, preserving its use
+with an older Native Version 1 library. Java call segments remain confined and bounded
+by the runtime. Destroy permanently invalidates the runtime address after one attempt,
+including an unsuccessful attempt.
 
 ## Host Generation Preparation
 
@@ -111,19 +113,20 @@ candidate failure before commit leaves that configure invocation uncancelled, al
 Minecraft to create and own its original swapchain.
 
 A render-thread-only main-target tracker observes `RenderTarget.resize`. Its HEAD
-notification retires a still-borrowing presentation generation before Minecraft
-destroys the old image; its TAIL notification publishes a monotonically increasing
-generation. The normal window path has already retired the generation before calling
-the complete resize and therefore treats the HEAD notification idempotently.
+notification detaches and retires all resources that refer to the borrowed host image
+before Minecraft destroys that image, while retaining the clear-capable Native
+swapchain runtime. Its TAIL notification publishes a monotonically increasing
+generation. The normal window path has already retired the complete generation before
+calling the complete resize and therefore treats the HEAD notification idempotently.
 
 If another host path replaces the main target outside configure, interception remains
-committed even while no Native runtime is temporarily available. Backend acquire,
-blit, and present remain suppressed, the last successful presented image remains on
-screen, and the backend requests reconfiguration. This state must never call a
-Minecraft swapchain method because no Minecraft swapchain exists for that generation.
-The next configure follows the normal preparation path. Configure validates both the
-tracker generation and the current `VkImage` handle so an unobserved replacement still
-cannot reuse a stale binding.
+committed and the base Native runtime remains alive without host-image resources.
+Backend acquire and present use the existing clear path for that frame and request
+reconfiguration; blit remains suppressed. There is no taken-over/no-runtime state, so
+ADR-0006 D10.3 still receives one output for every acquired frame. The next configure
+follows the normal preparation path. Configure validates both the tracker generation
+and the current `VkImage` handle so an unobserved replacement still cannot reuse a
+stale binding.
 
 The tracker listener is registered by the one Minecraft Vulkan surface and removed at
 surface close. It must not retain a closed coordinator or cross the Mod class-loader
@@ -157,6 +160,10 @@ Each host-image presentation generation owns:
 - one primary command buffer for every frame-slot and swapchain-image pair;
 - the existing Native-owned swapchain views and synchronization objects.
 
+The host-image swapchain requires both `TRANSFER_DST` for the existing clear priming
+path and `COLOR_ATTACHMENT` for the fullscreen pass. Candidate creation fails readiness
+before takeover when the surface does not support both usages.
+
 Minecraft continues to own the host image and its allocation. Native destroys its
 dependent descriptor and image-view resources before Minecraft may close that image.
 Shader modules are temporary pipeline-creation objects and are destroyed immediately
@@ -164,19 +171,20 @@ after successful or failed pipeline creation.
 
 The fixed vertex and fragment GLSL sources use PascalCase filenames under
 `Native/src/Vulkan/Shaders`. CMake locates `Vulkan::glslc`, compiles them for Vulkan
-1.3 during the build, and converts the resulting SPIR-V into a build-tree `constexpr`
-byte header linked into the Native library. The released library performs no runtime
-shader compilation or file lookup. Linux Vulkan CI installs `glslc`; Vulkan-disabled
-Windows matrix cells do not require it.
+1.2 during the build, and converts the resulting SPIR-V into a build-tree `constexpr`
+byte header linked into the Native library. Minecraft exposes dynamic rendering through
+`VK_KHR_dynamic_rendering`, so recording uses KHR entry points rather than Vulkan 1.3
+core aliases. The released library performs no runtime shader compilation or file
+lookup. Linux Vulkan CI installs `glslc`; Vulkan-disabled Windows matrix cells do not
+require it.
 
 ## Prerecorded Command Flow
 
 Every matrix entry records the following fixed sequence:
 
 1. issue a host image memory barrier with old and new layout both `GENERAL`, source
-   stages `COLOR_ATTACHMENT_OUTPUT | TRANSFER`, source access
-   `COLOR_ATTACHMENT_WRITE | TRANSFER_WRITE`, destination stage `FRAGMENT_SHADER`, and
-   destination access `SHADER_READ`;
+   stages `COLOR_ATTACHMENT_OUTPUT | TRANSFER`, source access `MEMORY_WRITE`,
+   destination stage `FRAGMENT_SHADER`, and destination access `SHADER_READ`;
 2. transition the acquired swapchain image from `UNDEFINED` to
    `COLOR_ATTACHMENT_OPTIMAL` because the fullscreen draw completely overwrites it;
 3. begin dynamic rendering with discard load behavior, bind the fixed pipeline and
@@ -186,7 +194,8 @@ Every matrix entry records the following fixed sequence:
 `UNDEFINED` is valid only for the fully overwritten swapchain image. It is forbidden
 for the borrowed host image because it would discard Minecraft's rendered content.
 Exact equal extents plus nearest sampling provide a one-to-one copy without filtering,
-scaling, tone mapping, or color-space conversion.
+scaling, tone mapping, or color-space conversion. Texture coordinates reproduce the
+vertical inversion in Minecraft's original `vkCmdBlitImage` destination offsets.
 
 After Minecraft submits all world and GUI work, the backend present hook calls the
 host-image submit operation. Native selects the matrix entry from the already-open
@@ -225,12 +234,15 @@ tests call the new symbols with rejected inputs and assert stable operation resu
 Mod JUnit tests cover host extraction, surface-format mapping, the
 `retire -> prepare -> create -> prime -> commit` order, callback suppression after
 retirement failure, resize listener registration and removal, handle comparison,
-temporary no-runtime interception, and one-attempt teardown. Mixin and remapped-jar
-tests pin target descriptors and packaged classes.
+host-resource detachment with clear fallback, and one-attempt teardown. Mixin and
+remapped-jar tests pin target descriptors and packaged classes.
 
-The release gate runs the complete Native operating-system and threaded-recording
-matrix, Native coverage at 90 percent or higher, Core unit and real FFM integration
-coverage at 90 percent or higher, and Mod check, 70-percent coverage, and `remapJar`.
+The release gate runs the staged Native operating-system and threaded-recording matrix,
+Native coverage at 90 percent or higher, Core unit and real FFM integration coverage
+at 90 percent or higher, and Mod check, 90-percent coverage, and `remapJar`. Linux
+lavapipe runs Vulkan execution for both threaded-recording variants; Windows runs the
+backend-neutral build for both variants until a reliable Windows software Vulkan CI
+environment is separately approved.
 
 ## Visible Acceptance
 

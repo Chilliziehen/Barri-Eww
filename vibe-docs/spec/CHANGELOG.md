@@ -16,6 +16,18 @@
   从而在不破坏已发布 ABI 的前提下支持 ADR-0006 D9 第 2 步。
 - [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P28 状态由 `PROPOSED` 提升为
   `ACCEPTED` 并迁入 §6.7.4。
+- [修改] §3.6 [BuildSystem.md](BuildSystem.md) —— 将 shared-library export 范围从过时的
+  “仅 §6.6”纠正为“§6 固化的 Versioned C ABI”，覆盖已批准的 §6.7 presentation symbols；
+  不增加 symbol 或构建开关。
+- [修改] [ADR-0006](../adr/ADR-0006-NativeOwnedMinecraftPresentation.md) D5.4 / D6 / D10.3
+  —— 统一 host barrier 为 `MEMORY_WRITE`，并明确 resize HEAD 先 detach imported-host
+  resources、保留 clear-capable Native runtime，使 generation replacement 期间仍逐帧输出。
+- [修改] §4.4 [Testing.md](Testing.md) —— 所有者裁决并提升 P29：Native CI 改为分层矩阵，
+  Linux Vulkan + lavapipe execution 覆盖 `THREADED_RECORDING` on/off，Windows backend-neutral
+  build/test 覆盖同一开关；明确 Windows Vulkan 是未验证 compatibility gap，不再以
+  backend-neutral cell 冒充 Vulkan 覆盖。
+- [修改] [ProposedExtensions.md](ProposedExtensions.md) —— P29 状态由 `PROPOSED` 提升为
+  `ACCEPTED` 并迁入 §4.4。
 
 ---
 
