@@ -90,9 +90,79 @@ endforeach()
 # Only linked when the Vulkan backend is enabled; the backend receives its device/queues
 # from the Java/FFM layer (ADR-0001), so no windowing/surface libraries are pulled in.
 if(BARRIEWW_BACKEND_VULKAN)
-    find_package(Vulkan REQUIRED)
+    find_package(Vulkan REQUIRED COMPONENTS glslc)
+    set(hostImagePresentationGeneratedShaderDirectory
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/BarriEww/Vulkan/Shaders")
+    set(hostImagePresentationCompiledShaderDirectory
+        "${CMAKE_CURRENT_BINARY_DIR}/compiled-shaders")
+    set(hostImagePresentationVertexShaderSource
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Vulkan/Shaders/HostImagePresentationVertexShader.vert")
+    set(hostImagePresentationFragmentShaderSource
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Vulkan/Shaders/HostImagePresentationFragmentShader.frag")
+    set(hostImagePresentationVertexCompiledShader
+        "${hostImagePresentationCompiledShaderDirectory}/HostImagePresentationVertexShader.spv")
+    set(hostImagePresentationFragmentCompiledShader
+        "${hostImagePresentationCompiledShaderDirectory}/HostImagePresentationFragmentShader.spv")
+    set(hostImagePresentationVertexShaderHeader
+        "${hostImagePresentationGeneratedShaderDirectory}/HostImagePresentationVertexShader.hpp")
+    set(hostImagePresentationFragmentShaderHeader
+        "${hostImagePresentationGeneratedShaderDirectory}/HostImagePresentationFragmentShader.hpp")
+
+    add_custom_command(
+        OUTPUT ${hostImagePresentationVertexCompiledShader}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${hostImagePresentationCompiledShaderDirectory}
+        COMMAND Vulkan::glslc --target-env=vulkan1.2 -O
+                ${hostImagePresentationVertexShaderSource}
+                -o ${hostImagePresentationVertexCompiledShader}
+        DEPENDS
+            ${hostImagePresentationVertexShaderSource}
+            Vulkan::glslc
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${hostImagePresentationFragmentCompiledShader}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${hostImagePresentationCompiledShaderDirectory}
+        COMMAND Vulkan::glslc --target-env=vulkan1.2 -O
+                ${hostImagePresentationFragmentShaderSource}
+                -o ${hostImagePresentationFragmentCompiledShader}
+        DEPENDS
+            ${hostImagePresentationFragmentShaderSource}
+            Vulkan::glslc
+        VERBATIM)
+
+    set(generateEmbeddedShaderHeaderScript
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateEmbeddedShaderHeader.cmake")
+    add_custom_command(
+        OUTPUT ${hostImagePresentationVertexShaderHeader}
+        COMMAND ${CMAKE_COMMAND}
+                -DcompiledShaderFile=${hostImagePresentationVertexCompiledShader}
+                -DgeneratedHeaderFile=${hostImagePresentationVertexShaderHeader}
+                -DembeddedShaderIdentifier=g_hostImagePresentationVertexShaderBinary
+                -P ${generateEmbeddedShaderHeaderScript}
+        DEPENDS
+            ${hostImagePresentationVertexCompiledShader}
+            ${generateEmbeddedShaderHeaderScript}
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${hostImagePresentationFragmentShaderHeader}
+        COMMAND ${CMAKE_COMMAND}
+                -DcompiledShaderFile=${hostImagePresentationFragmentCompiledShader}
+                -DgeneratedHeaderFile=${hostImagePresentationFragmentShaderHeader}
+                -DembeddedShaderIdentifier=g_hostImagePresentationFragmentShaderBinary
+                -P ${generateEmbeddedShaderHeaderScript}
+        DEPENDS
+            ${hostImagePresentationFragmentCompiledShader}
+            ${generateEmbeddedShaderHeaderScript}
+        VERBATIM)
+
+    add_custom_target(BarriEwwHostImagePresentationShaders
+        DEPENDS
+            ${hostImagePresentationVertexShaderHeader}
+            ${hostImagePresentationFragmentShaderHeader})
+    add_dependencies(BarriEwwNative BarriEwwHostImagePresentationShaders)
     target_sources(BarriEwwNative
         PRIVATE
+            ${hostImagePresentationVertexShaderHeader}
+            ${hostImagePresentationFragmentShaderHeader}
             src/Vulkan/VulkanContext.cpp
             src/Vulkan/VulkanBufferTable.cpp
             src/Vulkan/CommandBufferRecorder.cpp
@@ -102,6 +172,9 @@ if(BARRIEWW_BACKEND_VULKAN)
             src/Vulkan/VulkanImageViewTable.cpp
             src/Vulkan/VulkanGraphicsPipelineTable.cpp
             src/Vulkan/VulkanPresentationRuntime.cpp)
+    target_include_directories(BarriEwwNative
+        PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/generated)
     target_link_libraries(BarriEwwNative PUBLIC Vulkan::Vulkan)
 endif()
 
