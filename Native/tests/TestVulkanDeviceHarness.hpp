@@ -15,7 +15,7 @@ namespace barrieww::testing {
 
 /**
  * @note ThreadSafety: Not thread-safe; each test owns one harness on one thread.
- * @brief Test-only headless Vulkan bring-up: instance → first transfer-capable
+ * @brief Test-only headless Vulkan bring-up: instance → first graphics-capable
  *        physical device → logical device with one graphics queue → command pool. No
  *        surface or window; Vulkan 1.2 devices enable KHR dynamic rendering when present.
  *        Tests execute on a real driver (lavapipe on CI, native driver locally). create()
@@ -32,7 +32,20 @@ public:
     /** Attempts full bring-up; returns nullptr when no usable driver/device exists. */
     [[nodiscard]] static std::unique_ptr<TestVulkanDeviceHarness> create() {
         auto harness = std::unique_ptr<TestVulkanDeviceHarness>(new TestVulkanDeviceHarness());
-        return harness->initialize() ? std::move(harness) : nullptr;
+        return harness->initialize<false>() ? std::move(harness) : nullptr;
+    }
+
+    /**
+     * @note ThreadSafety: Creates one test-thread-confined harness per invocation.
+     * @brief Attempts bring-up constrained to Vulkan API 1.2 with the
+     *        VK_KHR_dynamic_rendering extension and feature both required and enabled.
+     * @return std::unique_ptr<TestVulkanDeviceHarness> Owner, or nullptr when unavailable
+     * @warning MemoryOwnership: Transfers complete harness ownership to the caller.
+     */
+    [[nodiscard]] static std::unique_ptr<TestVulkanDeviceHarness>
+    createWithVulkan12DynamicRenderingExtension() {
+        auto harness = std::unique_ptr<TestVulkanDeviceHarness>(new TestVulkanDeviceHarness());
+        return harness->initialize<true>() ? std::move(harness) : nullptr;
     }
 
     TestVulkanDeviceHarness(const TestVulkanDeviceHarness&) = delete;
@@ -110,12 +123,21 @@ public:
 private:
     TestVulkanDeviceHarness() = default;
 
-    /** Full bring-up; false when any step finds no usable driver/device. */
+    /**
+     * @note ThreadSafety: Test-thread confined during harness creation.
+     * @brief Performs full bring-up under either the existing general profile or the
+     *        compile-time-selected Vulkan 1.2 dynamic-rendering-extension profile.
+     * @return bool True when every required driver, device, feature, and object exists
+     * @warning MemoryOwnership: Acquires all successful Vulkan objects into this harness.
+     */
+    template<bool requiresVulkan12DynamicRenderingExtension>
     [[nodiscard]] bool initialize() {
         VkApplicationInfo applicationInfo{};
         applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         applicationInfo.pApplicationName = "BarriEwwNativeTests";
-        applicationInfo.apiVersion = VK_API_VERSION_1_3;
+        applicationInfo.apiVersion = requiresVulkan12DynamicRenderingExtension
+            ? VK_API_VERSION_1_2
+            : VK_API_VERSION_1_3;
         VkInstanceCreateInfo instanceCreateInfo{};
         instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         instanceCreateInfo.pApplicationInfo = &applicationInfo;
@@ -133,6 +155,15 @@ private:
 
         // Presentation execution requires graphics; graphics queues also support transfer.
         for (VkPhysicalDevice candidateDevice : physicalDevices) {
+            if constexpr (requiresVulkan12DynamicRenderingExtension) {
+                VkPhysicalDeviceProperties candidateProperties{};
+                vkGetPhysicalDeviceProperties(candidateDevice, &candidateProperties);
+                if (candidateProperties.apiVersion < VK_API_VERSION_1_2
+                    || !supportsDeviceExtension(
+                        candidateDevice, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+                    continue;
+                }
+            }
             std::uint32_t queueFamilyCount = 0;
             vkGetPhysicalDeviceQueueFamilyProperties(candidateDevice, &queueFamilyCount,
                                                      nullptr);
@@ -161,17 +192,8 @@ private:
         const bool deviceSupportsVulkan13 =
             deviceProperties.apiVersion >= VK_API_VERSION_1_3;
 
-        std::uint32_t extensionCount = 0u;
-        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extensionCount,
-                                             nullptr);
-        std::vector<VkExtensionProperties> extensionProperties(extensionCount);
-        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extensionCount,
-                                             extensionProperties.data());
-        const bool supportsDynamicRenderingExtension = std::ranges::any_of(
-            extensionProperties, [](const VkExtensionProperties& extensionProperty) {
-                return std::string_view{extensionProperty.extensionName}
-                    == VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
-            });
+        const bool supportsDynamicRenderingExtension = supportsDeviceExtension(
+            m_physicalDevice, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 
         VkPhysicalDeviceDynamicRenderingFeaturesKHR supportedDynamicRenderingFeatures{};
         supportedDynamicRenderingFeatures.sType =
@@ -191,6 +213,11 @@ private:
             supportedVulkan12Features.bufferDeviceAddress == VK_TRUE;
         m_supportsDynamicRendering =
             supportedDynamicRenderingFeatures.dynamicRendering == VK_TRUE;
+        if constexpr (requiresVulkan12DynamicRenderingExtension) {
+            if (!supportsDynamicRenderingExtension || !m_supportsDynamicRendering) {
+                return false;
+            }
+        }
 
         VkPhysicalDeviceDynamicRenderingFeaturesKHR enabledDynamicRenderingFeatures{};
         enabledDynamicRenderingFeatures.sType =
@@ -230,6 +257,11 @@ private:
         m_supportsDynamicRenderingExtensionEntryPoints =
             vkGetDeviceProcAddr(m_logicalDevice, "vkCmdBeginRenderingKHR") != nullptr
             && vkGetDeviceProcAddr(m_logicalDevice, "vkCmdEndRenderingKHR") != nullptr;
+        if constexpr (requiresVulkan12DynamicRenderingExtension) {
+            if (!m_supportsDynamicRenderingExtensionEntryPoints) {
+                return false;
+            }
+        }
 
         VkCommandPoolCreateInfo commandPoolCreateInfo{};
         commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -237,6 +269,37 @@ private:
         return vkCreateCommandPool(m_logicalDevice, &commandPoolCreateInfo, nullptr,
                                    &m_commandPool)
                == VK_SUCCESS;
+    }
+
+    /**
+     * @note ThreadSafety: Read-only driver query during single-threaded initialization.
+     * @brief Reports whether one physical device advertises an exact extension name.
+     * @param VkPhysicalDevice physicalDevice Borrowed physical device to query
+     * @param const char* extensionName Null-terminated Vulkan extension name
+     * @return bool True when the extension is advertised
+     * @warning MemoryOwnership: Borrows the device and name and transfers no ownership.
+     */
+    [[nodiscard]] static bool supportsDeviceExtension(
+        VkPhysicalDevice physicalDevice, const char* extensionName) {
+        std::uint32_t extensionCount = 0u;
+        if (vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr,
+                                                 &extensionCount, nullptr)
+            != VK_SUCCESS) {
+            return false;
+        }
+        std::vector<VkExtensionProperties> extensionProperties(extensionCount);
+        if (vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr,
+                                                 &extensionCount,
+                                                 extensionProperties.data())
+            != VK_SUCCESS) {
+            return false;
+        }
+        return std::ranges::any_of(
+            extensionProperties,
+            [extensionName](const VkExtensionProperties& extensionProperty) {
+                return std::string_view{extensionProperty.extensionName}
+                    == extensionName;
+            });
     }
 
     VkInstance m_instance = VK_NULL_HANDLE;

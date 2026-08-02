@@ -39,7 +39,6 @@ if(BARRIEWW_BACKEND_VULKAN)
         GraphicsPipelineExecutionTests.cpp
         GraphicsVertexPullingTests.cpp
         GraphicsModuleExecutionTests.cpp
-        HostImagePresentationExecutionTests.cpp
         GpuDrivenDrawTests.cpp)
 endif()
 
@@ -50,6 +49,29 @@ if(BARRIEWW_BACKEND_VULKAN)
     target_include_directories(BarriEwwNativeTests
         PRIVATE
             ${CMAKE_CURRENT_BINARY_DIR}/../generated)
+
+    add_executable(BarriEwwPresentationExecutionTests
+        HostImagePresentationExecutionFixture.cpp
+        HostImagePresentationExecutionTests.cpp)
+    add_dependencies(BarriEwwPresentationExecutionTests
+        BarriEwwHostImagePresentationShaders)
+    target_include_directories(BarriEwwPresentationExecutionTests
+        PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/../generated)
+    target_link_libraries(BarriEwwPresentationExecutionTests
+        PRIVATE
+            BarriEwwNative
+            Catch2::Catch2WithMain)
+    if(DEFINED ENV{CI})
+        target_compile_definitions(BarriEwwPresentationExecutionTests
+            PRIVATE
+                BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_REQUIRED=1)
+    endif()
+    if(DEFINED ENV{BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_FORCED_UNAVAILABLE})
+        target_compile_definitions(BarriEwwPresentationExecutionTests
+            PRIVATE
+                BARRIEWW_HOST_IMAGE_PRESENTATION_EXECUTION_ENVIRONMENT_FORCED_UNAVAILABLE=1)
+    endif()
 endif()
 
 add_executable(BarriEwwNativeFfmBoundaryTests
@@ -148,6 +170,7 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(BarriEwwNativeTests)
 if(BARRIEWW_BACKEND_VULKAN)
+    catch_discover_tests(BarriEwwPresentationExecutionTests)
     catch_discover_tests(BarriEwwVulkanFrameLoopFailureTests)
     catch_discover_tests(BarriEwwVulkanImageTableFailureTests)
     catch_discover_tests(BarriEwwVulkanPipelineTableFailureTests)
