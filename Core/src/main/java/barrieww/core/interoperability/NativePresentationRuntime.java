@@ -260,13 +260,14 @@ public final class NativePresentationRuntime implements AutoCloseable {
             MemorySegment[] symbols = resolveSymbolAddresses(
                     symbolLookup, absoluteLibraryPath, false);
             Linker linker = Linker.nativeLinker();
-            createHandle = linker.downcallHandle(symbols[0], s_createDescriptor);
-            destroyHandle = linker.downcallHandle(symbols[1], s_destroyDescriptor);
-            beginHandle = linker.downcallHandle(symbols[2], s_beginDescriptor);
-            submitHandle = linker.downcallHandle(symbols[3], s_submitDescriptor);
-            presentClearHandle = linker.downcallHandle(symbols[4], s_presentClearDescriptor);
-            submitAndPresentClearFrameHandle = linker.downcallHandle(
-                    symbols[5], s_submitAndPresentClearFrameDescriptor);
+            MethodHandle[] downcallHandles = createOrdinaryDowncallHandles(
+                    symbols, linker::downcallHandle);
+            createHandle = downcallHandles[0];
+            destroyHandle = downcallHandles[1];
+            beginHandle = downcallHandles[2];
+            submitHandle = downcallHandles[3];
+            presentClearHandle = downcallHandles[4];
+            submitAndPresentClearFrameHandle = downcallHandles[5];
             beginResult = libraryArena.allocate(s_beginResultByteSize, 8);
             priorMetrics = libraryArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
             submitResult = libraryArena.allocate(s_submitResultByteSize, 4);
@@ -364,6 +365,35 @@ public final class NativePresentationRuntime implements AutoCloseable {
         }
 
         Arena libraryArena = Arena.ofConfined();
+        return createHostImagePresentationWithLibraryArena(
+                absoluteLibraryPath, bootstrapHandles, framebufferWidth, framebufferHeight,
+                framesInFlightCount, validatedBinding, libraryArena);
+    }
+
+    /**
+     * @note ThreadSafety: Initialization-confined; the calling thread owns libraryArena and the
+     *       returned runtime when creation succeeds.
+     * Creates a host-image runtime with an observable caller-supplied Arena for ownership tests.
+     * The path and binding must already be absolute and validated by the public factory.
+     *
+     * @param Path absoluteLibraryPath Absolute path to BarriEwwNativeFfm
+     * @param PresentationBootstrapHandles bootstrapHandles Borrowed Vulkan handles
+     * @param int framebufferWidth Exact framebuffer width in pixels
+     * @param int framebufferHeight Exact framebuffer height in pixels
+     * @param int framesInFlightCount Number of in-flight frame slots
+     * @param HostImagePresentationBinding validatedBinding Validated host-image binding
+     * @param Arena libraryArena Confined Arena transferred to this creation attempt
+     * @return NativePresentationRuntime Open host-image runtime on success
+     * @throws NativeLibraryLoadingException When library or symbol initialization fails
+     * @throws NativePresentationRuntimeException When Native runtime creation fails
+     * @warning MemoryOwnership: This method consumes libraryArena. The returned runtime owns it on
+     *          success; every failure closes it. Native borrows bootstrap and host image handles.
+     */
+    static NativePresentationRuntime createHostImagePresentationWithLibraryArena(
+            Path absoluteLibraryPath, PresentationBootstrapHandles bootstrapHandles,
+            int framebufferWidth, int framebufferHeight, int framesInFlightCount,
+            HostImagePresentationBinding validatedBinding, Arena libraryArena)
+            throws NativeLibraryLoadingException, NativePresentationRuntimeException {
         MethodHandle destroyHandle;
         MethodHandle beginHandle;
         MethodHandle submitHandle;
@@ -382,18 +412,16 @@ public final class NativePresentationRuntime implements AutoCloseable {
             MemorySegment[] symbols = resolveSymbolAddresses(
                     symbolLookup, absoluteLibraryPath, true);
             Linker linker = Linker.nativeLinker();
-            destroyHandle = linker.downcallHandle(symbols[1], s_destroyDescriptor);
-            beginHandle = linker.downcallHandle(symbols[2], s_beginDescriptor);
-            submitHandle = linker.downcallHandle(symbols[3], s_submitDescriptor);
-            presentClearHandle = linker.downcallHandle(symbols[4], s_presentClearDescriptor);
-            submitAndPresentClearFrameHandle = linker.downcallHandle(
-                    symbols[5], s_submitAndPresentClearFrameDescriptor);
-            createHostImageHandle = linker.downcallHandle(
-                    symbols[6], s_createHostImageDescriptor);
-            detachHostImageResourcesHandle = linker.downcallHandle(
-                    symbols[7], s_detachHostImageResourcesDescriptor);
-            submitAndPresentHostImageFrameHandle = linker.downcallHandle(
-                    symbols[8], s_submitAndPresentHostImageFrameDescriptor);
+            MethodHandle[] downcallHandles = createHostImageDowncallHandles(
+                    symbols, linker::downcallHandle);
+            destroyHandle = downcallHandles[0];
+            beginHandle = downcallHandles[1];
+            submitHandle = downcallHandles[2];
+            presentClearHandle = downcallHandles[3];
+            submitAndPresentClearFrameHandle = downcallHandles[4];
+            createHostImageHandle = downcallHandles[5];
+            detachHostImageResourcesHandle = downcallHandles[6];
+            submitAndPresentHostImageFrameHandle = downcallHandles[7];
             beginResult = libraryArena.allocate(s_beginResultByteSize, 8);
             priorMetrics = libraryArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
             submitResult = libraryArena.allocate(s_submitResultByteSize, 4);
@@ -833,6 +861,68 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     "Native " + operationName + " reported operation result " + operationResult,
                     symbolName, operationResult, vulkanResult);
         }
+    }
+
+    /**
+     * @note ThreadSafety: Initialization-confined; invoke on the lookup Arena owner thread.
+     * Creates every ordinary runtime downcall handle as explicitly non-critical by supplying no
+     * linker options.
+     *
+     * @param MemorySegment[] symbolAddresses Fixed ordinary symbol addresses
+     * @param DowncallHandleFactory downcallHandleFactory Production or observing handle factory
+     * @return MethodHandle[] Ordinary handles in fixed runtime field order
+     * @warning MemoryOwnership: Returned handles borrow symbolAddresses and share their lookup
+     *          Arena lifetime. Neither this method nor the factory closes that Arena.
+     */
+    static MethodHandle[] createOrdinaryDowncallHandles(
+            MemorySegment[] symbolAddresses, DowncallHandleFactory downcallHandleFactory) {
+        return new MethodHandle[] {
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[0], s_createDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[1], s_destroyDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[2], s_beginDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[3], s_submitDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[4], s_presentClearDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[5], s_submitAndPresentClearFrameDescriptor)
+        };
+    }
+
+    /**
+     * @note ThreadSafety: Initialization-confined; invoke on the lookup Arena owner thread.
+     * Creates the host runtime handles, including all three additive host-image downcalls, as
+     * explicitly non-critical by supplying no linker options.
+     *
+     * @param MemorySegment[] symbolAddresses Fixed ordinary and host-image symbol addresses
+     * @param DowncallHandleFactory downcallHandleFactory Production or observing handle factory
+     * @return MethodHandle[] Host runtime handles in fixed runtime field order
+     * @warning MemoryOwnership: Returned handles borrow symbolAddresses and share their lookup
+     *          Arena lifetime. Neither this method nor the factory closes that Arena.
+     */
+    static MethodHandle[] createHostImageDowncallHandles(
+            MemorySegment[] symbolAddresses, DowncallHandleFactory downcallHandleFactory) {
+        return new MethodHandle[] {
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[1], s_destroyDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[2], s_beginDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[3], s_submitDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[4], s_presentClearDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[5], s_submitAndPresentClearFrameDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[6], s_createHostImageDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[7], s_detachHostImageResourcesDescriptor),
+                downcallHandleFactory.createDowncallHandle(
+                        symbolAddresses[8], s_submitAndPresentHostImageFrameDescriptor)
+        };
     }
 
     /**

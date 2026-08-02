@@ -1,6 +1,7 @@
 package barrieww.core.interoperability;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -9,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
@@ -17,6 +19,8 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
@@ -43,6 +47,49 @@ class PresentationRuntimeBindingTests {
         assertEquals(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
                         ValueLayout.ADDRESS),
                 NativePresentationRuntime.s_submitAndPresentHostImageFrameDescriptor);
+    }
+
+    @Test
+    void hostImageInitializationCreatesEveryDowncallWithoutCriticalOptions() {
+        List<Linker.Option[]> ordinaryOptions = new ArrayList<>();
+        DowncallHandleFactory ordinaryDowncallHandleFactory =
+                (symbolAddress, functionDescriptor, linkerOptions) -> {
+                    ordinaryOptions.add(linkerOptions);
+                    return MethodHandles.empty(functionDescriptor.toMethodType());
+                };
+        List<FunctionDescriptor> capturedDescriptors = new ArrayList<>();
+        List<Linker.Option[]> capturedOptions = new ArrayList<>();
+        DowncallHandleFactory downcallHandleFactory =
+                (symbolAddress, functionDescriptor, linkerOptions) -> {
+                    capturedDescriptors.add(functionDescriptor);
+                    capturedOptions.add(linkerOptions);
+                    return MethodHandles.empty(functionDescriptor.toMethodType());
+                };
+        MemorySegment[] symbolAddresses = new MemorySegment[9];
+        for (int symbolIndex = 0; symbolIndex < symbolAddresses.length; ++symbolIndex) {
+            symbolAddresses[symbolIndex] = MemorySegment.NULL;
+        }
+
+        MethodHandle[] ordinaryDowncallHandles =
+                NativePresentationRuntime.createOrdinaryDowncallHandles(
+                        symbolAddresses, ordinaryDowncallHandleFactory);
+        MethodHandle[] downcallHandles = NativePresentationRuntime.createHostImageDowncallHandles(
+                symbolAddresses, downcallHandleFactory);
+
+        assertEquals(6, ordinaryDowncallHandles.length);
+        for (Linker.Option[] linkerOptions : ordinaryOptions) {
+            assertArrayEquals(new Linker.Option[0], linkerOptions);
+        }
+        assertEquals(8, downcallHandles.length);
+        assertEquals(NativePresentationRuntime.s_createHostImageDescriptor,
+                capturedDescriptors.get(5));
+        assertEquals(NativePresentationRuntime.s_detachHostImageResourcesDescriptor,
+                capturedDescriptors.get(6));
+        assertEquals(NativePresentationRuntime.s_submitAndPresentHostImageFrameDescriptor,
+                capturedDescriptors.get(7));
+        assertArrayEquals(new Linker.Option[0], capturedOptions.get(5));
+        assertArrayEquals(new Linker.Option[0], capturedOptions.get(6));
+        assertArrayEquals(new Linker.Option[0], capturedOptions.get(7));
     }
 
     @Test

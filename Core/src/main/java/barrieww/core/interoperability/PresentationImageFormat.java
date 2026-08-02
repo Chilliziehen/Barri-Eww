@@ -3,6 +3,8 @@ package barrieww.core.interoperability;
 /**
  * @note ThreadSafety: Immutable enum constants; safe to use from any thread.
  * Stable presentation-neutral UNORM image formats shared by the Java and Native Version 1 ABI.
+ * @warning MemoryOwnership: Values contain no native memory and transfer no ownership across the
+ *          Java-to-Native boundary.
  */
 public enum PresentationImageFormat {
     /** Four 8-bit UNORM channels ordered red, green, blue and alpha. */

@@ -1,7 +1,9 @@
 package barrieww.core.interoperability;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -10,7 +12,9 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +45,47 @@ class NativePresentationRuntimeIntegrationTests {
         assertEquals(0, runtimeException.vulkanResult());
         assertEquals(NativePresentationRuntime.s_createHostImageSymbolName,
                 runtimeException.nativeSymbolName());
+    }
+
+    @Test
+    void rejectedHostImageCreateClosesLookupArenaAndUnloadsCopiedLibrary() throws Exception {
+        Path originalLibraryPath = Path.of(
+                System.getProperty("barrieww.nativeLibraryPath"));
+        Path temporaryDirectory = Files.createTempDirectory("barrieww-host-image-arena-");
+        Path copiedLibraryPath = temporaryDirectory.resolve(originalLibraryPath.getFileName());
+        try {
+            Files.copy(originalLibraryPath, copiedLibraryPath,
+                    StandardCopyOption.REPLACE_EXISTING);
+            Arena libraryArena = Arena.ofConfined();
+            PresentationBootstrapHandles missingHandles = new PresentationBootstrapHandles(
+                    0L, 0L, 0L, 0L, 0L, 0L, 0, 0);
+            HostImagePresentationBinding hostImageBinding = HostImagePresentationBinding.create(
+                    1L, PresentationImageFormat.R8G8B8A8_UNORM,
+                    PresentationImageFormat.B8G8R8A8_UNORM, 1280, 720, 1280, 720);
+            try {
+                assertThrows(NativePresentationRuntimeException.class,
+                        () -> NativePresentationRuntime
+                                .createHostImagePresentationWithLibraryArena(
+                                        copiedLibraryPath, missingHandles, 1280, 720, 2,
+                                        hostImageBinding, libraryArena));
+                assertFalse(libraryArena.scope().isAlive());
+
+                if (System.getProperty("os.name").startsWith("Windows")) {
+                    Files.delete(copiedLibraryPath);
+                    assertFalse(Files.exists(copiedLibraryPath));
+                    Files.copy(originalLibraryPath, copiedLibraryPath,
+                            StandardCopyOption.REPLACE_EXISTING);
+                    assertTrue(Files.isRegularFile(copiedLibraryPath));
+                }
+            } finally {
+                if (libraryArena.scope().isAlive()) {
+                    libraryArena.close();
+                }
+            }
+        } finally {
+            Files.deleteIfExists(copiedLibraryPath);
+            Files.deleteIfExists(temporaryDirectory);
+        }
     }
 
     @Test
