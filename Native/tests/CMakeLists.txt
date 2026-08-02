@@ -39,10 +39,18 @@ if(BARRIEWW_BACKEND_VULKAN)
         GraphicsPipelineExecutionTests.cpp
         GraphicsVertexPullingTests.cpp
         GraphicsModuleExecutionTests.cpp
+        HostImagePresentationExecutionTests.cpp
         GpuDrivenDrawTests.cpp)
 endif()
 
 add_executable(BarriEwwNativeTests ${BARRIEWW_TEST_SOURCES})
+
+if(BARRIEWW_BACKEND_VULKAN)
+    add_dependencies(BarriEwwNativeTests BarriEwwHostImagePresentationShaders)
+    target_include_directories(BarriEwwNativeTests
+        PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/../generated)
+endif()
 
 add_executable(BarriEwwNativeFfmBoundaryTests
     NativeCommandStreamModuleValidationBoundaryTests.cpp)

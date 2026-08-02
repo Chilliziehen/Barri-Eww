@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -14,9 +16,9 @@ namespace barrieww::testing {
 /**
  * @note ThreadSafety: Not thread-safe; each test owns one harness on one thread.
  * @brief Test-only headless Vulkan bring-up: instance → first transfer-capable
- *        physical device → logical device with one queue → command pool. No surface,
- *        no window, no extensions — enough to execute transfer work for recorder
- *        tests on a real driver (lavapipe on CI, native driver locally). create()
+ *        physical device → logical device with one graphics queue → command pool. No
+ *        surface or window; Vulkan 1.2 devices enable KHR dynamic rendering when present.
+ *        Tests execute on a real driver (lavapipe on CI, native driver locally). create()
  *        returns nullptr when no Vulkan driver is present so tests can SKIP.
  *        Production bring-up is NOT this class: the real backend receives its device
  *        from the Java/FFM layer (ADR-0001); the harness only exists because tests
@@ -53,9 +55,19 @@ public:
         return m_supportsBufferDeviceAddress;
     }
 
-    /** Whether dynamic rendering (core Vulkan 1.3) was enabled on the device. */
+    /** Whether dynamic rendering (core Vulkan 1.3 or KHR on Vulkan 1.2) was enabled. */
     [[nodiscard]] bool supportsDynamicRendering() const noexcept {
         return m_supportsDynamicRendering;
+    }
+
+    /**
+     * @note ThreadSafety: Read-only after create() returns; concurrent reads are safe.
+     * @brief Reports whether both KHR dynamic-rendering command entry points resolved.
+     * @return bool True when vkCmdBeginRenderingKHR and vkCmdEndRenderingKHR are available
+     * @warning MemoryOwnership: Reads a cached capability and transfers no ownership.
+     */
+    [[nodiscard]] bool supportsDynamicRenderingExtensionEntryPoints() const noexcept {
+        return m_supportsDynamicRenderingExtensionEntryPoints;
     }
 
     /** Borrowed-handle create info for constructing a VulkanContext (see class notes). */
@@ -119,7 +131,7 @@ private:
         std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
         vkEnumeratePhysicalDevices(m_instance, &physicalDeviceCount, physicalDevices.data());
 
-        // First device with a transfer-capable family (graphics/compute imply transfer).
+        // Presentation execution requires graphics; graphics queues also support transfer.
         for (VkPhysicalDevice candidateDevice : physicalDevices) {
             std::uint32_t queueFamilyCount = 0;
             vkGetPhysicalDeviceQueueFamilyProperties(candidateDevice, &queueFamilyCount,
@@ -129,9 +141,7 @@ private:
                                                      queueFamilies.data());
             for (std::uint32_t familyIndex = 0; familyIndex < queueFamilyCount;
                  ++familyIndex) {
-                constexpr VkQueueFlags transferCapableFlags =
-                    VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
-                if (queueFamilies[familyIndex].queueFlags & transferCapableFlags) {
+                if ((queueFamilies[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0u) {
                     m_physicalDevice = candidateDevice;
                     m_queueFamilyIndex = familyIndex;
                     break;
@@ -145,22 +155,34 @@ private:
             return false;
         }
 
-        // Query and, when available, enable bufferDeviceAddress (core 1.2) and
-        // dynamicRendering (core 1.3); tests SKIP via the corresponding accessor when a
-        // feature is unavailable.
+        // Query and, when available, enable bufferDeviceAddress and dynamicRendering.
         VkPhysicalDeviceProperties deviceProperties{};
         vkGetPhysicalDeviceProperties(m_physicalDevice, &deviceProperties);
         const bool deviceSupportsVulkan13 =
             deviceProperties.apiVersion >= VK_API_VERSION_1_3;
 
-        VkPhysicalDeviceVulkan13Features supportedVulkan13Features{};
-        supportedVulkan13Features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        std::uint32_t extensionCount = 0u;
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extensionCount,
+                                             nullptr);
+        std::vector<VkExtensionProperties> extensionProperties(extensionCount);
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extensionCount,
+                                             extensionProperties.data());
+        const bool supportsDynamicRenderingExtension = std::ranges::any_of(
+            extensionProperties, [](const VkExtensionProperties& extensionProperty) {
+                return std::string_view{extensionProperty.extensionName}
+                    == VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
+            });
+
+        VkPhysicalDeviceDynamicRenderingFeaturesKHR supportedDynamicRenderingFeatures{};
+        supportedDynamicRenderingFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
         VkPhysicalDeviceVulkan12Features supportedVulkan12Features{};
         supportedVulkan12Features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         supportedVulkan12Features.pNext =
-            deviceSupportsVulkan13 ? &supportedVulkan13Features : nullptr;
+            (deviceSupportsVulkan13 || supportsDynamicRenderingExtension)
+                ? &supportedDynamicRenderingFeatures
+                : nullptr;
         VkPhysicalDeviceFeatures2 supportedFeatures{};
         supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supportedFeatures.pNext = &supportedVulkan12Features;
@@ -168,12 +190,12 @@ private:
         m_supportsBufferDeviceAddress =
             supportedVulkan12Features.bufferDeviceAddress == VK_TRUE;
         m_supportsDynamicRendering =
-            deviceSupportsVulkan13 && supportedVulkan13Features.dynamicRendering == VK_TRUE;
+            supportedDynamicRenderingFeatures.dynamicRendering == VK_TRUE;
 
-        VkPhysicalDeviceVulkan13Features enabledVulkan13Features{};
-        enabledVulkan13Features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        enabledVulkan13Features.dynamicRendering =
+        VkPhysicalDeviceDynamicRenderingFeaturesKHR enabledDynamicRenderingFeatures{};
+        enabledDynamicRenderingFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+        enabledDynamicRenderingFeatures.dynamicRendering =
             m_supportsDynamicRendering ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceVulkan12Features enabledVulkan12Features{};
         enabledVulkan12Features.sType =
@@ -181,7 +203,9 @@ private:
         enabledVulkan12Features.bufferDeviceAddress =
             m_supportsBufferDeviceAddress ? VK_TRUE : VK_FALSE;
         enabledVulkan12Features.pNext =
-            m_supportsDynamicRendering ? &enabledVulkan13Features : nullptr;
+            m_supportsDynamicRendering ? &enabledDynamicRenderingFeatures : nullptr;
+
+        const char* enabledExtensionNames[] = {VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME};
 
         const float queuePriority = 1.0f;
         VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -194,11 +218,18 @@ private:
         deviceCreateInfo.pNext = &enabledVulkan12Features;
         deviceCreateInfo.queueCreateInfoCount = 1u;
         deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+        if (m_supportsDynamicRendering && supportsDynamicRenderingExtension) {
+            deviceCreateInfo.enabledExtensionCount = 1u;
+            deviceCreateInfo.ppEnabledExtensionNames = enabledExtensionNames;
+        }
         if (vkCreateDevice(m_physicalDevice, &deviceCreateInfo, nullptr, &m_logicalDevice)
             != VK_SUCCESS) {
             return false;
         }
         vkGetDeviceQueue(m_logicalDevice, m_queueFamilyIndex, 0u, &m_queue);
+        m_supportsDynamicRenderingExtensionEntryPoints =
+            vkGetDeviceProcAddr(m_logicalDevice, "vkCmdBeginRenderingKHR") != nullptr
+            && vkGetDeviceProcAddr(m_logicalDevice, "vkCmdEndRenderingKHR") != nullptr;
 
         VkCommandPoolCreateInfo commandPoolCreateInfo{};
         commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -216,6 +247,7 @@ private:
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     bool m_supportsBufferDeviceAddress = false;
     bool m_supportsDynamicRendering = false;
+    bool m_supportsDynamicRenderingExtensionEntryPoints = false;
 };
 
 } // namespace barrieww::testing
