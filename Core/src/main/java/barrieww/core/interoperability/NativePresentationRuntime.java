@@ -1,9 +1,13 @@
 package barrieww.core.interoperability;
 
+import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.StructLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -31,12 +35,79 @@ public final class NativePresentationRuntime implements AutoCloseable {
             "barriEwwPresentClearFrameVersion1";
     public static final String s_submitAndPresentClearFrameSymbolName =
             "barriEwwSubmitAndPresentClearFrameVersion1";
+    public static final String s_createHostImageSymbolName =
+            "barriEwwCreateHostImagePresentationRuntimeVersion1";
+    public static final String s_detachHostImageResourcesSymbolName =
+            "barriEwwDetachHostImagePresentationResourcesVersion1";
+    public static final String s_submitAndPresentHostImageFrameSymbolName =
+            "barriEwwSubmitAndPresentHostImageFrameVersion1";
 
     private static final int s_operationSuccess = 0;
     private static final long s_createInfoByteSize = 72;
     private static final long s_createResultByteSize = 32;
     private static final long s_beginResultByteSize = 40;
     private static final long s_submitResultByteSize = 8;
+
+    static final StructLayout s_hostImageCreateInfoLayout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_LONG.withName("instanceHandle"),
+            ValueLayout.JAVA_LONG.withName("physicalDeviceHandle"),
+            ValueLayout.JAVA_LONG.withName("logicalDeviceHandle"),
+            ValueLayout.JAVA_LONG.withName("surfaceHandle"),
+            ValueLayout.JAVA_LONG.withName("graphicsQueueHandle"),
+            ValueLayout.JAVA_LONG.withName("presentQueueHandle"),
+            ValueLayout.JAVA_INT.withName("graphicsQueueFamilyIndex"),
+            ValueLayout.JAVA_INT.withName("presentQueueFamilyIndex"),
+            ValueLayout.JAVA_INT.withName("framebufferWidth"),
+            ValueLayout.JAVA_INT.withName("framebufferHeight"),
+            ValueLayout.JAVA_INT.withName("framesInFlightCount"),
+            ValueLayout.JAVA_INT.withName("reservedFlags"),
+            ValueLayout.JAVA_LONG.withName("hostImageHandle"),
+            ValueLayout.JAVA_INT.withName("hostImageFormatValue"),
+            ValueLayout.JAVA_INT.withName("requestedSurfaceFormatValue"),
+            ValueLayout.JAVA_INT.withName("hostImageWidth"),
+            ValueLayout.JAVA_INT.withName("hostImageHeight"));
+    static final long s_instanceHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("instanceHandle"));
+    static final long s_physicalDeviceHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("physicalDeviceHandle"));
+    static final long s_logicalDeviceHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("logicalDeviceHandle"));
+    static final long s_surfaceHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("surfaceHandle"));
+    static final long s_graphicsQueueHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("graphicsQueueHandle"));
+    static final long s_presentQueueHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("presentQueueHandle"));
+    static final long s_graphicsQueueFamilyIndexOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("graphicsQueueFamilyIndex"));
+    static final long s_presentQueueFamilyIndexOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("presentQueueFamilyIndex"));
+    static final long s_framebufferWidthOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("framebufferWidth"));
+    static final long s_framebufferHeightOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("framebufferHeight"));
+    static final long s_framesInFlightCountOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("framesInFlightCount"));
+    static final long s_reservedFlagsOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("reservedFlags"));
+    static final long s_hostImageHandleOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("hostImageHandle"));
+    static final long s_hostImageFormatValueOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("hostImageFormatValue"));
+    static final long s_requestedSurfaceFormatValueOffset =
+            s_hostImageCreateInfoLayout.byteOffset(groupElement("requestedSurfaceFormatValue"));
+    static final long s_hostImageWidthOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("hostImageWidth"));
+    static final long s_hostImageHeightOffset = s_hostImageCreateInfoLayout.byteOffset(
+            groupElement("hostImageHeight"));
+
+    static final StructLayout s_detachResultLayout = MemoryLayout.structLayout(
+            ValueLayout.JAVA_INT.withName("vulkanResult"),
+            ValueLayout.JAVA_INT.withName("reserved"));
+    static final long s_detachVulkanResultOffset = s_detachResultLayout.byteOffset(
+            groupElement("vulkanResult"));
+    static final long s_detachReservedOffset = s_detachResultLayout.byteOffset(
+            groupElement("reserved"));
 
     private static final FunctionDescriptor s_createDescriptor = FunctionDescriptor.of(
             ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
@@ -57,6 +128,13 @@ public final class NativePresentationRuntime implements AutoCloseable {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
                     ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                     ValueLayout.ADDRESS);
+    static final FunctionDescriptor s_createHostImageDescriptor = FunctionDescriptor.of(
+            ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
+    static final FunctionDescriptor s_detachHostImageResourcesDescriptor = FunctionDescriptor.of(
+            ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
+    static final FunctionDescriptor s_submitAndPresentHostImageFrameDescriptor =
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS);
 
     private final Arena m_libraryArena;
     private final MethodHandle m_destroyHandle;
@@ -64,9 +142,12 @@ public final class NativePresentationRuntime implements AutoCloseable {
     private final MethodHandle m_submitHandle;
     private final MethodHandle m_presentClearHandle;
     private final MethodHandle m_submitAndPresentClearFrameHandle;
+    private final MethodHandle m_detachHostImageResourcesHandle;
+    private final MethodHandle m_submitAndPresentHostImageFrameHandle;
     private final MemorySegment m_beginResult;
     private final MemorySegment m_priorMetrics;
     private final MemorySegment m_submitResult;
+    private final MemorySegment m_detachResult;
     private final long m_runtimeAddress;
     private final int m_selectedFormatValue;
     private final int m_selectedPresentModeValue;
@@ -86,9 +167,13 @@ public final class NativePresentationRuntime implements AutoCloseable {
      * @param MethodHandle presentClearHandle Non-critical combined clear-frame downcall handle
      * @param MethodHandle submitAndPresentClearFrameHandle Non-critical clear-submit downcall
      *        handle
+     * @param MethodHandle detachHostImageResourcesHandle Optional non-critical host detach handle
+     * @param MethodHandle submitAndPresentHostImageFrameHandle Optional non-critical host submit
+     *        handle
      * @param MemorySegment beginResult Reusable begin-frame output storage
      * @param MemorySegment priorMetrics Reusable prior-frame metrics output storage
      * @param MemorySegment submitResult Reusable submit-frame output storage
+     * @param MemorySegment detachResult Optional reusable host detach output storage
      * @param long runtimeAddress Native-owned opaque presentation runtime address
      * @param int selectedFormatValue Selected neutral swapchain format value
      * @param int selectedPresentModeValue Selected Vulkan present-mode value
@@ -101,10 +186,13 @@ public final class NativePresentationRuntime implements AutoCloseable {
      */
     private NativePresentationRuntime(Arena libraryArena, MethodHandle destroyHandle,
                                        MethodHandle beginHandle, MethodHandle submitHandle,
-                                       MethodHandle presentClearHandle,
-                                       MethodHandle submitAndPresentClearFrameHandle,
-                                       MemorySegment beginResult, MemorySegment priorMetrics,
-                                       MemorySegment submitResult, long runtimeAddress,
+                                        MethodHandle presentClearHandle,
+                                        MethodHandle submitAndPresentClearFrameHandle,
+                                        MethodHandle detachHostImageResourcesHandle,
+                                        MethodHandle submitAndPresentHostImageFrameHandle,
+                                        MemorySegment beginResult, MemorySegment priorMetrics,
+                                        MemorySegment submitResult, MemorySegment detachResult,
+                                        long runtimeAddress,
                                        int selectedFormatValue, int selectedPresentModeValue,
                                        int selectedSharingModeValue, int swapchainImageCount) {
         m_libraryArena = libraryArena;
@@ -113,9 +201,12 @@ public final class NativePresentationRuntime implements AutoCloseable {
         m_submitHandle = submitHandle;
         m_presentClearHandle = presentClearHandle;
         m_submitAndPresentClearFrameHandle = submitAndPresentClearFrameHandle;
+        m_detachHostImageResourcesHandle = detachHostImageResourcesHandle;
+        m_submitAndPresentHostImageFrameHandle = submitAndPresentHostImageFrameHandle;
         m_beginResult = beginResult;
         m_priorMetrics = priorMetrics;
         m_submitResult = submitResult;
+        m_detachResult = detachResult;
         m_runtimeAddress = runtimeAddress;
         m_selectedFormatValue = selectedFormatValue;
         m_selectedPresentModeValue = selectedPresentModeValue;
@@ -166,26 +257,16 @@ public final class NativePresentationRuntime implements AutoCloseable {
         try {
             SymbolLookup symbolLookup =
                     SymbolLookup.libraryLookup(absoluteLibraryPath, libraryArena);
+            MemorySegment[] symbols = resolveSymbolAddresses(
+                    symbolLookup, absoluteLibraryPath, false);
             Linker linker = Linker.nativeLinker();
-            createHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath, s_createSymbolName),
-                    s_createDescriptor);
-            destroyHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath, s_destroySymbolName),
-                    s_destroyDescriptor);
-            beginHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath, s_beginFrameSymbolName),
-                    s_beginDescriptor);
-            submitHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath, s_submitFrameSymbolName),
-                    s_submitDescriptor);
-            presentClearHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath, s_presentClearFrameSymbolName),
-                    s_presentClearDescriptor);
+            createHandle = linker.downcallHandle(symbols[0], s_createDescriptor);
+            destroyHandle = linker.downcallHandle(symbols[1], s_destroyDescriptor);
+            beginHandle = linker.downcallHandle(symbols[2], s_beginDescriptor);
+            submitHandle = linker.downcallHandle(symbols[3], s_submitDescriptor);
+            presentClearHandle = linker.downcallHandle(symbols[4], s_presentClearDescriptor);
             submitAndPresentClearFrameHandle = linker.downcallHandle(
-                    findSymbol(symbolLookup, absoluteLibraryPath,
-                            s_submitAndPresentClearFrameSymbolName),
-                    s_submitAndPresentClearFrameDescriptor);
+                    symbols[5], s_submitAndPresentClearFrameDescriptor);
             beginResult = libraryArena.allocate(s_beginResultByteSize, 8);
             priorMetrics = libraryArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
             submitResult = libraryArena.allocate(s_submitResultByteSize, 4);
@@ -237,11 +318,138 @@ public final class NativePresentationRuntime implements AutoCloseable {
             long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
             return new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
                     submitHandle, presentClearHandle, submitAndPresentClearFrameHandle,
-                    beginResult, priorMetrics, submitResult, runtimeAddress,
+                    null, null, beginResult, priorMetrics, submitResult, null, runtimeAddress,
                     createResult.get(ValueLayout.JAVA_INT, 12),
                     createResult.get(ValueLayout.JAVA_INT, 16),
                     createResult.get(ValueLayout.JAVA_INT, 20),
                     createResult.get(ValueLayout.JAVA_INT, 24));
+        }
+    }
+
+    /**
+     * @note ThreadSafety: The returned runtime is confined to the calling thread.
+     * Opens the Native FFM shared library and creates a host-image presentation runtime that
+     * borrows the validated host image and Vulkan bootstrap handles.
+     *
+     * @param Path nativeLibraryPath Absolute path to BarriEwwNativeFfm
+     * @param PresentationBootstrapHandles bootstrapHandles Borrowed Vulkan handles
+     * @param int framebufferWidth Initial framebuffer width in pixels
+     * @param int framebufferHeight Initial framebuffer height in pixels
+     * @param int framesInFlightCount Number of in-flight frame slots
+     * @param HostImagePresentationBinding hostImageBinding Borrowed host image description
+     * @return NativePresentationRuntime The open thread-confined host-image runtime
+     * @throws NativeLibraryLoadingException When the library or a required symbol cannot resolve
+     * @throws NativePresentationRuntimeException When Native runtime creation fails
+     * @warning MemoryOwnership: The returned runtime owns its confined library Arena, Native
+     *          runtime and Native host presentation resources. Native borrows all caller-owned
+     *          Vulkan handles and the host image until detach or close returns.
+     */
+    public static NativePresentationRuntime createHostImagePresentation(
+            Path nativeLibraryPath, PresentationBootstrapHandles bootstrapHandles,
+            int framebufferWidth, int framebufferHeight, int framesInFlightCount,
+            HostImagePresentationBinding hostImageBinding)
+            throws NativeLibraryLoadingException, NativePresentationRuntimeException {
+        Objects.requireNonNull(nativeLibraryPath, "nativeLibraryPath");
+        Objects.requireNonNull(bootstrapHandles, "bootstrapHandles");
+        Objects.requireNonNull(hostImageBinding, "hostImageBinding");
+        HostImagePresentationBinding validatedBinding = HostImagePresentationBinding.create(
+                hostImageBinding.hostImageHandle(), hostImageBinding.hostImageFormat(),
+                hostImageBinding.requestedSurfaceFormat(), hostImageBinding.width(),
+                hostImageBinding.height(), framebufferWidth, framebufferHeight);
+        Path absoluteLibraryPath = nativeLibraryPath.toAbsolutePath().normalize();
+        if (!nativeLibraryPath.isAbsolute()) {
+            throw new NativeLibraryLoadingException(
+                    "Native library path must be absolute: " + nativeLibraryPath,
+                    absoluteLibraryPath, s_createHostImageSymbolName, null);
+        }
+
+        Arena libraryArena = Arena.ofConfined();
+        MethodHandle destroyHandle;
+        MethodHandle beginHandle;
+        MethodHandle submitHandle;
+        MethodHandle presentClearHandle;
+        MethodHandle submitAndPresentClearFrameHandle;
+        MethodHandle createHostImageHandle;
+        MethodHandle detachHostImageResourcesHandle;
+        MethodHandle submitAndPresentHostImageFrameHandle;
+        MemorySegment beginResult;
+        MemorySegment priorMetrics;
+        MemorySegment submitResult;
+        MemorySegment detachResult;
+        try {
+            SymbolLookup symbolLookup = SymbolLookup.libraryLookup(
+                    absoluteLibraryPath, libraryArena);
+            MemorySegment[] symbols = resolveSymbolAddresses(
+                    symbolLookup, absoluteLibraryPath, true);
+            Linker linker = Linker.nativeLinker();
+            destroyHandle = linker.downcallHandle(symbols[1], s_destroyDescriptor);
+            beginHandle = linker.downcallHandle(symbols[2], s_beginDescriptor);
+            submitHandle = linker.downcallHandle(symbols[3], s_submitDescriptor);
+            presentClearHandle = linker.downcallHandle(symbols[4], s_presentClearDescriptor);
+            submitAndPresentClearFrameHandle = linker.downcallHandle(
+                    symbols[5], s_submitAndPresentClearFrameDescriptor);
+            createHostImageHandle = linker.downcallHandle(
+                    symbols[6], s_createHostImageDescriptor);
+            detachHostImageResourcesHandle = linker.downcallHandle(
+                    symbols[7], s_detachHostImageResourcesDescriptor);
+            submitAndPresentHostImageFrameHandle = linker.downcallHandle(
+                    symbols[8], s_submitAndPresentHostImageFrameDescriptor);
+            beginResult = libraryArena.allocate(s_beginResultByteSize, 8);
+            priorMetrics = libraryArena.allocate(PresentationFrameMetrics.s_byteSize, 8);
+            submitResult = libraryArena.allocate(s_submitResultByteSize, 4);
+            detachResult = libraryArena.allocate(s_detachResultLayout);
+        } catch (NativeLibraryLoadingException loadingFailure) {
+            libraryArena.close();
+            throw loadingFailure;
+        } catch (Throwable loadingFailure) {
+            libraryArena.close();
+            throw new NativeLibraryLoadingException(
+                    "Failed to open Native host-image presentation runtime at "
+                            + absoluteLibraryPath,
+                    absoluteLibraryPath, s_createHostImageSymbolName, loadingFailure);
+        }
+
+        try (Arena creationArena = Arena.ofConfined()) {
+            MemorySegment createInfo = creationArena.allocate(s_hostImageCreateInfoLayout);
+            writeHostImageCreateInfo(createInfo, bootstrapHandles, framebufferWidth,
+                    framebufferHeight, framesInFlightCount, validatedBinding);
+            MemorySegment createResult = creationArena.allocate(s_createResultByteSize, 8);
+            int operationResult;
+            try {
+                operationResult = (int) createHostImageHandle.invokeExact(createInfo, createResult);
+            } catch (Throwable invocationFailure) {
+                libraryArena.close();
+                throw invocationException("createHostImagePresentationRuntime",
+                        s_createHostImageSymbolName, invocationFailure);
+            }
+            if (operationResult != s_operationSuccess) {
+                int vulkanResult = createResult.get(ValueLayout.JAVA_INT, 8);
+                libraryArena.close();
+                throw new NativePresentationRuntimeException(
+                        "Native host-image presentation runtime creation failed with operation "
+                                + "result " + operationResult,
+                        s_createHostImageSymbolName, operationResult, vulkanResult);
+            }
+            long runtimeAddress = createResult.get(ValueLayout.JAVA_LONG, 0);
+            return new NativePresentationRuntime(libraryArena, destroyHandle, beginHandle,
+                    submitHandle, presentClearHandle, submitAndPresentClearFrameHandle,
+                    detachHostImageResourcesHandle, submitAndPresentHostImageFrameHandle,
+                    beginResult, priorMetrics, submitResult, detachResult, runtimeAddress,
+                    createResult.get(ValueLayout.JAVA_INT, 12),
+                    createResult.get(ValueLayout.JAVA_INT, 16),
+                    createResult.get(ValueLayout.JAVA_INT, 20),
+                    createResult.get(ValueLayout.JAVA_INT, 24));
+        } catch (NativePresentationRuntimeException creationFailure) {
+            if (libraryArena.scope().isAlive()) {
+                libraryArena.close();
+            }
+            throw creationFailure;
+        } catch (Throwable creationFailure) {
+            if (libraryArena.scope().isAlive()) {
+                libraryArena.close();
+            }
+            throw invocationException("createHostImagePresentationRuntime",
+                    s_createHostImageSymbolName, creationFailure);
         }
     }
 
@@ -313,6 +521,63 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     invocationFailure);
         }
         requireSuccessfulOperation("submitFrame", s_submitFrameSymbolName, operationResult,
+                m_submitResult.get(ValueLayout.JAVA_INT, 4));
+        return PresentationFrameStatus.fromCode(m_submitResult.get(ValueLayout.JAVA_INT, 0));
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; call serially on the render thread.
+     * Detaches borrowed host-image presentation resources. Native detach semantics are idempotent,
+     * and this method allocates no per-call Java storage.
+     *
+     * @throws IllegalStateException When this is closed or is an ordinary presentation runtime
+     * @throws NativePresentationRuntimeException When invocation or the detach operation fails
+     * @warning MemoryOwnership: Native synchronously writes the runtime-owned reusable detach
+     *          result and retains no address. A successful detach retires Native-owned resources
+     *          that reference the caller-owned host image but never destroys that image.
+     */
+    public void detachHostImagePresentationResources()
+            throws NativePresentationRuntimeException {
+        requireOpen();
+        requireHostImageRuntime();
+        int operationResult;
+        try {
+            operationResult = (int) m_detachHostImageResourcesHandle.invokeExact(
+                    m_runtimeAddress, m_detachResult);
+        } catch (Throwable invocationFailure) {
+            throw invocationException("detachHostImagePresentationResources",
+                    s_detachHostImageResourcesSymbolName, invocationFailure);
+        }
+        requireSuccessfulOperation("detachHostImagePresentationResources",
+                s_detachHostImageResourcesSymbolName, operationResult,
+                m_detachResult.get(ValueLayout.JAVA_INT, s_detachVulkanResultOffset));
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; call serially on the render thread.
+     * Submits and presents the open frame using its prerecorded host-image presentation command.
+     * This valid host path performs one fixed-handle call and allocates no per-call Java storage.
+     *
+     * @return PresentationFrameStatus The frame status after submit and present
+     * @throws IllegalStateException When this is closed or is an ordinary presentation runtime
+     * @throws NativePresentationRuntimeException When invocation or the operation fails
+     * @warning MemoryOwnership: Native synchronously writes the runtime-owned reusable submit
+     *          result and retains no address. The host image remains caller-owned and borrowed.
+     */
+    public PresentationFrameStatus submitAndPresentHostImageFrame()
+            throws NativePresentationRuntimeException {
+        requireOpen();
+        requireHostImageRuntime();
+        int operationResult;
+        try {
+            operationResult = (int) m_submitAndPresentHostImageFrameHandle.invokeExact(
+                    m_runtimeAddress, m_submitResult);
+        } catch (Throwable invocationFailure) {
+            throw invocationException("submitAndPresentHostImageFrame",
+                    s_submitAndPresentHostImageFrameSymbolName, invocationFailure);
+        }
+        requireSuccessfulOperation("submitAndPresentHostImageFrame",
+                s_submitAndPresentHostImageFrameSymbolName, operationResult,
                 m_submitResult.get(ValueLayout.JAVA_INT, 4));
         return PresentationFrameStatus.fromCode(m_submitResult.get(ValueLayout.JAVA_INT, 0));
     }
@@ -454,6 +719,62 @@ public final class NativePresentationRuntime implements AutoCloseable {
         }
     }
 
+    /** Rejects host-image operations on the compatibility-preserving ordinary runtime path. */
+    private void requireHostImageRuntime() {
+        if (m_detachHostImageResourcesHandle == null) {
+            throw new IllegalStateException(
+                    "Native presentation runtime was not created for host-image presentation");
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; write only during host runtime creation.
+     * Writes every fixed Version 1 host-image create-info field and explicitly clears reserved
+     * flags.
+     *
+     * @param MemorySegment createInfo Writable 96-byte host-image create-info record
+     * @param PresentationBootstrapHandles bootstrapHandles Borrowed Vulkan bootstrap handles
+     * @param int framebufferWidth Exact framebuffer width in pixels
+     * @param int framebufferHeight Exact framebuffer height in pixels
+     * @param int framesInFlightCount Number of in-flight frame slots
+     * @param HostImagePresentationBinding hostImageBinding Validated host-image binding
+     * @warning MemoryOwnership: The caller owns createInfo and its Arena. This method writes it
+     *          synchronously and retains neither the segment nor any borrowed handle.
+     */
+    static void writeHostImageCreateInfo(
+            MemorySegment createInfo, PresentationBootstrapHandles bootstrapHandles,
+            int framebufferWidth, int framebufferHeight, int framesInFlightCount,
+            HostImagePresentationBinding hostImageBinding) {
+        createInfo.set(ValueLayout.JAVA_LONG, s_instanceHandleOffset,
+                bootstrapHandles.instanceHandle());
+        createInfo.set(ValueLayout.JAVA_LONG, s_physicalDeviceHandleOffset,
+                bootstrapHandles.physicalDeviceHandle());
+        createInfo.set(ValueLayout.JAVA_LONG, s_logicalDeviceHandleOffset,
+                bootstrapHandles.logicalDeviceHandle());
+        createInfo.set(ValueLayout.JAVA_LONG, s_surfaceHandleOffset,
+                bootstrapHandles.surfaceHandle());
+        createInfo.set(ValueLayout.JAVA_LONG, s_graphicsQueueHandleOffset,
+                bootstrapHandles.graphicsQueueHandle());
+        createInfo.set(ValueLayout.JAVA_LONG, s_presentQueueHandleOffset,
+                bootstrapHandles.presentQueueHandle());
+        createInfo.set(ValueLayout.JAVA_INT, s_graphicsQueueFamilyIndexOffset,
+                bootstrapHandles.graphicsQueueFamilyIndex());
+        createInfo.set(ValueLayout.JAVA_INT, s_presentQueueFamilyIndexOffset,
+                bootstrapHandles.presentQueueFamilyIndex());
+        createInfo.set(ValueLayout.JAVA_INT, s_framebufferWidthOffset, framebufferWidth);
+        createInfo.set(ValueLayout.JAVA_INT, s_framebufferHeightOffset, framebufferHeight);
+        createInfo.set(ValueLayout.JAVA_INT, s_framesInFlightCountOffset, framesInFlightCount);
+        createInfo.set(ValueLayout.JAVA_INT, s_reservedFlagsOffset, 0);
+        createInfo.set(ValueLayout.JAVA_LONG, s_hostImageHandleOffset,
+                hostImageBinding.hostImageHandle());
+        createInfo.set(ValueLayout.JAVA_INT, s_hostImageFormatValueOffset,
+                hostImageBinding.hostImageFormat().rawValue());
+        createInfo.set(ValueLayout.JAVA_INT, s_requestedSurfaceFormatValueOffset,
+                hostImageBinding.requestedSurfaceFormat().rawValue());
+        createInfo.set(ValueLayout.JAVA_INT, s_hostImageWidthOffset, hostImageBinding.width());
+        createInfo.set(ValueLayout.JAVA_INT, s_hostImageHeightOffset, hostImageBinding.height());
+    }
+
     /**
      * @note ThreadSafety: Thread-confined; call serially on the render thread.
      * Invokes begin-frame into runtime-lifetime reusable storage and translates operation
@@ -512,6 +833,44 @@ public final class NativePresentationRuntime implements AutoCloseable {
                     "Native " + operationName + " reported operation result " + operationResult,
                     symbolName, operationResult, vulkanResult);
         }
+    }
+
+    /**
+     * @note ThreadSafety: Thread-confined; resolve only during construction on the lookup owner.
+     * Resolves the fixed ordinary symbol set and, only when requested by the host factory, the
+     * three additive host-image symbols.
+     *
+     * @param SymbolLookup symbolLookup Library lookup bound to a confined Arena
+     * @param Path nativeLibraryPath Absolute path owning the symbol lookup
+     * @param boolean shouldIncludeHostImageSymbols Whether to require all additive host symbols
+     * @return MemorySegment[] Borrowed symbol addresses in fixed descriptor order
+     * @throws NativeLibraryLoadingException When any required exact symbol is absent
+     * @warning MemoryOwnership: Every returned address is owned by the Arena backing symbolLookup.
+     *          The caller must create and retain handles only within that Arena's lifetime.
+     */
+    static MemorySegment[] resolveSymbolAddresses(
+            SymbolLookup symbolLookup, Path nativeLibraryPath,
+            boolean shouldIncludeHostImageSymbols) throws NativeLibraryLoadingException {
+        int symbolCount = shouldIncludeHostImageSymbols ? 9 : 6;
+        MemorySegment[] symbolAddresses = new MemorySegment[symbolCount];
+        symbolAddresses[0] = findSymbol(symbolLookup, nativeLibraryPath, s_createSymbolName);
+        symbolAddresses[1] = findSymbol(symbolLookup, nativeLibraryPath, s_destroySymbolName);
+        symbolAddresses[2] = findSymbol(symbolLookup, nativeLibraryPath, s_beginFrameSymbolName);
+        symbolAddresses[3] = findSymbol(symbolLookup, nativeLibraryPath, s_submitFrameSymbolName);
+        symbolAddresses[4] = findSymbol(
+                symbolLookup, nativeLibraryPath, s_presentClearFrameSymbolName);
+        symbolAddresses[5] = findSymbol(
+                symbolLookup, nativeLibraryPath, s_submitAndPresentClearFrameSymbolName);
+        if (shouldIncludeHostImageSymbols) {
+            symbolAddresses[6] = findSymbol(
+                    symbolLookup, nativeLibraryPath, s_createHostImageSymbolName);
+            symbolAddresses[7] = findSymbol(
+                    symbolLookup, nativeLibraryPath, s_detachHostImageResourcesSymbolName);
+            symbolAddresses[8] = findSymbol(
+                    symbolLookup, nativeLibraryPath,
+                    s_submitAndPresentHostImageFrameSymbolName);
+        }
+        return symbolAddresses;
     }
 
     /**

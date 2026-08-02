@@ -23,6 +23,41 @@ import org.junit.jupiter.api.Test;
 class NativePresentationRuntimeIntegrationTests {
 
     @Test
+    void createHostImagePresentationRejectsMissingBootstrapHandles() {
+        Path nativeLibraryPath = Path.of(
+                System.getProperty("barrieww.nativeLibraryPath"));
+        PresentationBootstrapHandles missingHandles = new PresentationBootstrapHandles(
+                0L, 0L, 0L, 0L, 0L, 0L, 0, 0);
+        HostImagePresentationBinding hostImageBinding = HostImagePresentationBinding.create(
+                1L, PresentationImageFormat.R8G8B8A8_UNORM,
+                PresentationImageFormat.B8G8R8A8_UNORM, 1280, 720, 1280, 720);
+
+        NativePresentationRuntimeException runtimeException = assertThrows(
+                NativePresentationRuntimeException.class,
+                () -> NativePresentationRuntime.createHostImagePresentation(
+                        nativeLibraryPath, missingHandles, 1280, 720, 2, hostImageBinding));
+
+        assertEquals(1, runtimeException.operationResultCode());
+        assertEquals(0, runtimeException.vulkanResult());
+        assertEquals(NativePresentationRuntime.s_createHostImageSymbolName,
+                runtimeException.nativeSymbolName());
+    }
+
+    @Test
+    void detachHostImagePresentationRejectsMissingRuntimeAndClearsOutput() throws Throwable {
+        assertRejectedRuntimeClearsOutput(
+                NativePresentationRuntime.s_detachHostImageResourcesSymbolName,
+                NativePresentationRuntime.s_detachHostImageResourcesDescriptor);
+    }
+
+    @Test
+    void submitAndPresentHostImageFrameRejectsMissingRuntimeAndClearsOutput() throws Throwable {
+        assertRejectedRuntimeClearsOutput(
+                NativePresentationRuntime.s_submitAndPresentHostImageFrameSymbolName,
+                NativePresentationRuntime.s_submitAndPresentHostImageFrameDescriptor);
+    }
+
+    @Test
     void submitAndPresentClearFrameRejectsMissingRuntimeAndClearsOutput() throws Throwable {
         Path nativeLibraryPath = Path.of(
                 System.getProperty("barrieww.nativeLibraryPath"));
@@ -62,5 +97,35 @@ class NativePresentationRuntimeIntegrationTests {
         assertEquals(1, runtimeException.operationResultCode());
         assertEquals(NativePresentationRuntime.s_createSymbolName,
                 runtimeException.nativeSymbolName());
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; one invocation uses one confined Arena.
+     * Invokes a runtime-address/output-record boundary with a zero runtime and verifies stable
+     * rejection plus boundary-first output clearing.
+     *
+     * @param String symbolName Exact Version 1 symbol name
+     * @param FunctionDescriptor descriptor Exact non-critical downcall descriptor
+     * @throws Throwable When symbol resolution or downcall invocation fails unexpectedly
+     * @warning MemoryOwnership: This method owns and closes the lookup Arena and output segment;
+     *          Native writes synchronously and retains no address.
+     */
+    private static void assertRejectedRuntimeClearsOutput(
+            String symbolName, FunctionDescriptor descriptor) throws Throwable {
+        Path nativeLibraryPath = Path.of(
+                System.getProperty("barrieww.nativeLibraryPath"));
+        try (Arena libraryArena = Arena.ofConfined()) {
+            SymbolLookup symbolLookup = SymbolLookup.libraryLookup(
+                    nativeLibraryPath, libraryArena);
+            MemorySegment symbol = symbolLookup.find(symbolName).orElseThrow();
+            MethodHandle handle = Linker.nativeLinker().downcallHandle(symbol, descriptor);
+            MemorySegment output = libraryArena.allocate(8, 4);
+            output.set(ValueLayout.JAVA_LONG, 0, -1L);
+
+            int operationResult = (int) handle.invokeExact(0L, output);
+
+            assertEquals(1, operationResult);
+            assertEquals(0L, output.get(ValueLayout.JAVA_LONG, 0));
+        }
     }
 }

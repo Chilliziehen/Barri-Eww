@@ -3,10 +3,12 @@ package barrieww.core.interoperability;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
@@ -23,6 +25,150 @@ import org.junit.jupiter.api.Test;
  * Covers presentation runtime binding argument validation that needs no live library.
  */
 class PresentationRuntimeBindingTests {
+
+    @Test
+    void hostImageSymbolNamesAndDescriptorsMatchVersionOneContract() {
+        assertEquals("barriEwwCreateHostImagePresentationRuntimeVersion1",
+                NativePresentationRuntime.s_createHostImageSymbolName);
+        assertEquals("barriEwwDetachHostImagePresentationResourcesVersion1",
+                NativePresentationRuntime.s_detachHostImageResourcesSymbolName);
+        assertEquals("barriEwwSubmitAndPresentHostImageFrameVersion1",
+                NativePresentationRuntime.s_submitAndPresentHostImageFrameSymbolName);
+        assertEquals(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS),
+                NativePresentationRuntime.s_createHostImageDescriptor);
+        assertEquals(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+                        ValueLayout.ADDRESS),
+                NativePresentationRuntime.s_detachHostImageResourcesDescriptor);
+        assertEquals(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+                        ValueLayout.ADDRESS),
+                NativePresentationRuntime.s_submitAndPresentHostImageFrameDescriptor);
+    }
+
+    @Test
+    void ordinarySymbolResolutionDoesNotRequireAdditiveHostImageSymbols() throws Exception {
+        SymbolLookup baseOnlyLookup = symbolName -> {
+            if (symbolName.equals(NativePresentationRuntime.s_createHostImageSymbolName)
+                    || symbolName.equals(
+                    NativePresentationRuntime.s_detachHostImageResourcesSymbolName)
+                    || symbolName.equals(
+                    NativePresentationRuntime.s_submitAndPresentHostImageFrameSymbolName)) {
+                return Optional.empty();
+            }
+            return Optional.of(MemorySegment.NULL);
+        };
+
+        MemorySegment[] symbols = NativePresentationRuntime.resolveSymbolAddresses(
+                baseOnlyLookup, Path.of("base-only").toAbsolutePath(), false);
+
+        assertEquals(6, symbols.length);
+    }
+
+    @Test
+    void hostImageSymbolResolutionRequiresEveryAdditiveSymbol() {
+        String[] hostSymbolNames = {
+                NativePresentationRuntime.s_createHostImageSymbolName,
+                NativePresentationRuntime.s_detachHostImageResourcesSymbolName,
+                NativePresentationRuntime.s_submitAndPresentHostImageFrameSymbolName
+        };
+        for (String missingSymbolName : hostSymbolNames) {
+            SymbolLookup lookup = symbolName -> symbolName.equals(missingSymbolName)
+                    ? Optional.empty() : Optional.of(MemorySegment.NULL);
+            NativeLibraryLoadingException loadingException = assertThrows(
+                    NativeLibraryLoadingException.class,
+                    () -> NativePresentationRuntime.resolveSymbolAddresses(lookup,
+                            Path.of("host-symbol-test").toAbsolutePath(), true));
+            assertEquals(missingSymbolName, loadingException.nativeSymbolName());
+        }
+    }
+
+    @Test
+    void hostImageCreateInfoWritesEveryFieldAndLeavesReservedZero() {
+        PresentationBootstrapHandles bootstrapHandles = new PresentationBootstrapHandles(
+                11L, 12L, 13L, 14L, 15L, 16L, 17, 18);
+        HostImagePresentationBinding binding = HostImagePresentationBinding.create(
+                19L, PresentationImageFormat.R8G8B8A8_UNORM,
+                PresentationImageFormat.B8G8R8A8_UNORM, 1280, 720, 1280, 720);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment createInfo = arena.allocate(
+                    NativePresentationRuntime.s_hostImageCreateInfoLayout);
+            createInfo.fill((byte) -1);
+
+            NativePresentationRuntime.writeHostImageCreateInfo(createInfo, bootstrapHandles,
+                    1280, 720, 2, binding);
+
+            assertEquals(11L, createInfo.get(ValueLayout.JAVA_LONG, 0));
+            assertEquals(12L, createInfo.get(ValueLayout.JAVA_LONG, 8));
+            assertEquals(13L, createInfo.get(ValueLayout.JAVA_LONG, 16));
+            assertEquals(14L, createInfo.get(ValueLayout.JAVA_LONG, 24));
+            assertEquals(15L, createInfo.get(ValueLayout.JAVA_LONG, 32));
+            assertEquals(16L, createInfo.get(ValueLayout.JAVA_LONG, 40));
+            assertEquals(17, createInfo.get(ValueLayout.JAVA_INT, 48));
+            assertEquals(18, createInfo.get(ValueLayout.JAVA_INT, 52));
+            assertEquals(1280, createInfo.get(ValueLayout.JAVA_INT, 56));
+            assertEquals(720, createInfo.get(ValueLayout.JAVA_INT, 60));
+            assertEquals(2, createInfo.get(ValueLayout.JAVA_INT, 64));
+            assertEquals(0, createInfo.get(ValueLayout.JAVA_INT, 68));
+            assertEquals(19L, createInfo.get(ValueLayout.JAVA_LONG, 72));
+            assertEquals(1, createInfo.get(ValueLayout.JAVA_INT, 80));
+            assertEquals(2, createInfo.get(ValueLayout.JAVA_INT, 84));
+            assertEquals(1280, createInfo.get(ValueLayout.JAVA_INT, 88));
+            assertEquals(720, createInfo.get(ValueLayout.JAVA_INT, 92));
+        }
+    }
+
+    @Test
+    void ordinaryRuntimeRejectsHostImageMethodsWithoutNullPointerFailure() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        NativePresentationRuntime runtime = createRuntimeForCloseTest(libraryArena,
+                MethodHandles.lookup().findStatic(PresentationRuntimeBindingTests.class,
+                        "destroySuccessfully", MethodType.methodType(int.class, long.class)));
+
+        assertThrows(IllegalStateException.class,
+                runtime::detachHostImagePresentationResources);
+        assertThrows(IllegalStateException.class,
+                runtime::submitAndPresentHostImageFrame);
+        runtime.close();
+    }
+
+    @Test
+    void hostImageMethodsReuseSegmentsAndMapOperationResults() throws Exception {
+        Arena libraryArena = Arena.ofConfined();
+        HostImageInvocationObserver observer = new HostImageInvocationObserver();
+        NativePresentationRuntime runtime = createHostRuntimeForInvocationTest(
+                libraryArena, observer);
+
+        runtime.detachHostImagePresentationResources();
+        runtime.detachHostImagePresentationResources();
+        assertEquals(PresentationFrameStatus.SUBOPTIMAL,
+                runtime.submitAndPresentHostImageFrame());
+        assertEquals(PresentationFrameStatus.SUBOPTIMAL,
+                runtime.submitAndPresentHostImageFrame());
+        assertSame(observer.m_firstDetachResult, observer.m_secondDetachResult);
+        assertSame(observer.m_firstSubmitResult, observer.m_secondSubmitResult);
+
+        observer.m_detachOperationResult = 3;
+        NativePresentationRuntimeException detachFailure = assertThrows(
+                NativePresentationRuntimeException.class,
+                runtime::detachHostImagePresentationResources);
+        assertEquals(3, detachFailure.operationResultCode());
+        assertEquals(-77, detachFailure.vulkanResult());
+        assertEquals(NativePresentationRuntime.s_detachHostImageResourcesSymbolName,
+                detachFailure.nativeSymbolName());
+
+        observer.m_detachOperationResult = 0;
+        observer.m_submitOperationResult = 3;
+        NativePresentationRuntimeException submitFailure = assertThrows(
+                NativePresentationRuntimeException.class,
+                runtime::submitAndPresentHostImageFrame);
+        assertEquals(3, submitFailure.operationResultCode());
+        assertEquals(-88, submitFailure.vulkanResult());
+        runtime.close();
+        assertThrows(IllegalStateException.class,
+                runtime::detachHostImagePresentationResources);
+        assertThrows(IllegalStateException.class,
+                runtime::submitAndPresentHostImageFrame);
+    }
 
     @Test
     void submitAndPresentClearFrameSymbolNameMatchesVersionOneContract() {
@@ -286,7 +432,8 @@ class PresentationRuntimeBindingTests {
         Constructor<NativePresentationRuntime> constructor =
                 NativePresentationRuntime.class.getDeclaredConstructor(
                         Arena.class, MethodHandle.class, MethodHandle.class, MethodHandle.class,
-                        MethodHandle.class, MethodHandle.class, MemorySegment.class,
+                        MethodHandle.class, MethodHandle.class, MethodHandle.class,
+                        MethodHandle.class, MemorySegment.class, MemorySegment.class,
                         MemorySegment.class, MemorySegment.class, long.class, int.class,
                         int.class, int.class, int.class);
         constructor.setAccessible(true);
@@ -294,8 +441,47 @@ class PresentationRuntimeBindingTests {
         MemorySegment priorMetrics = libraryArena.allocate(112, 8);
         MemorySegment submitResult = libraryArena.allocate(8, 4);
         return constructor.newInstance(libraryArena, destroyHandle, beginHandle, submitHandle,
-                presentClearHandle, submitAndPresentClearFrameHandle, beginResult, priorMetrics,
-                submitResult, 0L, 37, 1, 0, 3);
+                presentClearHandle, submitAndPresentClearFrameHandle, null, null, beginResult,
+                priorMetrics, submitResult, null, 0L, 37, 1, 0, 3);
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; the caller owns the supplied confined Arena.
+     * Creates a host runtime backed by Java-only detach and submit handles.
+     *
+     * @param Arena libraryArena Confined Arena owned by the returned runtime
+     * @param HostImageInvocationObserver observer Java-only host invocation observer
+     * @return NativePresentationRuntime Host runtime configured for boundary mapping tests
+     * @throws Exception When MethodHandle or reflective constructor access fails
+     * @warning MemoryOwnership: The returned runtime owns libraryArena and every allocated
+     *          segment. The observer retains segment references only until this test closes it.
+     */
+    private static NativePresentationRuntime createHostRuntimeForInvocationTest(
+            Arena libraryArena, HostImageInvocationObserver observer) throws Exception {
+        MethodHandles.Lookup methodLookup = MethodHandles.lookup();
+        MethodHandle destroyHandle = methodLookup.findStatic(
+                PresentationRuntimeBindingTests.class, "destroySuccessfully",
+                MethodType.methodType(int.class, long.class));
+        MethodHandle detachHandle = methodLookup.findVirtual(
+                HostImageInvocationObserver.class, "detach",
+                MethodType.methodType(int.class, long.class, MemorySegment.class))
+                .bindTo(observer);
+        MethodHandle hostSubmitHandle = methodLookup.findVirtual(
+                HostImageInvocationObserver.class, "submit",
+                MethodType.methodType(int.class, long.class, MemorySegment.class))
+                .bindTo(observer);
+        Constructor<NativePresentationRuntime> constructor =
+                NativePresentationRuntime.class.getDeclaredConstructor(
+                        Arena.class, MethodHandle.class, MethodHandle.class, MethodHandle.class,
+                        MethodHandle.class, MethodHandle.class, MethodHandle.class,
+                        MethodHandle.class, MemorySegment.class, MemorySegment.class,
+                        MemorySegment.class, MemorySegment.class, long.class, int.class,
+                        int.class, int.class, int.class);
+        constructor.setAccessible(true);
+        return constructor.newInstance(libraryArena, destroyHandle, destroyHandle, destroyHandle,
+                destroyHandle, destroyHandle, detachHandle, hostSubmitHandle,
+                libraryArena.allocate(40, 8), libraryArena.allocate(112, 8),
+                libraryArena.allocate(8, 4), libraryArena.allocate(8, 4), 0L, 37, 1, 0, 3);
     }
 
     /**
@@ -547,6 +733,66 @@ class PresentationRuntimeBindingTests {
             return runtimeAddress == 0L && clearRed == 0.1f && clearGreen == 0.2f
                     && clearBlue == 0.3f
                     ? m_submitAndPresentClearFrameOperationResult : 1;
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Test-confined; one test thread invokes each instance serially.
+     * Observes host detach and submit calls and writes deterministic boundary outputs.
+     * @warning MemoryOwnership: Retained MemorySegment references remain owned by the test
+     *          runtime and must not be accessed after that runtime closes its Arena.
+     */
+    private static final class HostImageInvocationObserver {
+        private MemorySegment m_firstDetachResult;
+        private MemorySegment m_secondDetachResult;
+        private MemorySegment m_firstSubmitResult;
+        private MemorySegment m_secondSubmitResult;
+        private int m_detachInvocationCount;
+        private int m_submitInvocationCount;
+        private int m_detachOperationResult;
+        private int m_submitOperationResult;
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke serially from the owning test thread.
+         * Writes and observes one reusable detach result.
+         *
+         * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+         * @param MemorySegment detachResult Writable reusable detach output
+         * @return int Configured operation result
+         * @warning MemoryOwnership: The runtime owns detachResult; this method retains its
+         *          reference only for same-lifetime identity assertions.
+         */
+        private int detach(long runtimeAddress, MemorySegment detachResult) {
+            detachResult.fill((byte) 0);
+            detachResult.set(ValueLayout.JAVA_INT, 0, -77);
+            if (m_detachInvocationCount++ == 0) {
+                m_firstDetachResult = detachResult;
+            } else if (m_detachInvocationCount == 2) {
+                m_secondDetachResult = detachResult;
+            }
+            return runtimeAddress == 0L ? m_detachOperationResult : 1;
+        }
+
+        /**
+         * @note ThreadSafety: Test-confined; invoke serially from the owning test thread.
+         * Writes and observes one reusable host submit result.
+         *
+         * @param long runtimeAddress Synthetic runtime value that is never dereferenced
+         * @param MemorySegment submitResult Writable reusable submit output
+         * @return int Configured operation result
+         * @warning MemoryOwnership: The runtime owns submitResult; this method retains its
+         *          reference only for same-lifetime identity assertions.
+         */
+        private int submit(long runtimeAddress, MemorySegment submitResult) {
+            submitResult.fill((byte) 0);
+            submitResult.set(ValueLayout.JAVA_INT, 0, 3);
+            submitResult.set(ValueLayout.JAVA_INT, 4, -88);
+            if (m_submitInvocationCount++ == 0) {
+                m_firstSubmitResult = submitResult;
+            } else if (m_submitInvocationCount == 2) {
+                m_secondSubmitResult = submitResult;
+            }
+            return runtimeAddress == 0L ? m_submitOperationResult : 1;
         }
     }
 }
