@@ -4,17 +4,88 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #include <vulkan/vulkan.h>
 
+#include "BarriEww/Interoperability/PresentationImageFormat.hpp"
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
+#include "BarriEww/Vulkan/VulkanPresentationImageFormatMapping.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
 #include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
 
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
 using barrieww::NativePresentationRuntimeOperationResult;
+
+static_assert(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::R8G8B8A8Unorm)
+              == 1u);
+static_assert(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::B8G8R8A8Unorm)
+              == 2u);
+static_assert(barrieww::mapPresentationImageFormat(
+                  barrieww::PresentationImageFormat::R8G8B8A8Unorm)
+              == VK_FORMAT_R8G8B8A8_UNORM);
+static_assert(barrieww::mapPresentationImageFormat(
+                  barrieww::PresentationImageFormat::B8G8R8A8Unorm)
+              == VK_FORMAT_B8G8R8A8_UNORM);
+static_assert(barrieww::mapPresentationImageFormat(
+                  static_cast<barrieww::PresentationImageFormat>(UINT32_MAX))
+              == VK_FORMAT_UNDEFINED);
+
+static_assert(sizeof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1) == 96u);
+static_assert(alignof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1) == 8u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       instanceHandle) == 0u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       physicalDeviceHandle) == 8u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       logicalDeviceHandle) == 16u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       surfaceHandle) == 24u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       graphicsQueueHandle) == 32u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       presentQueueHandle) == 40u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       graphicsQueueFamilyIndex) == 48u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       presentQueueFamilyIndex) == 52u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framebufferWidth) == 56u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framebufferHeight) == 60u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framesInFlightCount) == 64u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       reservedFlags) == 68u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageHandle) == 72u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageFormatValue) == 80u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       requestedSurfaceFormatValue) == 84u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageWidth) == 88u);
+static_assert(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageHeight) == 92u);
+static_assert(std::is_standard_layout_v<
+              barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1>);
+static_assert(std::is_trivially_copyable_v<
+              barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1>);
+
+static_assert(sizeof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1)
+              == 8u);
+static_assert(alignof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1)
+              == 4u);
+static_assert(offsetof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1,
+                       vulkanResult) == 0u);
+static_assert(offsetof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1,
+                       reserved) == 4u);
+static_assert(std::is_standard_layout_v<
+              barrieww::NativePresentationDetachHostImageResourcesResultVersion1>);
+static_assert(std::is_trivially_copyable_v<
+              barrieww::NativePresentationDetachHostImageResourcesResultVersion1>);
 
 namespace {
 
@@ -82,6 +153,71 @@ NativePresentationRuntimeCreateInfoVersion1 makeCreateInfo() {
 }
 
 } // namespace
+
+TEST_CASE("Presentation image format values map strictly to Vulkan formats",
+          "[presentationRuntime][formatMapping]") {
+    REQUIRE(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::R8G8B8A8Unorm)
+            == 1u);
+    REQUIRE(static_cast<std::uint32_t>(barrieww::PresentationImageFormat::B8G8R8A8Unorm)
+            == 2u);
+    REQUIRE(barrieww::mapPresentationImageFormat(
+                barrieww::PresentationImageFormat::R8G8B8A8Unorm)
+            == VK_FORMAT_R8G8B8A8_UNORM);
+    REQUIRE(barrieww::mapPresentationImageFormat(
+                barrieww::PresentationImageFormat::B8G8R8A8Unorm)
+            == VK_FORMAT_B8G8R8A8_UNORM);
+    REQUIRE(barrieww::mapPresentationImageFormat(
+                static_cast<barrieww::PresentationImageFormat>(UINT32_MAX))
+            == VK_FORMAT_UNDEFINED);
+}
+
+TEST_CASE("Host image presentation boundary layouts remain fixed",
+          "[presentationRuntime][layout]") {
+    REQUIRE(sizeof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1) == 96u);
+    REQUIRE(alignof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1) == 8u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     instanceHandle) == 0u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     physicalDeviceHandle) == 8u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     logicalDeviceHandle) == 16u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     surfaceHandle) == 24u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     graphicsQueueHandle) == 32u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     presentQueueHandle) == 40u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     graphicsQueueFamilyIndex) == 48u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     presentQueueFamilyIndex) == 52u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     framebufferWidth) == 56u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     framebufferHeight) == 60u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     framesInFlightCount) == 64u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     reservedFlags) == 68u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     hostImageHandle) == 72u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     hostImageFormatValue) == 80u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     requestedSurfaceFormatValue) == 84u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     hostImageWidth) == 88u);
+    REQUIRE(offsetof(barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                     hostImageHeight) == 92u);
+    REQUIRE(sizeof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1)
+            == 8u);
+    REQUIRE(alignof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1)
+            == 4u);
+    REQUIRE(offsetof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1,
+                     vulkanResult) == 0u);
+    REQUIRE(offsetof(barrieww::NativePresentationDetachHostImageResourcesResultVersion1,
+                     reserved) == 4u);
+}
 
 extern "C" VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     VkPhysicalDevice physicalDevice, VkSurfaceKHR surface,

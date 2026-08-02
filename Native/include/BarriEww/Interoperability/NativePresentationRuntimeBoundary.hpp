@@ -87,6 +87,75 @@ static_assert(sizeof(NativePresentationRuntimeCreateResultVersion1) == 32u);
 static_assert(std::is_standard_layout_v<NativePresentationRuntimeCreateResultVersion1>);
 
 /**
+ * @note ThreadSafety: Plain input record; separate instances are concurrency-safe.
+ * @brief Java-owned Vulkan bootstrap and host-image handles borrowed by one Native
+ *        host-image presentation runtime. reservedFlags must be zero.
+ * @warning MemoryOwnership: Java owns every encoded Vulkan handle and keeps it valid until
+ *          host-image resources are detached or Native runtime destruction returns. Native
+ *          copies scalar values and destroys none of the borrowed objects.
+ */
+struct NativeHostImagePresentationRuntimeCreateInfoVersion1 {
+    std::uint64_t instanceHandle;
+    std::uint64_t physicalDeviceHandle;
+    std::uint64_t logicalDeviceHandle;
+    std::uint64_t surfaceHandle;
+    std::uint64_t graphicsQueueHandle;
+    std::uint64_t presentQueueHandle;
+    std::uint32_t graphicsQueueFamilyIndex;
+    std::uint32_t presentQueueFamilyIndex;
+    std::uint32_t framebufferWidth;
+    std::uint32_t framebufferHeight;
+    std::uint32_t framesInFlightCount;
+    std::uint32_t reservedFlags;
+    std::uint64_t hostImageHandle;
+    std::uint32_t hostImageFormatValue;
+    std::uint32_t requestedSurfaceFormatValue;
+    std::uint32_t hostImageWidth;
+    std::uint32_t hostImageHeight;
+};
+
+static_assert(sizeof(NativeHostImagePresentationRuntimeCreateInfoVersion1) == 96u);
+static_assert(alignof(NativeHostImagePresentationRuntimeCreateInfoVersion1) == 8u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       instanceHandle) == 0u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       physicalDeviceHandle) == 8u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       logicalDeviceHandle) == 16u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       surfaceHandle) == 24u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       graphicsQueueHandle) == 32u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       presentQueueHandle) == 40u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       graphicsQueueFamilyIndex) == 48u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       presentQueueFamilyIndex) == 52u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framebufferWidth) == 56u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framebufferHeight) == 60u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       framesInFlightCount) == 64u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       reservedFlags) == 68u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageHandle) == 72u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageFormatValue) == 80u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       requestedSurfaceFormatValue) == 84u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageWidth) == 88u);
+static_assert(offsetof(NativeHostImagePresentationRuntimeCreateInfoVersion1,
+                       hostImageHeight) == 92u);
+static_assert(std::is_standard_layout_v<
+              NativeHostImagePresentationRuntimeCreateInfoVersion1>);
+static_assert(std::is_trivially_copyable_v<
+              NativeHostImagePresentationRuntimeCreateInfoVersion1>);
+
+/**
  * @note ThreadSafety: Plain output record; separate instances are concurrency-safe.
  * @brief Completed-frame CPU/GPU timings and identity (§6.7.3). GPU durations are populated
  *        only when timestamp metrics are compiled in; validFlags reports which are valid.
@@ -148,6 +217,28 @@ struct NativePresentationSubmitFrameResultVersion1 {
 static_assert(sizeof(NativePresentationSubmitFrameResultVersion1) == 8u);
 static_assert(std::is_standard_layout_v<NativePresentationSubmitFrameResultVersion1>);
 
+/**
+ * @note ThreadSafety: Plain output record; separate instances are concurrency-safe.
+ * @brief Host-image resource detachment result containing a raw Vulkan wait result.
+ * @warning MemoryOwnership: Java owns the record; Native writes it synchronously and does
+ *          not retain its address.
+ */
+struct NativePresentationDetachHostImageResourcesResultVersion1 {
+    std::int32_t vulkanResult;
+    std::uint32_t reserved;
+};
+
+static_assert(sizeof(NativePresentationDetachHostImageResourcesResultVersion1) == 8u);
+static_assert(alignof(NativePresentationDetachHostImageResourcesResultVersion1) == 4u);
+static_assert(offsetof(NativePresentationDetachHostImageResourcesResultVersion1,
+                       vulkanResult) == 0u);
+static_assert(offsetof(NativePresentationDetachHostImageResourcesResultVersion1,
+                       reserved) == 4u);
+static_assert(std::is_standard_layout_v<
+              NativePresentationDetachHostImageResourcesResultVersion1>);
+static_assert(std::is_trivially_copyable_v<
+              NativePresentationDetachHostImageResourcesResultVersion1>);
+
 } // namespace barrieww
 
 /**
@@ -166,6 +257,24 @@ extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
 barrieww::NativePresentationRuntimeOperationResult
 barriEwwCreatePresentationRuntimeVersion1(
     const barrieww::NativePresentationRuntimeCreateInfoVersion1* createInfo,
+    barrieww::NativePresentationRuntimeCreateResultVersion1* createResult) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the single presentation/render thread.
+ * @brief Creates the Native-owned Version 1 host-image presentation runtime around
+ *        Java-owned Vulkan bootstrap and host-image handles. This is a non-critical call.
+ * @param const barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo
+ *        Borrowed fixed-layout host-image creation input
+ * @param barrieww::NativePresentationRuntimeCreateResultVersion1* createResult Writable
+ *        creation result, cleared before work
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns both records and every input handle; Native borrows
+ *          them during the call. Success transfers ownership only of runtimeAddress to Java.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwCreateHostImagePresentationRuntimeVersion1(
+    const barrieww::NativeHostImagePresentationRuntimeCreateInfoVersion1* createInfo,
     barrieww::NativePresentationRuntimeCreateResultVersion1* createResult) noexcept;
 
 /**
@@ -231,6 +340,40 @@ extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
 barrieww::NativePresentationRuntimeOperationResult
 barriEwwSubmitAndPresentClearFrameVersion1(
     std::uint64_t runtimeAddress, float clearRed, float clearGreen, float clearBlue,
+    barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
+ * @brief Idempotently waits submitted frame-slot fences and detaches resources that refer
+ *        to the borrowed host image. This is a non-critical call.
+ * @param std::uint64_t runtimeAddress Native-owned runtime address
+ * @param barrieww::NativePresentationDetachHostImageResourcesResultVersion1* detachResult
+ *        Writable result, cleared before work
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns detachResult; Native writes it synchronously and does
+ *          not retain its address. Native destroys only its resources for the borrowed image.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwDetachHostImagePresentationResourcesVersion1(
+    std::uint64_t runtimeAddress,
+    barrieww::NativePresentationDetachHostImageResourcesResultVersion1* detachResult) noexcept;
+
+/**
+ * @note ThreadSafety: Not thread-safe; call on the owning presentation/render thread.
+ * @brief Submits the open frame's prerecorded host-image command and presents it. This is
+ *        a non-critical call and requires attached host-image resources.
+ * @param std::uint64_t runtimeAddress Native-owned runtime address
+ * @param barrieww::NativePresentationSubmitFrameResultVersion1* submitResult Writable result,
+ *        cleared before work
+ * @return barrieww::NativePresentationRuntimeOperationResult Stable operation result
+ * @warning MemoryOwnership: Java owns submitResult; Native writes it synchronously and does
+ *          not retain its address. The borrowed host image remains Java-owned.
+ */
+extern "C" BARRIEWW_PRESENTATION_FFM_EXPORT
+barrieww::NativePresentationRuntimeOperationResult
+barriEwwSubmitAndPresentHostImageFrameVersion1(
+    std::uint64_t runtimeAddress,
     barrieww::NativePresentationSubmitFrameResultVersion1* submitResult) noexcept;
 
 /**
