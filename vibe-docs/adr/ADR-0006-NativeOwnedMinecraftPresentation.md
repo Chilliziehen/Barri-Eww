@@ -1,8 +1,8 @@
 # ADR-0006: Native-owned Minecraft presentation
 
-- **状态**: Accepted (2026-07-26，所有者逐项裁决 D1、D3–D6、D8–D10)
-  - **D2 接管点**：具体屏蔽手法留待实现期确定（形态高度依赖 mixin 实际命中情况）；
-    其中 `isAcquired()` 门控为**必须处理项**，不处理将直接黑屏。
+- **状态**: Accepted (2026-07-31，所有者逐项裁决 D1–D6、D8–D10)
+  - **D2 接管点**：D9 第 1 步的实现细节已定案为仅注入 `VulkanGpuSurface` 后端；
+    保留外层 `GpuSurface` 状态机自然满足两个 `isAcquired()` 门控与 blit 后 present 前置条件。
   - **D7 GUI alpha**：`待实测`，由 D9 第 3 步给出答案；**D8.4 的混合公式在其定案前不完备**，
     实现时不得自行假定。
   - 除上述两项外，本 ADR 条款为已批准决策。
@@ -87,23 +87,45 @@ Minecraft.runTick()
 - 不引入第二种 presentation 模式；ADR-0004 的所有权矩阵在 Minecraft 宿主下按上述映射
   继续有效。
 
-### D2. 四个接管点 `待裁决(实现细节)`
+### D2. D9 第 1 步接管点 `已裁决(实现细节)`
 
-| 接管点 | 位置 | 动作 |
-| ------ | ---- | ---- |
-| ① swapchain 创建 | `VulkanGpuSurface.configure` | 阻止 Minecraft 建立 swapchain |
-| ② acquire | `Minecraft.java:1245` → `acquireNextTexture()` | 由 Native 的 `beginFrame` 取代 |
-| ③ 世界渲染 | `LevelRenderer.render` HEAD | readiness 满足时 cancel |
-| ④ blit + present | `Minecraft.java:1294` / `VulkanGpuSurface.present()` | 由 Native 合成尾段 + present 取代 |
+D9 第 1 步严格在 `VulkanGpuSurface` 后端层注入，不取消外层 `GpuSurface`、
+`Minecraft.renderFrame` 或 `LevelRenderer`，也不注入 `VulkanCommandEncoder`：
 
-`VulkanGpuSurface` 持有内部状态(`currentImageIndex`、acquire/present semaphores、
-`swapchainOutOfDate`)，接管后必须保证 Minecraft 侧代码路径不进入非法状态或抛出。
-具体屏蔽方式(mixin 取消 / 重定向 / 空实现)在实现提案中确定。
+| 接管点 | 后端位置 | D9 第 1 步动作 |
+| ------ | -------- | -------------- |
+| swapchain 创建 | `VulkanGpuSurface.configure` | generation readiness 完整且 Native 已呈现 priming 帧后，取消本次后端 configure |
+| acquire | `VulkanGpuSurface.acquireNextTexture` | Native `beginFrame` 后取消后端 acquire |
+| blit | `VulkanGpuSurface.blitFromTexture` | taken-over generation 中取消为空操作 |
+| present | `VulkanGpuSurface.present` | Native 清色并 present 后取消后端 present |
+| teardown | `VulkanGpuSurface.close` | 在 vanilla teardown 前对 Native coordinator 做唯一一次 close；checked failure 记录一次 ERROR 后继续 vanilla close |
 
-**必须处理项 —— `isAcquired()` 门控**：`Minecraft.java:1309` 以
-`if (this.windowSurface.isAcquired())` 决定是否调用 `present()`。接管 acquire 后
-Minecraft 内部的 `currentImageIndex` 不再被设置，`isAcquired()` 可能返回 false，导致
-`present()` 永不被调用而直接黑屏。该门控必须一并接管或使其返回真值。
+外层 `GpuSurface` 先调用后端、再更新自身状态：configure 后保存 configuration，acquire 后置
+`hasImageAcquired=true` / `hasBlittedTexture=false`，空 blit 后置 `hasBlittedTexture=true`，present
+后清除 acquired。因此两个 `isAcquired()` 门控和「必须先 blit 才能 present」前置条件自然成立；
+实现不得伪造 `GpuSurface` 私有 wrapper 状态，也不得伪造 `VulkanGpuSurface.currentImageIndex`。
+接管期间 vanilla swapchain 保持为 0。
+
+configure 取消属于 generation 决策，且只发生在 coordinator 已创建、acquire、清色并实际
+present 一个 Native priming 帧之后。readiness 不完整或安全关闭旧 generation 后 replacement
+失败时，本次不取消，允许 vanilla 创建 swapchain；旧 generation 关闭失败、Native 所有权不确定
+时继续取消，避免同一 surface 上出现双 swapchain。
+
+一旦任一安全 `false` 返回允许 vanilla 在该 surface 上创建 swapchain，coordinator 永久关闭该
+surface 的后续 takeover 尝试；未来 `configure` 不再创建 Native runtime。§6.7.1 固定 destroy
+返回后 opaque address 永久失效，且当前 Native boundary 在形成 operation result 前执行 `delete`；
+因此 returned failure 与 invocation Throwable 均不得重试同一 address。Core 在唯一一次 destroy
+attempt 后无条件标记 closed 并关闭 library Arena，coordinator 丢弃 runtime reference。Mixin 对
+checked failure 只记录一次完整 ERROR 并继续 vanilla teardown；Mod 无法安全延长 Minecraft-owned
+device/surface/queue 的生命周期，重复 close callback 不再调用 coordinator 或重复记录日志。
+
+MC26.2 的 resize 顺序已实测并由字节码确认：`Minecraft.runTick` 先以新 window extent 调用后端
+`configure`，`GameRenderer.render` 随后才把 `mainRenderTarget` resize 到新 extent，且该 resize
+之后没有第二次后端 configure。D9 第 1 步不导入或读取宿主纹理，因此此阶段只校验 view/texture
+非空、color aspect、`COPY_SRC | TEXTURE_BINDING` usage、正数二维单 layer 与有效 mip 等静态属性；
+Native runtime 始终使用本次 `GpuSurface.Configuration` 的新 extent。D9 第 2 步起一旦导入并合成
+宿主纹理，必须在 target resize/generation 通知之后对 imported generation 强制执行 exact extent
+校验；本阶段澄清不修改 D8.2 的合成契约。
 
 ### D3. RDG 与 presentation 的职责边界 `已裁决`
 
@@ -284,6 +306,11 @@ Screenshot.takeScreenshot(this.mainRenderTarget, ...);         // GameRenderer.j
 - 换代时重建导入绑定、sampled view 与依赖其句柄的预录命令缓冲；沿用 ADR-0004 D3 的
   old-swapchain 与 generation 退休策略，不依赖全局 `vkDeviceWaitIdle`。
 - 句柄在一个 generation 内不变（Context 事实 2），故可被预录命令缓冲直接引用。
+- `GameRenderer.resize()` HEAD 必须经 additive FFM detach 先退休所有引用旧宿主 image 的
+  view/descriptor/预录命令；若此时已 acquire，保留同一 Native swapchain runtime 与 open frame
+  并使该帧走 clear 输出。detach 失败则取消完整 resize，禁止宿主销毁仍被借用的 image。
+  `RenderTarget.resize()` TAIL 发布新 generation 并请求 configure。禁止进入「已接管但无
+  runtime」状态，以维持 D10.3 每帧有输出不变式。
 - 若未来实测发现该纹理改为来自 `GraphicsResourceAllocator` 池化分配，回退方案为按
   `(frameSlot, textureIndex)` 展开预录矩阵，与 swapchain image 同法处理。
 
@@ -317,8 +344,8 @@ Minecraft 每帧只有这一次 `submit()`(`blitFromTexture` 在 `:1294` 仅录�
 
 由此，**同步无需任何 semaphore 交互**：Vulkan 的 submission order 语义规定 pipeline barrier
 的第一同步域覆盖同一队列上提交顺序更早的所有命令，因此我方 primary 起始处的一次 barrier
-(src = `COLOR_ATTACHMENT_OUTPUT | TRANSFER`，srcAccess = `COLOR_ATTACHMENT_WRITE |
-TRANSFER_WRITE`)即与 Minecraft 的 GUI 写入建立执行与内存依赖。
+(src = `COLOR_ATTACHMENT_OUTPUT | TRANSFER`，srcAccess = `MEMORY_WRITE`)即与 Minecraft
+的 GUI 写入建立执行与内存依赖。该 access 契约与 D5.3 一致；stage mask 仍限制实际执行依赖范围。
 
 #### 接管点与现有 API 一一对应
 
@@ -409,6 +436,68 @@ graph output、宿主 GUI 纹理与 swapchain image 的 extent 必须**完全相
 拷贝，**不触发 alpha 问题**。若省略第 3 步，D7 的 alpha 语义与图自身的正确性将在第 4 步
 同时引入而相互混淆。第 3 步的成本仅为把第 2 步的世界来源换成 clear。
 
+#### D9.1 2026-07-31 owner-approved step 1 empirical record
+
+本记录是 Windows 真实窗口的**经验验收**，不是 CI 自动化结果。Native clear 输入为线性
+`(0.08, 0.72, 0.93)`；按标准分段 raw-linear → sRGB 转换并量化到 8-bit 后，预期像素为
+`RGB(80, 221, 247)`。owner-approved 验收记录如下：
+
+| 状态 | client extent | samples | mean RGB | expected match |
+| ---- | ------------- | ------- | -------- | -------------- |
+| 初始 | `854x480` | 11,360 | `(80, 221, 247)` | 100% |
+| resize 1 | `1100x700` | 21,528 | `(80, 221, 247)` | 100% |
+| resize 2 | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+| minimize 5 s / restore | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+| focus away / back | `760x520` | 11,049 | `(80, 221, 247)` | 100% |
+
+验收过程按 Minecraft PID 关联真实 HWND，启用 per-monitor-v2 DPI awareness，以
+`PrintWindow(PW_RENDERFULLCONTENT)` 获取窗口位图，再用 `GetClientRect` 与
+`ClientToScreen` 精确裁出 client；依次执行两个 client resize、最小化 5 秒后恢复、聚焦到
+真实 `cmd.exe` HWND 后再聚焦回 Minecraft，最后正常关闭窗口并检查 `latest.log`。日志中无
+Mixin/Vulkan/presentation runtime 错误，且
+`Presentation takeover closed before Minecraft Vulkan surface teardown` 恰好出现一次。
+
+2026-07-31 Release/Vulkan/threaded-on 复验截图 SHA-256（截图本身为未跟踪验收产物，不提交）：
+
+| 截图 | SHA-256 |
+| ---- | ------- |
+| `task6-quality-initial-854x480.png` | `7fa843a8b51a8e93eef868c82c9eb7d92891d9c3e6078e5541c1b94448746f39` |
+| `task6-quality-resize-1100x700.png` | `9bd04ec5b4ca78c626282114e306b2d93494211012fb99d234db49ee8b48c6d4` |
+| `task6-quality-resize-760x520.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+| `task6-quality-restore-after-minimize.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+| `task6-quality-restore-after-focus.png` | `d053f5db3eade8188d181013d41cec40d79327ca86084b9f714a1a8a7ab03437` |
+
+Release FFM 的 durable command/provenance record 如下。构建目录为
+`C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality`，
+不使用仓库内 build directory：
+
+```text
+cmake -S D:\Repositories\ComputerGraphics\Barri-Eww\Native -B C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality -DCMAKE_BUILD_TYPE=Release -DBARRIEWW_BACKEND_VULKAN=ON -DTHREADED_RECORDING=ON -DBARRIEWW_BUILD_TESTS=ON -DBARRIEWW_ENABLE_COVERAGE=OFF
+cmake --build C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality --config Release --target BarriEwwNativeFfm
+```
+
+产物
+`C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality\ffm\BarriEwwNativeFfm.dll`
+的 SHA-256 为
+`4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0`。
+可见复验使用的完整运行语义为：
+
+```text
+Mod\gradlew.bat runClient -PbarriewwCoreLibraryPath="D:\Repositories\ComputerGraphics\Barri-Eww\Core\build\libs\BarriEwwCore-0.1.0.jar" -PbarriewwNativeLibraryPath="C:\Users\30367\AppData\Local\Temp\opencode\barri-eww-task6-release-20260731-quality\ffm\BarriEwwNativeFfm.dll" -PbarriewwConfiguration=release -PbarriewwBackend=vulkan -PbarriewwThreadedRecording=on --no-daemon
+```
+
+`latest.log` 记录的打包后提取路径为
+`C:\Users\30367\AppData\Local\Temp\barrieww-native\60328\4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0\BarriEwwNativeFfm.dll`，
+证明提取目录使用与打包 DLL 相同的 hash
+`4c004611198aecdbb058e345e2629b0a4c514dc4032e53d211533fb6aaa838e0`。最终
+`latest.log` SHA-256 为
+`7e15aae5dd1d1a49d5be1928b476c865953b67edbfb26421bc115c594a9401b5`，上述
+close-before-surface INFO 行计数为 `1`。本段跟踪文本是 durable command/provenance record；
+DLL、截图与运行日志按设计保持未跟踪。
+
+CI 自动化只覆盖 coordinator terminal 状态、Mixin 的 configure 镜像、close 调用次数与
+INFO/ERROR 互斥、测试和覆盖率门禁；它不宣称自动验证 OS 窗口生命周期或屏幕像素。
+
 ### D10. Readiness 与回退 `已裁决`
 
 #### D10.1 两层结构，回退能力不同
@@ -429,13 +518,21 @@ present」在物理上不可能。
 
 #### D10.2 presentation 接管的 readiness（generation 级）
 
-全部满足方可接管，任一不满足则**不阻止** Minecraft 创建 swapchain，游戏以原版路径运行：
+readiness 按 D9 验证阶段递进。当前 D9 第 1 步全部满足方可接管，任一不满足则**不阻止**
+Minecraft 创建 swapchain，游戏以原版路径运行：
 
 - 宿主图形后端为 Vulkan；
 - 设备能力协商成功（D2 的扩展/特性追加）；
+- 借用的 instance/device/surface/queue handles 完整且 queue/family 约束成立；
 - Native presentation runtime 创建成功；
-- 宿主 GUI 纹理校验通过（format/extent/usage，D5 与 D8.2）；
+- 宿主 color texture/view 的静态属性通过：非空、color aspect、`COPY_SRC` 与
+  `TEXTURE_BINDING` usage、正数二维单 layer 与有效 mip；D9 第 1 步不导入/读取该纹理，
+  因而不把尚未 resize 的旧 host extent 与本次 configure extent 比较；
 - graph module（若参与）材质化成功且健康。
+
+D9 第 2 步起导入/合成宿主 GUI 纹理时，readiness 必须在 Minecraft 完成
+`mainRenderTarget.resize` 或发出等价 generation 通知后，按 D5 与 D8.2 强制校验 imported texture
+与目标 generation 的 exact extent。该后续门禁不得前移为 D9 第 1 步的无读取依赖。
 
 #### D10.3 接管后的失败处理（无原版回退）
 
@@ -444,6 +541,10 @@ present」在物理上不可能。
 - `RecreateRequired` / `SurfaceUnavailable` → 换代重建，跳过本帧；
 - 不可恢复失败 → 记入 failure context，本帧呈现黑帧或上一帧内容，并置位
   **延迟回退**标志：下一个 generation（如 resize）不再接管，由 Minecraft 自建 swapchain 恢复原版路径。
+
+宿主 main target 的预期 generation replacement 不等同于不可恢复失败：按 D5.4 在销毁旧
+image 前只 detach imported-host resources，保留 clear-capable Native runtime；该帧 clear 并
+present，同时请求 configure。由此 replacement 慢路径同样满足下述每帧输出不变式。
 
 **不变式：已接管即每帧必须有输出。** 不允许出现「已接管但不 present」的状态——那将表现为
 画面冻结或黑屏而无任何诊断线索。
@@ -470,8 +571,6 @@ present」在物理上不可能。
 ## Open
 
 - **D7 GUI alpha**：由 D9 第 3 步实测定案；在此之前 D8.4 的混合公式不完备。
-- **D2 屏蔽手法**：`VulkanGpuSurface` 的具体屏蔽方式与其内部状态一致性保证，
-  留待实现期（D9 第 1 步）确定。
 - D8 合成规则是否、何时对 TA 开放——**无既定计划**，待真实需求出现时另行裁决。
 - 与 ADR-0005 能力清单的协同：presentation 相关参数(输出分辨率、色彩空间)是否进入
   数据源清单。

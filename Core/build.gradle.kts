@@ -83,9 +83,11 @@ val nativeIntegrationTest = tasks.register<Test>("nativeIntegrationTest") {
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test, nativeIntegrationTest)
-    // Only the main-library test suites contribute to the §4.5 coverage report; the demo
-    // source set's demoTest exec is deliberately excluded.
+    mustRunAfter("demoTest")
+    // Linux Vulkan cells run demoTest explicitly; Windows backend-neutral cells leave this
+    // optional execution file absent and never resolve presentation symbols.
     executionData(tasks.test.get(), nativeIntegrationTest.get())
+    executionData(layout.buildDirectory.file("jacoco/demoTest.exec"))
     reports {
         xml.required = true
     }
@@ -93,7 +95,9 @@ tasks.jacocoTestReport {
 
 tasks.jacocoTestCoverageVerification {
     dependsOn(tasks.test, nativeIntegrationTest)
+    mustRunAfter("demoTest")
     executionData(tasks.test.get(), nativeIntegrationTest.get())
+    executionData(layout.buildDirectory.file("jacoco/demoTest.exec"))
     violationRules {
         rule {
             limit {
@@ -105,10 +109,7 @@ tasks.jacocoTestCoverageVerification {
     }
 }
 
-// ── Visible demo (ADR-0004): Java LWJGL/GLFW bootstrap + presentation FFM binding. ──
-// The window-dependent presentation runtime binding and the GLFW app live here, not in the
-// main library, so they are integration/orchestration glue outside the §4.5 main-library
-// coverage gate (jacoco reports over the main source set only).
+// ── Visible demo (ADR-0004): Java LWJGL/GLFW bootstrap around the Core presentation binding. ──
 val lwjglVersion = "3.3.4"
 val lwjglNatives = when {
     org.gradle.internal.os.OperatingSystem.current().isWindows -> "natives-windows"

@@ -99,8 +99,6 @@ if /i "%selectedModule%"=="all" (
     set "moduleSequence=%selectedModule%"
 )
 
-for %%M in (%moduleSequence%) do call :validateManifest %%M || exit /b !errorlevel!
-
 set "cmakeConfiguration=Debug"
 if /i "%buildConfiguration%"=="release" set "cmakeConfiguration=Release"
 set "threadedRecordingCmake=ON"
@@ -110,70 +108,142 @@ if /i "%buildTests%"=="off" set "buildTestsCmake=OFF"
 set "enableCoverageCmake=OFF"
 if /i "%enableCoverage%"=="on" set "enableCoverageCmake=ON"
 set "nativeBuildDirectory=%scriptDirectory%Native\build-root-%buildConfiguration%-threaded-%threadedRecording%"
+set "coreLibraryFile=%scriptDirectory%Core\build\libs\BarriEwwCore-0.1.0.jar"
+set "nativeLibraryFile=%nativeBuildDirectory%\ffm\BarriEwwNativeFfm.dll"
 
-for %%M in (%moduleSequence%) do (
-    echo.
-    echo == Building %%M ==
-    call :buildModule %%M
+set "firstFailureCode=0"
+for %%M in (%moduleSequence%) do call :processModule %%M
+exit /b %firstFailureCode%
+
+:processModule
+if not "%firstFailureCode%"=="0" exit /b 0
+call :validateManifest %~1
+set "moduleExitCode=%errorlevel%"
+if not "%moduleExitCode%"=="0" goto recordModuleFailure
+echo.
+echo == Building %~1 ==
+call :buildModule %~1
+set "moduleExitCode=%errorlevel%"
+if not "%moduleExitCode%"=="0" goto recordModuleFailure
+exit /b 0
+
+:recordModuleFailure
+set "firstFailureCode=%moduleExitCode%"
+exit /b 0
+
+:buildModule
+if /i "%~1"=="native" goto buildNative
+if /i "%~1"=="core" goto buildCore
+if /i "%~1"=="mod" goto buildMod
+if /i "%~1"=="editor" goto buildEditor
+exit /b 2
+
+:buildNative
+echo + cmake -S "%scriptDirectory%Native" -B "%nativeBuildDirectory%" -DCMAKE_BUILD_TYPE=%cmakeConfiguration% -DBARRIEWW_BACKEND_VULKAN=ON -DTHREADED_RECORDING=%threadedRecordingCmake% -DBARRIEWW_BUILD_TESTS=%buildTestsCmake% -DBARRIEWW_ENABLE_COVERAGE=%enableCoverageCmake%
+call cmake -S "%scriptDirectory%Native" -B "%nativeBuildDirectory%" -DCMAKE_BUILD_TYPE=%cmakeConfiguration% -DBARRIEWW_BACKEND_VULKAN=ON -DTHREADED_RECORDING=%threadedRecordingCmake% -DBARRIEWW_BUILD_TESTS=%buildTestsCmake% -DBARRIEWW_ENABLE_COVERAGE=%enableCoverageCmake%
+if errorlevel 1 exit /b !errorlevel!
+echo + cmake --build "%nativeBuildDirectory%" --config %cmakeConfiguration%
+call cmake --build "%nativeBuildDirectory%" --config %cmakeConfiguration%
+if errorlevel 1 exit /b !errorlevel!
+if /i "%buildTests%"=="on" (
+    echo + ctest --test-dir "%nativeBuildDirectory%" -C %cmakeConfiguration% --output-on-failure
+    call ctest --test-dir "%nativeBuildDirectory%" -C %cmakeConfiguration% --output-on-failure
     if errorlevel 1 exit /b !errorlevel!
 )
 exit /b 0
 
-:buildModule
-if /i "%~1"=="native" call :buildNative & exit /b !errorlevel!
-if /i "%~1"=="core" call :buildCore & exit /b !errorlevel!
-if /i "%~1"=="mod" call :buildMod & exit /b !errorlevel!
-if /i "%~1"=="editor" call :buildEditor & exit /b !errorlevel!
-exit /b 2
-
-:buildNative
-call :run cmake -S "%scriptDirectory%Native" -B "%nativeBuildDirectory%" -DCMAKE_BUILD_TYPE=%cmakeConfiguration% -DBARRIEWW_BACKEND_VULKAN=ON -DTHREADED_RECORDING=%threadedRecordingCmake% -DBARRIEWW_BUILD_TESTS=%buildTestsCmake% -DBARRIEWW_ENABLE_COVERAGE=%enableCoverageCmake% || exit /b !errorlevel!
-call :run cmake --build "%nativeBuildDirectory%" --config %cmakeConfiguration% || exit /b !errorlevel!
-if /i "%buildTests%"=="on" call :run ctest --test-dir "%nativeBuildDirectory%" -C %cmakeConfiguration% --output-on-failure || exit /b !errorlevel!
-exit /b 0
-
 :buildCore
 set "coreTasks=clean assemble"
-if /i "%buildTests%"=="on" set "coreTasks=clean test"
+set "coreNativeLibraryArgument="
+if /i "%buildTests%"=="on" set "coreTasks=clean test assemble"
 if /i "%enableCoverage%"=="on" (
-    set "nativeLibraryFile=%nativeBuildDirectory%\ffm\BarriEwwNativeFfm.dll"
     if not exist "!nativeLibraryFile!" (
         call :fail "Core coverage requires the matching Native FFM library: !nativeLibraryFile!"
-        exit /b !errorlevel!
+        exit /b 2
     )
     set "coreTasks=!coreTasks! nativeIntegrationTest jacocoTestReport jacocoTestCoverageVerification"
-    call :run "%scriptDirectory%Core\gradlew.bat" -p "%scriptDirectory%Core" !coreTasks! -PbarriewwNativeLibraryPath="!nativeLibraryFile!" -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
-) else (
-    call :run "%scriptDirectory%Core\gradlew.bat" -p "%scriptDirectory%Core" !coreTasks! -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
+    set "coreNativeLibraryArgument=-PbarriewwNativeLibraryPath="!nativeLibraryFile!""
 )
+echo + "%scriptDirectory%Core\gradlew.bat" -p "%scriptDirectory%Core" !coreTasks! !coreNativeLibraryArgument! -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
+call "%scriptDirectory%Core\gradlew.bat" -p "%scriptDirectory%Core" !coreTasks! !coreNativeLibraryArgument! -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
 exit /b %errorlevel%
 
 :buildMod
 set "modTasks=clean assemble"
-if /i "%buildTests%"=="on" set "modTasks=clean test"
-call :run "%scriptDirectory%Mod\gradlew.bat" -p "%scriptDirectory%Mod" %modTasks% -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
+if /i "%buildTests%"=="on" set "modTasks=clean test assemble"
+if /i "%enableCoverage%"=="on" set "modTasks=!modTasks! jacocoTestReport jacocoTestCoverageVerification"
+if not exist "!coreLibraryFile!" (
+    call :fail "Mod packaging requires the selected Core jar: !coreLibraryFile!"
+    exit /b 2
+)
+if not exist "!nativeLibraryFile!" (
+    call :fail "Mod packaging requires the selected Native FFM library: !nativeLibraryFile!"
+    exit /b 2
+)
+call :run "%scriptDirectory%Mod\gradlew.bat" -p "%scriptDirectory%Mod" !modTasks! -PbarriewwCoreLibraryPath="!coreLibraryFile!" -PbarriewwNativeLibraryPath="!nativeLibraryFile!" -PbarriewwConfiguration=%buildConfiguration% -PbarriewwBackend=%selectedBackend% -PbarriewwThreadedRecording=%threadedRecording% --no-daemon
 exit /b %errorlevel%
 
 :buildEditor
-call :run npm --prefix "%scriptDirectory%Editor" ci || exit /b !errorlevel!
+echo + npm --prefix "%scriptDirectory%Editor" ci
+call npm --prefix "%scriptDirectory%Editor" ci
+if errorlevel 1 exit /b !errorlevel!
 if /i "%buildTests%"=="on" (
     if /i "%enableCoverage%"=="on" (
-        call :run npm --prefix "%scriptDirectory%Editor" run test -- --coverage || exit /b !errorlevel!
+        echo + npm --prefix "%scriptDirectory%Editor" run test -- --coverage
+        call npm --prefix "%scriptDirectory%Editor" run test -- --coverage
+        if errorlevel 1 exit /b !errorlevel!
     ) else (
-        call :run npm --prefix "%scriptDirectory%Editor" test || exit /b !errorlevel!
+        echo + npm --prefix "%scriptDirectory%Editor" test
+        call npm --prefix "%scriptDirectory%Editor" test
+        if errorlevel 1 exit /b !errorlevel!
     )
 )
-call :run npm --prefix "%scriptDirectory%Editor" run build
+echo + npm --prefix "%scriptDirectory%Editor" run build
+call npm --prefix "%scriptDirectory%Editor" run build
 exit /b %errorlevel%
 
 :validateManifest
-if /i "%~1"=="native" if not exist "%scriptDirectory%Native\CMakeLists.txt" call :fail "Native/CMakeLists.txt is missing" & exit /b !errorlevel!
-if /i "%~1"=="core" if not exist "%scriptDirectory%Core\settings.gradle.kts" call :fail "Core Gradle manifest is missing" & exit /b !errorlevel!
-if /i "%~1"=="core" if not exist "%scriptDirectory%Core\gradlew.bat" call :fail "Core Gradle wrapper is missing" & exit /b !errorlevel!
-if /i "%~1"=="mod" if not exist "%scriptDirectory%Mod\settings.gradle.kts" call :fail "Mod build manifest is missing; Mod is not implemented" & exit /b !errorlevel!
-if /i "%~1"=="mod" if not exist "%scriptDirectory%Mod\gradlew.bat" call :fail "Mod Gradle wrapper is missing; Mod is not implemented" & exit /b !errorlevel!
-if /i "%~1"=="editor" if not exist "%scriptDirectory%Editor\package.json" call :fail "Editor/package.json is missing; Editor is not implemented" & exit /b !errorlevel!
+if /i "%~1"=="native" goto validateNativeManifest
+if /i "%~1"=="core" goto validateCoreManifest
+if /i "%~1"=="mod" goto validateModManifest
+if /i "%~1"=="editor" goto validateEditorManifest
+exit /b 2
+
+:validateNativeManifest
+if exist "%scriptDirectory%Native\CMakeLists.txt" exit /b 0
+call :fail "Native/CMakeLists.txt is missing"
+exit /b 2
+
+:validateCoreManifest
+if not exist "%scriptDirectory%Core\settings.gradle.kts" goto coreManifestMissing
+if not exist "%scriptDirectory%Core\gradlew.bat" goto coreWrapperMissing
 exit /b 0
+
+:coreManifestMissing
+call :fail "Core Gradle manifest is missing"
+exit /b 2
+
+:coreWrapperMissing
+call :fail "Core Gradle wrapper is missing"
+exit /b 2
+
+:validateModManifest
+if not exist "%scriptDirectory%Mod\settings.gradle.kts" goto modManifestMissing
+if not exist "%scriptDirectory%Mod\gradlew.bat" goto modWrapperMissing
+exit /b 0
+
+:modManifestMissing
+call :fail "Mod build manifest is missing; Mod is not implemented"
+exit /b 2
+
+:modWrapperMissing
+call :fail "Mod Gradle wrapper is missing; Mod is not implemented"
+exit /b 2
+
+:validateEditorManifest
+if exist "%scriptDirectory%Editor\package.json" exit /b 0
+call :fail "Editor/package.json is missing; Editor is not implemented"
+exit /b 2
 
 :requireValue
 if "%~2"=="" call :fail "missing value for %~1" & exit /b !errorlevel!

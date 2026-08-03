@@ -1,12 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include <vulkan/vulkan.h>
 
 #include "BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp"
 #include "BarriEww/Vulkan/VulkanPresentationRuntime.hpp"
+#include "../src/Interoperability/NativePresentationRuntimeBoundaryImplementation.hpp"
 
 using barrieww::NativePresentationRuntimeCreateInfoVersion1;
 using barrieww::NativePresentationRuntimeCreateResultVersion1;
@@ -26,12 +30,14 @@ std::uint32_t g_destroyedSwapchainCount = 0u;
 VkSharingMode g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 std::uint32_t g_observedQueueFamilyCount = 0u;
 VkResult g_acquireResult = VK_SUCCESS;
+VkResult g_submitResult = VK_SUCCESS;
 VkResult g_presentResult = VK_SUCCESS;
 std::uint32_t g_acquiredImageIndex = 0u;
 std::uint32_t g_submitCallCount = 0u;
 std::uint32_t g_presentCallCount = 0u;
 std::uint32_t g_clearImageCallCount = 0u;
 std::uint32_t g_recordedCommandBufferCount = 0u;
+std::array<float, 4> g_observedClearColor{};
 
 /** Resets deterministic WSI replacement state to the supported-surface baseline. */
 void resetPresentationState() {
@@ -47,12 +53,14 @@ void resetPresentationState() {
     g_observedSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     g_observedQueueFamilyCount = 0u;
     g_acquireResult = VK_SUCCESS;
+    g_submitResult = VK_SUCCESS;
     g_presentResult = VK_SUCCESS;
     g_acquiredImageIndex = 0u;
     g_submitCallCount = 0u;
     g_presentCallCount = 0u;
     g_clearImageCallCount = 0u;
     g_recordedCommandBufferCount = 0u;
+    g_observedClearColor = {};
 }
 
 /** Builds one valid same-family creation input over opaque non-null handles. */
@@ -267,7 +275,7 @@ extern "C" VkResult VKAPI_CALL vkQueueSubmit(
     static_cast<void>(submitInfo);
     static_cast<void>(fence);
     ++g_submitCallCount;
-    return VK_SUCCESS;
+    return g_submitResult;
 }
 
 extern "C" VkResult VKAPI_CALL vkQueuePresentKHR(
@@ -349,9 +357,10 @@ extern "C" void VKAPI_CALL vkCmdClearColorImage(
     static_cast<void>(commandBuffer);
     static_cast<void>(image);
     static_cast<void>(imageLayout);
-    static_cast<void>(clearColor);
     static_cast<void>(rangeCount);
     static_cast<void>(ranges);
+    g_observedClearColor = {clearColor->float32[0], clearColor->float32[1],
+                            clearColor->float32[2], clearColor->float32[3]};
     ++g_clearImageCallCount;
 }
 
@@ -478,6 +487,11 @@ std::uint64_t openRuntime() {
     return createResult.runtimeAddress;
 }
 
+/** Builds a nonzero submit result that exposes whether a boundary cleared it. */
+barrieww::NativePresentationSubmitFrameResultVersion1 makeSentinelSubmitResult() {
+    return {std::numeric_limits<std::uint32_t>::max(), VK_ERROR_UNKNOWN};
+}
+
 } // namespace
 
 TEST_CASE("Presentation frame reports surface unavailable on zero extent",
@@ -500,20 +514,181 @@ TEST_CASE("Presentation frame reports surface unavailable on zero extent",
 }
 
 TEST_CASE("Presentation frame rejects submit without an open frame and null results",
-          "[presentationRuntime]") {
+           "[presentationRuntime]") {
     resetPresentationState();
     const std::uint64_t runtimeAddress = openRuntime();
-    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
+        makeSentinelSubmitResult();
 
     REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
             == NativePresentationRuntimeOperationResult::InvalidArgument);
     REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, nullptr)
             == NativePresentationRuntimeOperationResult::InvalidArgument);
+    submitResult = makeSentinelSubmitResult();
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == 0);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       nullptr)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    submitResult = makeSentinelSubmitResult();
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(0u, 0.1f, 0.3f, 0.7f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::InvalidArgument);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == 0);
     REQUIRE(barriEwwBeginPresentationFrameVersion1(0u, 8u, 8u, nullptr, nullptr)
             == NativePresentationRuntimeOperationResult::InvalidArgument);
 
     REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
             == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear submission rejects non-finite and out-of-range colors",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    constexpr float validChannel = 0.5f;
+    const float notANumber = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+    const std::array<std::array<float, 3>, 12> invalidColors{{
+        {notANumber, validChannel, validChannel},
+        {validChannel, notANumber, validChannel},
+        {validChannel, validChannel, notANumber},
+        {infinity, validChannel, validChannel},
+        {validChannel, infinity, validChannel},
+        {validChannel, validChannel, infinity},
+        {-0.1f, validChannel, validChannel},
+        {validChannel, -0.1f, validChannel},
+        {validChannel, validChannel, -0.1f},
+        {1.1f, validChannel, validChannel},
+        {validChannel, 1.1f, validChannel},
+        {validChannel, validChannel, 1.1f},
+    }};
+
+    for (std::size_t invalidColorIndex = 0u; invalidColorIndex < invalidColors.size();
+         ++invalidColorIndex) {
+        CAPTURE(invalidColorIndex);
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
+            makeSentinelSubmitResult();
+        const auto& invalidColor = invalidColors[invalidColorIndex];
+        REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(
+                    runtimeAddress, invalidColor[0], invalidColor[1], invalidColor[2],
+                    &submitResult)
+                == NativePresentationRuntimeOperationResult::InvalidArgument);
+        REQUIRE(submitResult.frameStatusValue == 0u);
+        REQUIRE(submitResult.vulkanResult == 0);
+        REQUIRE(g_clearImageCallCount == 0u);
+        REQUIRE(g_submitCallCount == invalidColorIndex);
+        REQUIRE(g_presentCallCount == invalidColorIndex);
+
+        submitResult = makeSentinelSubmitResult();
+        REQUIRE(barriEwwSubmitPresentationFrameVersion1(runtimeAddress, 0u, &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(submitResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+        REQUIRE(submitResult.vulkanResult == VK_SUCCESS);
+    }
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear submission records the requested color for an open frame",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult{};
+
+    REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                   &beginResult, &priorMetrics)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                       &submitResult)
+            == NativePresentationRuntimeOperationResult::Success);
+    REQUIRE(submitResult.frameStatusValue
+            == static_cast<std::uint32_t>(
+                barrieww::VulkanPresentationRuntime::FrameStatus::Success));
+    REQUIRE(g_observedClearColor == std::array{0.1f, 0.3f, 0.7f, 1.0f});
+    REQUIRE(g_clearImageCallCount == 1u);
+    REQUIRE(g_submitCallCount == 1u);
+    REQUIRE(g_presentCallCount == 1u);
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear submission propagates submit and present results",
+          "[presentationRuntime]") {
+    resetPresentationState();
+    const std::uint64_t runtimeAddress = openRuntime();
+    barrieww::NativePresentationBeginFrameResultVersion1 beginResult{};
+    barrieww::NativePresentationFrameMetricsVersion1 priorMetrics{};
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
+        makeSentinelSubmitResult();
+
+    SECTION("submit failure requests recreation and preserves the raw result") {
+        g_submitResult = VK_ERROR_DEVICE_LOST;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                           &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(submitResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::RecreateRequired));
+        REQUIRE(submitResult.vulkanResult == VK_ERROR_DEVICE_LOST);
+        REQUIRE(g_clearImageCallCount == 1u);
+        REQUIRE(g_submitCallCount == 1u);
+        REQUIRE(g_presentCallCount == 0u);
+    }
+
+    SECTION("suboptimal present preserves the normal status and raw result") {
+        g_presentResult = VK_SUBOPTIMAL_KHR;
+        REQUIRE(barriEwwBeginPresentationFrameVersion1(runtimeAddress, 1280u, 720u,
+                                                       &beginResult, &priorMetrics)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(barriEwwSubmitAndPresentClearFrameVersion1(runtimeAddress, 0.1f, 0.3f, 0.7f,
+                                                           &submitResult)
+                == NativePresentationRuntimeOperationResult::Success);
+        REQUIRE(submitResult.frameStatusValue
+                == static_cast<std::uint32_t>(
+                    barrieww::VulkanPresentationRuntime::FrameStatus::Suboptimal));
+        REQUIRE(submitResult.vulkanResult == VK_SUBOPTIMAL_KHR);
+        REQUIRE(g_clearImageCallCount == 1u);
+        REQUIRE(g_submitCallCount == 1u);
+        REQUIRE(g_presentCallCount == 1u);
+    }
+
+    REQUIRE(barriEwwDestroyPresentationRuntimeVersion1(runtimeAddress)
+            == NativePresentationRuntimeOperationResult::Success);
+}
+
+TEST_CASE("Presentation clear submission contains clear exceptions and clears output",
+          "[presentationRuntime]") {
+    barrieww::NativePresentationSubmitFrameResultVersion1 submitResult =
+        makeSentinelSubmitResult();
+    const auto throwingClearSubmission =
+        []() -> barrieww::VulkanPresentationRuntime::SubmitFrameResult {
+        throw std::runtime_error{"Injected clear failure"};
+    };
+
+    REQUIRE(barrieww::interoperability::executeNativePresentationSubmitFrameOperation(
+                &submitResult, throwingClearSubmission)
+            == NativePresentationRuntimeOperationResult::InternalFailure);
+    REQUIRE(submitResult.frameStatusValue == 0u);
+    REQUIRE(submitResult.vulkanResult == 0);
 }
 
 TEST_CASE("Presentation frame cycles begin/submit and reuses a slot with prior metrics",
