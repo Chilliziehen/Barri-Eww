@@ -10,6 +10,8 @@
 
 ---
 
+> **Progress provenance (2026-08-07):** Task 1–10 boxes are ticked from a verified end state, not a replay of each step. Evidence: every planned deliverable file exists, and the complete Task 10 Step 4 gate passed locally — Native ON/OFF variants 129/129 CTest each, Core `test demoTest nativeIntegrationTest` plus coverage verification, and Mod `check remapJar verifyRemappedJarContents` with 140/140 tests. The packaging guard was additionally proven to fail on an injected missing entry. Task 11 requires a real Minecraft client session and remains unticked.
+
 ## Execution Prerequisite
 
 Merge `docs/spec-host-image-presentation-abi` into `dev` through MR and full CI first. Then update `dev`, create `feature/host-image-presentation-composition` from that exact merge, and use an isolated worktree as required by the execution skill. Do not implement against the unmerged docs branch.
@@ -71,7 +73,7 @@ Every commit must use the repository §5.3 body fields: `改动点`, `影响范�
 - Modify: `Native/include/BarriEww/Interoperability/NativePresentationRuntimeBoundary.hpp`
 - Modify: `Native/tests/NativePresentationRuntimeBoundaryTests.cpp`
 
-- [ ] **Step 1: Write failing compile-time and Catch2 ABI tests**
+- [x] **Step 1: Write failing compile-time and Catch2 ABI tests**
 
 Add assertions for values `1` and `2`, unknown mapping rejection, create-info size `96`/alignment `8`, detach-result size `8`/alignment `4`, every P28 offset, standard layout, trivial copyability, and the exact three symbol declarations. The central test shape is:
 
@@ -91,7 +93,7 @@ REQUIRE(barrieww::toVulkanPresentationImageFormat(
         == VK_FORMAT_R8G8B8A8_UNORM);
 ```
 
-- [ ] **Step 2: Run the focused test target and verify RED**
+- [x] **Step 2: Run the focused test target and verify RED**
 
 Run:
 
@@ -102,7 +104,7 @@ cmake --build Native/build-host-image-plan --config Debug --target BarriEwwNativ
 
 Expected: compile failure because the P28 catalog and record do not exist.
 
-- [ ] **Step 3: Add the minimal catalog, mapping, record, assertions, and declarations**
+- [x] **Step 3: Add the minimal catalog, mapping, record, assertions, and declarations**
 
 Use these public shapes exactly:
 
@@ -136,7 +138,7 @@ struct NativeHostImagePresentationRuntimeCreateInfoVersion1 {
 Declare the exact P28 create, detach, and host-submit symbols from §6.7.4. Keep every old record and symbol byte-for-byte unchanged.
 The detach symbol receives the opaque address and a writable 8-byte detach result.
 
-- [ ] **Step 4: Rebuild and verify GREEN**
+- [x] **Step 4: Rebuild and verify GREEN**
 
 Run the build command from Step 2 and:
 
@@ -146,7 +148,7 @@ ctest --test-dir Native/build-host-image-plan -C Debug --output-on-failure -R Na
 
 Expected: build succeeds and existing presentation tests pass.
 
-- [ ] **Step 5: Commit the ABI catalog**
+- [x] **Step 5: Commit the ABI catalog**
 
 Commit subject: `feature/host-image-presentation-abi` with the mandatory §5.3 body naming only the four files in this task.
 
@@ -158,17 +160,17 @@ Commit subject: `feature/host-image-presentation-abi` with the mandatory §5.3 b
 - Create: `Native/cmake/GenerateEmbeddedShaderHeader.cmake`
 - Modify: `Native/CMakeLists.txt`
 
-- [ ] **Step 1: Add a build assertion that requires both generated headers**
+- [x] **Step 1: Add a build assertion that requires both generated headers**
 
 Declare generated outputs under `${CMAKE_CURRENT_BINARY_DIR}/generated/BarriEww/Vulkan/Shaders` and add them as private sources of `BarriEwwNative`. Configure before adding generation commands.
 
-- [ ] **Step 2: Verify RED at configure/build**
+- [x] **Step 2: Verify RED at configure/build**
 
 Run the Task 1 configure and build commands.
 
 Expected: configure or build fails because `Vulkan::glslc`, shader sources, and generated headers are not wired.
 
-- [ ] **Step 3: Add complete shaders and deterministic generation**
+- [x] **Step 3: Add complete shaders and deterministic generation**
 
 The vertex shader must emit one fullscreen triangle and apply the same Y inversion as Minecraft's original destination blit:
 
@@ -197,7 +199,7 @@ void main() {
 
 Use `Vulkan::glslc --target-env=vulkan1.2 -O`. The CMake script must read the generated SPIR-V as hexadecimal and emit an `alignas(std::uint32_t) inline constexpr std::array<std::byte, N>` header without `xxd`, Python, or runtime file lookup. Require `Vulkan::glslc` only inside `if(BARRIEWW_BACKEND_VULKAN)`.
 
-- [ ] **Step 4: Verify generated SPIR-V and backend-off isolation**
+- [x] **Step 4: Verify generated SPIR-V and backend-off isolation**
 
 Run:
 
@@ -209,7 +211,7 @@ cmake --build Native/build-host-image-plan-backend-off --config Debug
 
 Expected: both builds pass; generated Vulkan headers exist only in the Vulkan build tree.
 
-- [ ] **Step 5: Commit shader build assets**
+- [x] **Step 5: Commit shader build assets**
 
 Commit subject: `feature/host-image-presentation-shaders` with the mandatory §5.3 body.
 
@@ -221,7 +223,7 @@ Commit subject: `feature/host-image-presentation-shaders` with the mandatory §5
 - Modify: `Native/tests/NativePresentationRuntimeBoundaryTests.cpp`
 - Modify: `Native/tests/CMakeLists.txt`
 
-- [ ] **Step 1: Write failing mock-Vulkan tests**
+- [x] **Step 1: Write failing mock-Vulkan tests**
 
 Cover exact creation order, every injected failure, reverse cleanup, temporary shader module destruction, nearest/clamp sampler, descriptor image layout `GENERAL`, requested output format, `TRANSFER_DST | COLOR_ATTACHMENT` swapchain requirement, and matrix count. Pin the command sequence and barrier fields:
 
@@ -238,7 +240,7 @@ REQUIRE(g_recordedDrawVertexCount == 3u);
 
 Also assert `matrixIndex == frameSlotIndex * swapchainImageCount + imageIndex`.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -249,7 +251,7 @@ ctest --test-dir Native/build-host-image-plan -C Debug --output-on-failure -R Na
 
 Expected: compile failure because `VulkanHostImagePresentationResources` does not exist.
 
-- [ ] **Step 3: Implement the focused RAII owner**
+- [x] **Step 3: Implement the focused RAII owner**
 
 Expose only this operational surface:
 
@@ -282,19 +284,19 @@ pipeline, dedicated command pool, and matrix. Use `vkCmdBeginRenderingKHR` and
 Rollback every partial create in strict reverse order and preserve the first raw
 `VkResult`.
 
-- [ ] **Step 4: Implement detach fence selection and idempotency**
+- [x] **Step 4: Implement detach fence selection and idempotency**
 
 When an open frame exists, omit its reset/unsubmitted fence and wait every other
 submitted slot fence before destroying host resources. A second detach is success and
 does no Vulkan call. Do not destroy the borrowed `VkImage`.
 
-- [ ] **Step 5: Run failure and success tests**
+- [x] **Step 5: Run failure and success tests**
 
 Run the focused build/CTest commands from Step 2.
 
 Expected: all creation, recording, matrix, detach, and cleanup cases pass.
 
-- [ ] **Step 6: Commit host resource ownership**
+- [x] **Step 6: Commit host resource ownership**
 
 Commit subject: `feature/host-image-presentation-resources` with the mandatory §5.3 body.
 
@@ -306,17 +308,17 @@ Commit subject: `feature/host-image-presentation-resources` with the mandatory �
 - Modify: `Native/src/Interoperability/NativePresentationRuntimeBoundary.cpp`
 - Modify: `Native/tests/NativePresentationRuntimeBoundaryTests.cpp`
 
-- [ ] **Step 1: Add failing host create/detach/submit boundary tests**
+- [x] **Step 1: Add failing host create/detach/submit boundary tests**
 
 Test null records, zero host image, reserved flags, unknown formats, unsupported requested format/color space, missing surface usage, unequal host/framebuffer/actual extents, exact output clearing, exception containment, no-open-frame host submit, detach with open frame, host submit after detach, and old clear create without host symbol dependencies.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the focused Native presentation test target.
 
 Expected: unresolved P28 symbol implementations.
 
-- [ ] **Step 3: Add host runtime operations without changing old creation policy**
+- [x] **Step 3: Add host runtime operations without changing old creation policy**
 
 Add:
 
@@ -333,7 +335,7 @@ observable result unchanged. Host creation must select only the exact requested 
 surface format with `SRGB_NONLINEAR`, require both swapchain usages, validate exact
 extent, then attach `VulkanHostImagePresentationResources`.
 
-- [ ] **Step 4: Implement the three P28 C symbols**
+- [x] **Step 4: Implement the three P28 C symbols**
 
 Clear output records before validation, validate fixed-width scalars before casting,
 contain every C++ exception, and map `InvalidArgument`, `UnsupportedSurface`,
@@ -342,7 +344,7 @@ idempotent and writes fence-wait failure into the reusable 8-byte result without
 destroying host resources. Host submit selects the prerecorded matrix entry and
 delegates to the existing queue submit/present path.
 
-- [ ] **Step 5: Verify all Native presentation regressions**
+- [x] **Step 5: Verify all Native presentation regressions**
 
 Run:
 
@@ -353,7 +355,7 @@ ctest --test-dir Native/build-host-image-plan -C Debug --output-on-failure
 
 Expected: all Native tests pass, including the unchanged clear boundary suite.
 
-- [ ] **Step 6: Commit runtime and boundary integration**
+- [x] **Step 6: Commit runtime and boundary integration**
 
 Commit subject: `feature/host-image-presentation-runtime` with the mandatory §5.3 body.
 
@@ -364,14 +366,14 @@ Commit subject: `feature/host-image-presentation-runtime` with the mandatory §5
 - Modify: `Native/tests/CMakeLists.txt`
 - Modify: `Native/tests/TestVulkanDeviceHarness.hpp`
 
-- [ ] **Step 1: Write the corner-distinct execution test**
+- [x] **Step 1: Write the corner-distinct execution test**
 
 Create a 4x4 RGBA8 host image in `GENERAL` with distinct red/green/blue/white corners,
 execute the same fullscreen pipeline into a 4x4 UNORM destination image, copy to a
 host-visible buffer, and compare all 64 bytes. The expected array must encode the
 Minecraft Y inversion explicitly so a flipped or channel-swapped result fails.
 
-- [ ] **Step 2: Verify RED or harness skip reason**
+- [x] **Step 2: Verify RED or harness skip reason**
 
 Run:
 
@@ -382,17 +384,17 @@ ctest --test-dir Native/build-host-image-plan -C Debug --output-on-failure -R Ho
 Expected: test is absent/fails before registration. Local SKIP is allowed only for the
 existing documented missing-driver/capability condition; CI lavapipe must execute it.
 
-- [ ] **Step 3: Register and make the harness graphics-capable**
+- [x] **Step 3: Register and make the harness graphics-capable**
 
 Require a queue family with `VK_QUEUE_GRAPHICS_BIT`, enable dynamic rendering through
 the Vulkan 1.2 KHR feature chain, and use the generated production shader bytes. Do not
 duplicate shader source or composition logic in the test.
 
-- [ ] **Step 4: Run the real execution test and full CTest**
+- [x] **Step 4: Run the real execution test and full CTest**
 
 Expected: exact byte equality and full Native GREEN.
 
-- [ ] **Step 5: Commit GPU execution coverage**
+- [x] **Step 5: Commit GPU execution coverage**
 
 Commit subject: `test/host-image-presentation-execution` with the mandatory §5.3 body.
 
@@ -406,7 +408,7 @@ Commit subject: `test/host-image-presentation-execution` with the mandatory §5.
 - Modify: `Core/src/test/java/barrieww/core/interoperability/PresentationRuntimeBindingTests.java`
 - Modify: `Core/src/demoTest/java/barrieww/core/interoperability/NativePresentationRuntimeIntegrationTests.java`
 
-- [ ] **Step 1: Write failing Core layout and binding tests**
+- [x] **Step 1: Write failing Core layout and binding tests**
 
 Pin every P28 offset, create byte size `96`/alignment `8`, detach-result byte size
 `8`/alignment `4`, values `1/2`, exact symbol names,
@@ -415,7 +417,7 @@ reused detach/submit segment identity, raw detach `VkResult`, idempotent detach 
 host submit decoding, Arena
 closure after create failure, and one-attempt destroy.
 
-- [ ] **Step 2: Run Core tests and verify RED**
+- [x] **Step 2: Run Core tests and verify RED**
 
 Run:
 
@@ -425,7 +427,7 @@ Run:
 
 Expected: compilation failures for the new format/binding/factory APIs.
 
-- [ ] **Step 3: Add immutable neutral values and the host binding**
+- [x] **Step 3: Add immutable neutral values and the host binding**
 
 Use this Core shape:
 
@@ -447,7 +449,7 @@ public record HostImagePresentationBinding(
 Validate nonzero handle, nonnull formats, and positive exact dimensions in the host
 factory rather than adding Minecraft concepts to Core.
 
-- [ ] **Step 4: Add a host-only runtime factory and reusable operations**
+- [x] **Step 4: Add a host-only runtime factory and reusable operations**
 
 Add `createHostImagePresentation(...)`, `detachHostImagePresentationResources()`, and
 `submitAndPresentHostImageFrame()`. Only the host factory resolves the three additive
@@ -455,7 +457,7 @@ symbols. Keep old `create(...)` able to load an older Native Version 1 library. 
 all post-create handles as final members tied to the confined lookup Arena; perform no
 per-frame Arena creation or symbol lookup.
 
-- [ ] **Step 5: Run unit and real FFM rejected-input tests**
+- [x] **Step 5: Run unit and real FFM rejected-input tests**
 
 Build Native first, then run:
 
@@ -466,7 +468,7 @@ $nativeLibraryPath = (Resolve-Path "Native/build-host-image-plan/ffm/BarriEwwNat
 
 Expected: all tasks pass and Core line coverage is at least 90%.
 
-- [ ] **Step 6: Commit the Core binding**
+- [x] **Step 6: Commit the Core binding**
 
 Commit subject: `feature/host-image-presentation-binding` with the mandatory §5.3 body.
 
@@ -479,7 +481,7 @@ Commit subject: `feature/host-image-presentation-binding` with the mandatory §5
 - Create: `Mod/src/test/java/barrieww/mod/MinecraftHostImagePresentationBindingExtractorTests.java`
 - Delete: `Mod/src/test/java/barrieww/mod/MinecraftClearTakeoverReadinessTests.java`
 
-- [ ] **Step 1: Write failing extractor truth-table tests**
+- [x] **Step 1: Write failing extractor truth-table tests**
 
 Accept only live `VulkanGpuTexture`/`VulkanGpuTextureView`, exact `RGBA8_UNORM`, nonzero
 `vkImage`, required copy-source and texture-binding usage, full base mip, one mip/layer,
@@ -487,7 +489,7 @@ Accept only live `VulkanGpuTexture`/`VulkanGpuTextureView`, exact `RGBA8_UNORM`,
 `37 -> R8G8B8A8_UNORM`, `44 -> B8G8R8A8_UNORM`. Reject SRGB values `43/50` and all
 unknown values.
 
-- [ ] **Step 2: Run Mod tests and verify RED**
+- [x] **Step 2: Run Mod tests and verify RED**
 
 Run:
 
@@ -497,17 +499,17 @@ Run:
 
 Expected: test compilation fails because the extractor does not exist.
 
-- [ ] **Step 3: Implement the Minecraft-only extractor**
+- [x] **Step 3: Implement the Minecraft-only extractor**
 
 Return `Optional<HostImagePresentationBinding>` and keep all casts to Minecraft Vulkan
 classes inside this file. `PresentationGenerationInputs` replaces the readiness boolean
 with the nonnull binding and target generation; `isReady()` requires exact extents.
 
-- [ ] **Step 4: Run extractor and existing Mod tests**
+- [x] **Step 4: Run extractor and existing Mod tests**
 
 Expected: extractor GREEN and no Core/Native package imports of Minecraft or LWJGL.
 
-- [ ] **Step 5: Commit host binding extraction**
+- [x] **Step 5: Commit host binding extraction**
 
 Commit subject: `feature/minecraft-host-image-binding` with the mandatory §5.3 body.
 
@@ -525,7 +527,7 @@ Commit subject: `feature/minecraft-host-image-binding` with the mandatory §5.3 
 - Modify: `Mod/src/test/java/barrieww/mod/PresentationTakeoverCoordinatorTests.java`
 - Create: `Mod/src/test/java/barrieww/mod/MainRenderTargetGenerationTrackerTests.java`
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 Pin `close old -> preparation -> create host -> begin -> clear prime -> commit`, no
 preparation after old close failure, vanilla continuation after pre-commit failure,
@@ -533,13 +535,13 @@ terminal interception after uncertain close, detach before resize publication,
 idempotent detach, clear submit after detach with an open frame, host submit while
 attached, and no taken-over/no-runtime state.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the two focused Mod test classes.
 
 Expected: missing preparation/tracker/detach APIs.
 
-- [ ] **Step 3: Extend runtime interfaces and Core adapters**
+- [x] **Step 3: Extend runtime interfaces and Core adapters**
 
 Add:
 
@@ -554,7 +556,7 @@ PresentationFrameStatus submitAndPresentHostImageFrame()
 The factory receives `HostImagePresentationBinding`. The Core adapter delegates
 without duplicating numeric status mapping.
 
-- [ ] **Step 4: Implement coordinator preparation and attached-state selection**
+- [x] **Step 4: Implement coordinator preparation and attached-state selection**
 
 `configure(Preparation)` must retire the old complete runtime before invoking the
 callback. A committed runtime tracks whether host resources are attached. Normal
@@ -563,17 +565,17 @@ frames to clear submit and sets `requiresReconfiguration`. Detach failure preser
 borrowed image, marks terminal interception, logs once, and returns failure to the
 resize listener.
 
-- [ ] **Step 5: Implement the render-thread tracker**
+- [x] **Step 5: Implement the render-thread tracker**
 
 The tracker supports one active surface listener, main-target identity checking,
 monotonic TAIL publication, listener removal before surface close, and no retained
 closed coordinator. Keep operations allocation-free after registration.
 
-- [ ] **Step 6: Run focused and full Mod unit tests**
+- [x] **Step 6: Run focused and full Mod unit tests**
 
 Expected: all coordinator/tracker tests pass.
 
-- [ ] **Step 7: Commit lifecycle policy**
+- [x] **Step 7: Commit lifecycle policy**
 
 Commit subject: `feature/host-image-presentation-generation` with the mandatory §5.3 body.
 
@@ -586,25 +588,25 @@ Commit subject: `feature/host-image-presentation-generation` with the mandatory 
 - Modify: `Mod/src/main/resources/barrieww.mixins.json`
 - Modify: Mod mixin structure tests under `Mod/src/test/java/barrieww/mod`
 
-- [ ] **Step 1: Write failing bytecode/resource structure tests**
+- [x] **Step 1: Write failing bytecode/resource structure tests**
 
 Pin cancellable `GameRenderer.resize(II)V` HEAD, `RenderTarget.resize(II)V` TAIL,
 surface `swapchainImageFormat` shadow, registration/unregistration, host submit at
 present, and both mixin names in `barrieww.mixins.json`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run Mod `test`.
 
 Expected: missing mixins and surface behavior.
 
-- [ ] **Step 3: Implement complete-resize ownership hooks**
+- [x] **Step 3: Implement complete-resize ownership hooks**
 
 `GameRendererMixin` HEAD asks the tracker/listener to detach. Cancel the complete
 `GameRenderer.resize` on failure so neither main target nor level renderer is changed.
 `RenderTargetMixin` TAIL publishes only when `(Object)this` is the current main target.
 
-- [ ] **Step 4: Implement configure-time host preparation**
+- [x] **Step 4: Implement configure-time host preparation**
 
 In `VulkanGpuSurfaceMixin.configure` pass a callback that, after coordinator retirement,
 calls public `GameRenderer.resize(width,height)` when needed, extracts the exact binding,
@@ -615,7 +617,7 @@ At present, submit the host image while attached or clear while detached. Keep a
 interception at backend methods and preserve outer `GpuSurface` state transitions.
 Unregister the resize listener before the coordinator's sole close attempt.
 
-- [ ] **Step 5: Run Mod tests and remapJar**
+- [x] **Step 5: Run Mod tests and remapJar**
 
 Run:
 
@@ -627,7 +629,7 @@ $nativeLibraryPath = (Resolve-Path "Native/build-host-image-plan/ffm/BarriEwwNat
 
 Expected: tests pass and the remapped jar contains both new mixins.
 
-- [ ] **Step 6: Commit Minecraft integration**
+- [x] **Step 6: Commit Minecraft integration**
 
 Commit subject: `feature/minecraft-host-image-presentation` with the mandatory §5.3 body.
 
@@ -639,7 +641,7 @@ Commit subject: `feature/minecraft-host-image-presentation` with the mandatory �
 - Modify: `Native/CMakeLists.txt`
 - Modify: `Native/tests/CMakeLists.txt`
 
-- [ ] **Step 1: Add failing package-content and CI dependency checks**
+- [x] **Step 1: Add failing package-content and CI dependency checks**
 
 Register `verifyRemappedJarContents` in `Mod/build.gradle.kts`, make it depend on
 `remapJar`, open `tasks.jar.archiveFile`, and require entries for both mixins,
@@ -647,20 +649,20 @@ tracker/extractor classes, updated Core classes, mixin JSON, and the platform Na
 library. Make `check` depend on this task. Require `glslc` in all Linux Vulkan jobs:
 Native matrix, Native coverage, and Mod packaging.
 
-- [ ] **Step 2: Verify package check RED**
+- [x] **Step 2: Verify package check RED**
 
 Run Mod `check remapJar` against freshly built Native/Core artifacts.
 
 Expected: package verification fails before the new entries/task wiring exists.
 
-- [ ] **Step 3: Wire build dependencies without adding runtime switches**
+- [x] **Step 3: Wire build dependencies without adding runtime switches**
 
 Install `glslc` only in Linux Vulkan CI cells. Preserve P29: Linux Vulkan ON with
 lavapipe for `THREADED_RECORDING=ON/OFF`; Windows backend OFF for both variants. Keep
 Native/Core/Mod coverage gates at 90%. Do not add a feature CMake option for composition;
 it is part of the Vulkan presentation implementation.
 
-- [ ] **Step 4: Run the complete automated gate**
+- [x] **Step 4: Run the complete automated gate**
 
 Run both Native variants, full Core FFM integration, and Mod packaging:
 
@@ -680,7 +682,7 @@ $coreLibraryPath = (Resolve-Path "Core/build/libs/BarriEwwCore-0.1.0.jar").Path
 
 Expected: every command passes; Native/Core/Mod line coverage is at least 90%.
 
-- [ ] **Step 5: Commit build and CI integration**
+- [x] **Step 5: Commit build and CI integration**
 
 Commit subject: `feature/host-image-presentation-build` with the mandatory §5.3 body.
 

@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc
           lavapipeManifest="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
           if [ -z "$lavapipeManifest" ]; then
             echo "No lavapipe ICD manifest found under /usr/share/vulkan/icd.d" >&2
@@ -134,7 +134,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcovr libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install -y gcovr libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc
           lavapipeManifest="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
           if [ -z "$lavapipeManifest" ]; then
             echo "No lavapipe ICD manifest found under /usr/share/vulkan/icd.d" >&2
@@ -231,11 +231,11 @@ jobs:
         with:
           cmake-version: "4.4"
 
-      - name: Install Vulkan development package
+      - name: Install Vulkan development package and shader compiler
         if: steps.detect.outputs.ready == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev
+          sudo apt-get install -y libvulkan-dev glslc
 
       - name: Build exact Native and Core packaging artifacts
         if: steps.detect.outputs.ready == 'true'
@@ -260,7 +260,7 @@ jobs:
           test -f "$coreLibraryPath"
           test -f "$nativeLibraryPath"
           ./Mod/gradlew -p Mod clean check jacocoTestReport \
-            jacocoTestCoverageVerification remapJar \
+            jacocoTestCoverageVerification remapJar verifyRemappedJarContents \
             -PbarriewwCoreLibraryPath="$coreLibraryPath" \
             -PbarriewwNativeLibraryPath="$nativeLibraryPath" \
             -PbarriewwConfiguration=release \

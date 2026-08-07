@@ -1,5 +1,8 @@
 # ── Native (C++ / CMake) ──────────────────────────────────────────────
 /Native/build/
+# Named variant trees produced by build.sh/build.bat and the CI gate commands
+# (build-host-image-on, build-root-release-threaded-on, build-ci-policy, ...).
+/Native/build-*/
 /Native/out/
 /Native/cmake-build-*/
 # CI-only vendored software rasterizer trees (never committed).

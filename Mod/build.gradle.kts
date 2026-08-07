@@ -1,6 +1,7 @@
 import java.io.File
 import java.nio.file.Path
 import java.util.Locale
+import java.util.zip.ZipFile
 import org.gradle.api.provider.Provider
 
 val mockitoAgent = configurations.create("mockitoAgent")
@@ -250,6 +251,59 @@ val remapJar = tasks.register("remapJar") {
     description = "Builds the distributable jar; Minecraft 26.2 is unobfuscated."
     group = LifecycleBasePlugin.BUILD_GROUP
     dependsOn(tasks.jar)
+}
+
+// Entries the host-image presentation path cannot run without. A jar that builds but
+// omits any of them fails only at game start, so packaging asserts them here instead.
+val requiredRemappedJarEntryProvider: Provider<List<String>> =
+    nativeResourcePathProvider.map { nativeResourcePath ->
+        listOf(
+            // Host target lifecycle and surface takeover mixins.
+            "barrieww/mod/mixin/GameRendererMixin.class",
+            "barrieww/mod/mixin/VulkanGpuSurfaceMixin.class",
+            // Generation tracking and host binding extraction.
+            "barrieww/mod/MainRenderTargetGenerationTracker.class",
+            "barrieww/mod/MainRenderTargetResizeListener.class",
+            "barrieww/mod/MinecraftHostImagePresentationBindingExtractor.class",
+            "barrieww/mod/PresentationTakeoverCoordinator.class",
+            // Core classes merged into the mod jar.
+            "barrieww/core/interoperability/HostImagePresentationBinding.class",
+            "barrieww/core/interoperability/PresentationImageFormat.class",
+            "barrieww/core/interoperability/NativePresentationRuntime.class",
+            // Declarations and the platform native library.
+            "barrieww.mixins.json",
+            "fabric.mod.json",
+            nativeResourcePath)
+    }
+
+val verifyRemappedJarContents = tasks.register("verifyRemappedJarContents") {
+    description = "Asserts the distributable jar carries every host-image presentation entry."
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    dependsOn(remapJar)
+    inputs.file(tasks.jar.flatMap { jarTask -> jarTask.archiveFile })
+        .withPropertyName("distributableJar")
+        .withPathSensitivity(PathSensitivity.NONE)
+    inputs.property("requiredEntries", requiredRemappedJarEntryProvider)
+    outputs.upToDateWhen { true }
+    val distributableJarFileProvider = tasks.jar.flatMap { jarTask -> jarTask.archiveFile }
+    val requiredEntries = requiredRemappedJarEntryProvider
+    doLast {
+        val distributableJarFile = distributableJarFileProvider.get().asFile
+        val presentEntryNames = ZipFile(distributableJarFile).use { zipFile ->
+            zipFile.entries().asSequence().map { entry -> entry.name }.toSet()
+        }
+        val missingEntryNames = requiredEntries.get().filterNot(presentEntryNames::contains)
+        if (missingEntryNames.isNotEmpty()) {
+            throw GradleException(
+                "Distributable jar ${distributableJarFile.name} is missing required entries:\n"
+                    + missingEntryNames.joinToString("\n") { entryName -> " - $entryName" })
+        }
+    }
+}
+
+// Registered after verifyRemappedJarContents so the check wiring needs no forward reference.
+tasks.check {
+    dependsOn(verifyRemappedJarContents)
 }
 
 tasks.assemble {
