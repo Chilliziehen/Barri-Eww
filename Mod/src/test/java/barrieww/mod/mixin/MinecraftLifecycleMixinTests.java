@@ -2,6 +2,7 @@ package barrieww.mod.mixin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mockStatic;
@@ -11,6 +12,8 @@ import barrieww.mod.MainRenderTargetResizeListener;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -19,6 +22,10 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 /**
  * @note ThreadSafety: Tests serialize static tracker and Minecraft singleton replacement access.
@@ -46,7 +53,7 @@ final class MinecraftLifecycleMixinTests {
     /** Verifies detach veto cancels the complete GameRenderer resize callback. */
     @Test
     void gameRendererResizeVetoCancelsCompleteMethod() throws Exception {
-        MainRenderTargetResizeListener resizeListener = () -> false;
+        MainRenderTargetResizeListener resizeListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(resizeListener);
         try {
             Class<?> mixinClass = Class.forName("barrieww.mod.mixin.GameRendererMixin");
@@ -105,6 +112,62 @@ final class MinecraftLifecycleMixinTests {
         assertEquals("resize(II)V", injection.method()[0]);
         assertEquals("TAIL", injection.at()[0].value());
         assertFalse(injection.cancellable());
+    }
+
+    /** Pins the exact non-cancellable GameRenderer close HEAD injection. */
+    @Test
+    void gameRendererCloseInjectionTargetsExactHead() throws Exception {
+        Class<?> mixinClass = Class.forName("barrieww.mod.mixin.GameRendererMixin");
+        Method callbackMethod = mixinClass.getDeclaredMethod(
+            "barrieww$beforeMainRenderTargetDestroy",
+            CallbackInfo.class);
+        Inject injection = callbackMethod.getAnnotation(Inject.class);
+
+        assertEquals("close()V", injection.method()[0]);
+        assertEquals("HEAD", injection.at()[0].value());
+        assertFalse(injection.cancellable());
+    }
+
+    /** Pins Minecraft 26.2 teardown ordering from GameRenderer close to surface close. */
+    @Test
+    void minecraftCloseDestroysGameRendererBeforeWindowSurface() throws Exception {
+        List<String> closeOwners = new ArrayList<>();
+        try (var minecraftBytecode = Minecraft.class.getResourceAsStream("Minecraft.class")) {
+            assertNotNull(minecraftBytecode);
+            new ClassReader(minecraftBytecode).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(
+                    int access,
+                    String methodName,
+                    String methodDescriptor,
+                    String signature,
+                    String[] exceptionNames) {
+                    if (!methodName.equals("close") || !methodDescriptor.equals("()V")) {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(
+                            int opcode,
+                            String owner,
+                            String invokedMethodName,
+                            String invokedMethodDescriptor,
+                            boolean isInterface) {
+                            if (invokedMethodName.equals("close")
+                                && invokedMethodDescriptor.equals("()V")) {
+                                closeOwners.add(owner);
+                            }
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        }
+
+        int gameRendererCloseIndex = closeOwners.indexOf(
+            "net/minecraft/client/renderer/GameRenderer");
+        int surfaceCloseIndex = closeOwners.indexOf("com/mojang/blaze3d/systems/GpuSurface");
+        assertTrue(gameRendererCloseIndex >= 0);
+        assertTrue(surfaceCloseIndex > gameRendererCloseIndex);
     }
 
     /** Verifies a non-current or unavailable target cannot publish a successful generation. */
@@ -203,5 +266,26 @@ final class MinecraftLifecycleMixinTests {
             }
             throw invocationFailure;
         }
+    }
+
+    /**
+     * @note ThreadSafety: Returned listener is immutable and confined to one lifecycle test.
+     * Creates a complete listener with a fixed resize decision and no owned destroy resource.
+     *
+     * @param boolean shouldPermitResize Fixed resize callback result
+     * @return MainRenderTargetResizeListener Test-owned complete lifecycle listener
+     * @warning MemoryOwnership: The listener owns no runtime and retains no external reference.
+     */
+    private static MainRenderTargetResizeListener resizeListener(boolean shouldPermitResize) {
+        return new MainRenderTargetResizeListener() {
+            @Override
+            public boolean beforeMainRenderTargetResize() {
+                return shouldPermitResize;
+            }
+
+            @Override
+            public void beforeMainRenderTargetDestroy() {
+            }
+        };
     }
 }

@@ -2,10 +2,9 @@ package barrieww.mod;
 
 /**
  * @note ThreadSafety: Render-thread-confined. Registration, callback and removal are serialized.
- * Decides whether complete main-render-target resize may proceed after borrowed resources retire.
+ * Coordinates borrowed-resource retirement before main-target resize and destruction.
  * @warning MemoryOwnership: The listener remains owner-controlled; registration only borrows it.
  */
-@FunctionalInterface
 public interface MainRenderTargetResizeListener {
     /**
      * @note ThreadSafety: Called on the render thread immediately before complete target resize.
@@ -16,4 +15,15 @@ public interface MainRenderTargetResizeListener {
      * failure retains the old host target and its ownership unchanged.
      */
     boolean beforeMainRenderTargetResize();
+
+    /**
+     * @note ThreadSafety: Called once on the render thread immediately before GameRenderer destroys
+     * its main target, after the tracker has removed this listener identity.
+     * Consumes the listener owner's complete presentation runtime so no borrowed host-image resource
+     * survives target destruction. Implementations must contain checked teardown failure.
+     *
+     * @warning MemoryOwnership: The callback ends all Native borrowing before Minecraft destroys the
+     * target. A consumed Native runtime address must never be retried.
+     */
+    void beforeMainRenderTargetDestroy();
 }

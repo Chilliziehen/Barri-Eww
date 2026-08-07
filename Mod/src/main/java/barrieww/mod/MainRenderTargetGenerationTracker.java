@@ -67,6 +67,22 @@ public final class MainRenderTargetGenerationTracker {
 
     /**
      * @note ThreadSafety: Render-thread-confined and non-reentrant.
+     * Atomically removes the active listener identity before invoking its sole target-destroy callback.
+     * Repeated calls and calls after surface-first unregister are no-ops.
+     *
+     * @warning MemoryOwnership: Removal ends static listener borrowing before the callback consumes
+     * its owner, preventing retention of a closed coordinator through the Mod class loader.
+     */
+    public static void beforeMainRenderTargetDestroy() {
+        MainRenderTargetResizeListener resizeListener = s_resizeListener;
+        s_resizeListener = null;
+        if (resizeListener != null) {
+            resizeListener.beforeMainRenderTargetDestroy();
+        }
+    }
+
+    /**
+     * @note ThreadSafety: Render-thread-confined and non-reentrant.
      * Publishes one generation only after resize TAIL identifies the current main target.
      *
      * @param Object resizedRenderTarget Target whose resize completed successfully

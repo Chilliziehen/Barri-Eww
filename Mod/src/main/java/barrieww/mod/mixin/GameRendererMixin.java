@@ -16,6 +16,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(GameRenderer.class)
 public class GameRendererMixin {
     /**
+     * @note ThreadSafety: Render-thread-confined and non-reentrant at GameRenderer close HEAD.
+     * Retires the registered surface owner before Minecraft destroys its main render target.
+     * Repeated close callbacks after listener removal are no-ops and never retry a consumed runtime.
+     *
+     * @param CallbackInfo callbackInformation Non-cancellable Mixin callback metadata
+     * @warning MemoryOwnership: The tracker removes its borrowed listener before the listener consumes
+     * its coordinator-owned Native runtime; Minecraft teardown always continues after the callback.
+     */
+    @Inject(method = "close()V", at = @At("HEAD"))
+    private void barrieww$beforeMainRenderTargetDestroy(CallbackInfo callbackInformation) {
+        MainRenderTargetGenerationTracker.beforeMainRenderTargetDestroy();
+    }
+
+    /**
      * @note ThreadSafety: Render-thread-confined and non-reentrant at complete resize HEAD.
      * Cancels the entire renderer resize when Native cannot detach resources borrowing the current
      * main target, preserving both main-target and level-renderer state as one atomic operation.

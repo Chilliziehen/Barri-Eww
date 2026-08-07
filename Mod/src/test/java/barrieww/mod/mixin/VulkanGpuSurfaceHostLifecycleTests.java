@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import barrieww.core.interoperability.HostImagePresentationBinding;
+import barrieww.core.interoperability.NativePresentationRuntimeException;
 import barrieww.core.interoperability.PresentationBootstrapHandles;
 import barrieww.core.interoperability.PresentationImageFormat;
 import barrieww.mod.BarriEwwClientInitializer;
@@ -279,7 +280,16 @@ final class VulkanGpuSurfaceHostLifecycleTests {
     void closeUnregistersExactListenerBeforeCoordinatorClose() throws Exception {
         VulkanGpuSurfaceMixin surfaceMixin = new VulkanGpuSurfaceMixin() { };
         PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
-        MainRenderTargetResizeListener resizeListener = coordinator::detachHostImagePresentationResources;
+        MainRenderTargetResizeListener resizeListener = new MainRenderTargetResizeListener() {
+            @Override
+            public boolean beforeMainRenderTargetResize() {
+                return coordinator.detachHostImagePresentationResources();
+            }
+
+            @Override
+            public void beforeMainRenderTargetDestroy() {
+            }
+        };
         MainRenderTargetGenerationTracker.registerResizeListener(resizeListener);
         setField(surfaceMixin, "barrieww$m_presentationTakeoverCoordinator", coordinator);
         setField(surfaceMixin, "barrieww$m_mainRenderTargetResizeListener", resizeListener);
@@ -300,7 +310,7 @@ final class VulkanGpuSurfaceHostLifecycleTests {
     void constructorRegistrationFailureLeavesTakeoverDisabledWithoutRetention() throws Exception {
         VulkanGpuSurfaceMixin surfaceMixin = new VulkanGpuSurfaceMixin() { };
         VulkanDevice surfaceDevice = mock(VulkanDevice.class);
-        MainRenderTargetResizeListener occupiedListener = () -> true;
+        MainRenderTargetResizeListener occupiedListener = resizeListener(true);
         MainRenderTargetGenerationTracker.registerResizeListener(occupiedListener);
         setField(surfaceMixin, "m_device", surfaceDevice);
         setField(surfaceMixin, "m_surface", 4L);
@@ -322,6 +332,143 @@ final class VulkanGpuSurfaceHostLifecycleTests {
         } finally {
             MainRenderTargetGenerationTracker.unregisterResizeListener(occupiedListener);
         }
+    }
+
+    /** Verifies GameRenderer-first teardown closes once before later surface and duplicate callbacks. */
+    @Test
+    void gameRendererFirstTeardownClosesCoordinatorExactlyOnce() throws Exception {
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
+        VulkanGpuSurfaceMixin surfaceMixin = registeredSurfaceMixin(coordinator, logger);
+        doAnswer(invocation -> {
+            assertNull(getField(
+                surfaceMixin,
+                "barrieww$m_presentationTakeoverCoordinator"));
+            assertNull(getField(surfaceMixin, "barrieww$m_mainRenderTargetResizeListener"));
+            assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+            return null;
+        }).when(coordinator).close();
+
+        invokeTrackerDestroy();
+        invokeTrackerDestroy();
+        invokeClose(surfaceMixin);
+
+        verify(coordinator, org.mockito.Mockito.times(1)).close();
+        verify(logger, org.mockito.Mockito.times(1)).info(
+            "Presentation takeover closed before Minecraft Vulkan surface teardown");
+    }
+
+    /** Verifies surface-first teardown unregisters and closes before later renderer callbacks noop. */
+    @Test
+    void surfaceFirstTeardownClosesCoordinatorExactlyOnce() throws Exception {
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
+        VulkanGpuSurfaceMixin surfaceMixin = registeredSurfaceMixin(coordinator, logger);
+
+        invokeClose(surfaceMixin);
+        invokeClose(surfaceMixin);
+        invokeTrackerDestroy();
+
+        verify(coordinator, org.mockito.Mockito.times(1)).close();
+        verify(logger, org.mockito.Mockito.times(1)).info(
+            "Presentation takeover closed before Minecraft Vulkan surface teardown");
+        assertNull(getField(surfaceMixin, "barrieww$m_presentationTakeoverCoordinator"));
+        assertNull(getField(surfaceMixin, "barrieww$m_mainRenderTargetResizeListener"));
+    }
+
+    /** Verifies GameRenderer-first checked close failure is logged once and never retried. */
+    @Test
+    void gameRendererFirstCloseFailureIsConsumedAndLoggedOnce() throws Exception {
+        PresentationTakeoverCoordinator coordinator = mock(PresentationTakeoverCoordinator.class);
+        Logger logger = mock(Logger.class);
+        NativePresentationRuntimeException closeFailure =
+            new NativePresentationRuntimeException("close failed", "destroySymbol", 7, -4);
+        VulkanGpuSurfaceMixin surfaceMixin = registeredSurfaceMixin(coordinator, logger);
+        org.mockito.Mockito.doThrow(closeFailure).when(coordinator).close();
+
+        invokeTrackerDestroy();
+        invokeTrackerDestroy();
+        invokeClose(surfaceMixin);
+
+        verify(coordinator, org.mockito.Mockito.times(1)).close();
+        verify(logger, org.mockito.Mockito.times(1)).error(
+            org.mockito.ArgumentMatchers.contains("Native symbol='destroySymbol'"),
+            org.mockito.ArgumentMatchers.same(closeFailure));
+    }
+
+    /**
+     * @note ThreadSafety: Test-thread-confined while scoped static adapters are replaced.
+     * Constructs a surface with its production listener, then replaces the empty initial coordinator
+     * with the supplied policy mock for lifecycle assertions.
+     *
+     * @param PresentationTakeoverCoordinator coordinator Mocked coordinator retained by the surface
+     * @param Logger logger Mocked lifecycle logger retained by the surface
+     * @return VulkanGpuSurfaceMixin Surface mixin with one production listener registered
+     * @throws Exception When constructor callback, coordinator close, or field assignment fails
+     * @warning MemoryOwnership: The replaced initial coordinator owns no runtime; mocks remain
+     * test-owned and the caller must trigger one teardown path.
+     */
+    private static VulkanGpuSurfaceMixin registeredSurfaceMixin(
+        PresentationTakeoverCoordinator coordinator,
+        Logger logger) throws Exception {
+        VulkanGpuSurfaceMixin surfaceMixin = new VulkanGpuSurfaceMixin() { };
+        VulkanDevice surfaceDevice = mock(VulkanDevice.class);
+        setField(surfaceMixin, "m_device", surfaceDevice);
+        setField(surfaceMixin, "m_surface", 4L);
+        setField(surfaceMixin, "barrieww$m_logger", logger);
+        try (MockedStatic<MinecraftVulkanBootstrapHandles> handlesAdapter =
+                 mockStatic(MinecraftVulkanBootstrapHandles.class);
+             MockedStatic<BarriEwwClientInitializer> initializer =
+                 mockStatic(BarriEwwClientInitializer.class)) {
+            handlesAdapter.when(() -> MinecraftVulkanBootstrapHandles.extractBorrowedHandles(
+                surfaceDevice,
+                4L)).thenReturn(Optional.of(bootstrapHandles()));
+            initializer.when(BarriEwwClientInitializer::nativeLibraryPath)
+                .thenReturn(Optional.of(Path.of("C:/runtime/BarriEwwNativeFfm.dll")));
+            invokeConstructorTail(surfaceMixin, surfaceDevice);
+        }
+
+        PresentationTakeoverCoordinator initialCoordinator =
+            (PresentationTakeoverCoordinator) getField(
+                surfaceMixin,
+                "barrieww$m_presentationTakeoverCoordinator");
+        initialCoordinator.close();
+        setField(surfaceMixin, "barrieww$m_presentationTakeoverCoordinator", coordinator);
+        return surfaceMixin;
+    }
+
+    /**
+     * @note ThreadSafety: Returned listener is immutable and confined to one lifecycle test.
+     * Creates a complete listener with a fixed resize decision and no owned destroy resource.
+     *
+     * @param boolean shouldPermitResize Fixed resize callback result
+     * @return MainRenderTargetResizeListener Test-owned complete lifecycle listener
+     * @warning MemoryOwnership: The listener owns no runtime and retains no external reference.
+     */
+    private static MainRenderTargetResizeListener resizeListener(boolean shouldPermitResize) {
+        return new MainRenderTargetResizeListener() {
+            @Override
+            public boolean beforeMainRenderTargetResize() {
+                return shouldPermitResize;
+            }
+
+            @Override
+            public void beforeMainRenderTargetDestroy() {
+            }
+        };
+    }
+
+    /**
+     * @note ThreadSafety: Test-thread-confined and serialized with static tracker access.
+     * Invokes the tracker main-target destroy operation reflectively.
+     *
+     * @throws ReflectiveOperationException When the destroy operation is absent or invocation fails
+     * @warning MemoryOwnership: The tracker controls and clears its borrowed listener identity.
+     */
+    private static void invokeTrackerDestroy() throws ReflectiveOperationException {
+        Method destroyMethod = MainRenderTargetGenerationTracker.class.getMethod(
+            "beforeMainRenderTargetDestroy");
+        destroyMethod.invoke(null);
     }
 
     /**

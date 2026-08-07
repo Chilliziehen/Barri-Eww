@@ -258,13 +258,17 @@ public final class PresentationTakeoverCoordinator implements AutoCloseable {
     /**
      * @note ThreadSafety: Render-thread-confined; call before complete host target resize.
      * Detaches borrowed host-image resources exactly once while preserving clear-capable runtime and
-     * any open frame. A checked failure vetoes resize and preserves attached host presentation.
+     * any open frame. Fatal generation state and checked failure both veto resize without weakening
+     * the invariant that only configure or close may drain a fatal runtime.
      *
      * @return boolean True when resources are detached or already absent; false when resize must stop
      * @warning MemoryOwnership: Success ends Native borrowing before host image destruction. Failure
      * leaves the old host image valid and borrowed until the retained runtime is closed.
      */
     public boolean detachHostImagePresentationResources() {
+        if (m_isGenerationFatal) {
+            return false;
+        }
         if (m_isTerminallyIntercepting
             && m_areHostImagePresentationResourcesAttached) {
             return false;

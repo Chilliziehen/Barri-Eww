@@ -300,13 +300,16 @@ final class PresentationTakeoverCoordinatorTests {
         assertFalse(coordinator.detachHostImagePresentationResources());
     }
 
-    /** Verifies configure close retains frame then detach context before terminal interception. */
+    /**
+     * Verifies configure close retains fatal frame context before terminal interception.
+     * A fatal generation vetoes detach without a Native call, so the frame failure is the
+     * only context close can aggregate.
+     */
     @Test
-    void frameDetachAndCloseFailuresAggregateInDeterministicOrder() {
+    void frameAndCloseFailuresAggregateInDeterministicOrder() {
         RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
         RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
         NativePresentationRuntimeException frameFailure = runtimeFailure("frame");
-        NativePresentationRuntimeException detachFailure = runtimeFailure("detach");
         NativePresentationRuntimeException closeFailure = runtimeFailure("close");
         runtimeFactory.m_nextRuntime = runtime;
         Logger logger = mock(Logger.class);
@@ -314,12 +317,11 @@ final class PresentationTakeoverCoordinatorTests {
             new PresentationTakeoverCoordinator(runtimeFactory, logger);
         assertTrue(coordinator.configure(() -> readyInputs(800, 600, 1L)));
         runtime.m_beginFailure = frameFailure;
-        runtime.m_detachFailure = detachFailure;
         runtime.m_closeFailure = closeFailure;
         coordinator.beginFrame();
 
         assertFalse(coordinator.detachHostImagePresentationResources());
-        assertEquals(1, runtime.m_detachCount);
+        assertEquals(0, runtime.m_detachCount);
         int[] preparationCount = {0};
         assertTrue(coordinator.configure(() -> {
             preparationCount[0]++;
@@ -328,18 +330,14 @@ final class PresentationTakeoverCoordinatorTests {
 
         assertEquals(0, preparationCount[0]);
         assertEquals(1, runtime.m_closeCount);
-        assertEquals(2, closeFailure.getSuppressed().length);
+        assertEquals(1, closeFailure.getSuppressed().length);
         assertSame(frameFailure, closeFailure.getSuppressed()[0]);
-        assertSame(detachFailure, closeFailure.getSuppressed()[1]);
         assertEquals(0, frameFailure.getSuppressed().length);
-        assertEquals(0, detachFailure.getSuppressed().length);
         verify(logger).error(any(String.class),
             org.mockito.ArgumentMatchers.same(frameFailure));
         verify(logger).error(any(String.class),
-            org.mockito.ArgumentMatchers.same(detachFailure));
-        verify(logger).error(any(String.class),
             org.mockito.ArgumentMatchers.same(closeFailure));
-        verify(logger, times(3)).error(any(String.class), any(Throwable.class));
+        verify(logger, times(2)).error(any(String.class), any(Throwable.class));
         assertTrue(coordinator.isTakenOver());
         assertFalse(coordinator.requiresReconfiguration());
         assertFalse(coordinator.detachHostImagePresentationResources());
@@ -973,6 +971,24 @@ final class PresentationTakeoverCoordinatorTests {
         int framebufferWidth,
         int framebufferHeight) {
         return readyInputs(framebufferWidth, framebufferHeight, 1L);
+    }
+
+    /** Verifies fatal frame state vetoes direct resize detach without another Native operation. */
+    @Test
+    void fatalFrameFailureVetoesDirectResizeDetachWithoutNativeCall() {
+        RecordingRuntimeFactory runtimeFactory = new RecordingRuntimeFactory();
+        RecordingRuntime runtime = new RecordingRuntime("first", runtimeFactory.m_events);
+        runtimeFactory.m_nextRuntime = runtime;
+        PresentationTakeoverCoordinator coordinator = createCoordinator(runtimeFactory);
+        assertTrue(coordinator.configure(readyInputs(800, 600)));
+        runtime.m_beginFailure = runtimeFailure("begin");
+        coordinator.beginFrame();
+
+        assertFalse(coordinator.detachHostImagePresentationResources());
+
+        assertEquals(0, runtime.m_detachCount);
+        assertTrue(coordinator.isTakenOver());
+        assertTrue(coordinator.requiresReconfiguration());
     }
 
     /**

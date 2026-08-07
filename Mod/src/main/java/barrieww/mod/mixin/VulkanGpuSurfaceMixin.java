@@ -108,11 +108,20 @@ public abstract class VulkanGpuSurfaceMixin {
                 new CorePresentationRuntimeFactory(nativeLibraryPath.orElseThrow()),
                 barrieww$m_logger);
             barrieww$m_presentationTakeoverCoordinator = coordinator;
-            MainRenderTargetResizeListener resizeListener = () -> {
-                PresentationTakeoverCoordinator activeCoordinator =
-                    barrieww$m_presentationTakeoverCoordinator;
-                return activeCoordinator == null
-                    || activeCoordinator.detachHostImagePresentationResources();
+            MainRenderTargetResizeListener resizeListener = new MainRenderTargetResizeListener() {
+                @Override
+                public boolean beforeMainRenderTargetResize() {
+                    PresentationTakeoverCoordinator activeCoordinator =
+                        barrieww$m_presentationTakeoverCoordinator;
+                    return activeCoordinator == null
+                        || activeCoordinator.detachHostImagePresentationResources();
+                }
+
+                @Override
+                public void beforeMainRenderTargetDestroy() {
+                    barrieww$m_mainRenderTargetResizeListener = null;
+                    barrieww$closePresentationTakeoverCoordinator();
+                }
             };
             barrieww$m_mainRenderTargetResizeListener = resizeListener;
             try {
@@ -341,12 +350,25 @@ public abstract class VulkanGpuSurfaceMixin {
             MainRenderTargetGenerationTracker.unregisterResizeListener(resizeListener);
         }
 
+        barrieww$closePresentationTakeoverCoordinator();
+    }
+
+    /**
+     * @note ThreadSafety: Render-thread-confined and non-reentrant from one host teardown entry point.
+     * Detaches the coordinator field before its sole close attempt, contains checked failure, and
+     * leaves later renderer or surface teardown callbacks as no-ops.
+     *
+     * @warning MemoryOwnership: Field detachment transfers the sole coordinator reference into this
+     * invocation. Core consumes any Native runtime address even when close reports failure.
+     */
+    @Unique
+    private void barrieww$closePresentationTakeoverCoordinator() {
         PresentationTakeoverCoordinator coordinator =
             barrieww$m_presentationTakeoverCoordinator;
+        barrieww$m_presentationTakeoverCoordinator = null;
         if (coordinator == null) {
             return;
         }
-        barrieww$m_presentationTakeoverCoordinator = null;
 
         try {
             coordinator.close();

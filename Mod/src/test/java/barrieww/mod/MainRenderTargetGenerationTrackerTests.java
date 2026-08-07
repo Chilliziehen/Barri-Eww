@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,23 +49,23 @@ final class MainRenderTargetGenerationTrackerTests {
     /** Verifies duplicate registration is rejected without replacing the active listener. */
     @Test
     void duplicateRegistrationPreservesFirstListener() {
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
         assertThrows(IllegalStateException.class, () ->
-            MainRenderTargetGenerationTracker.registerResizeListener(() -> true));
+            MainRenderTargetGenerationTracker.registerResizeListener(resizeListener(true)));
         assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
     }
 
     /** Verifies a successful before callback permits resize and a failed callback vetoes it. */
     @Test
     void beforeResizeDelegatesExactBooleanOutcome() {
-        m_registeredListener = () -> true;
+        m_registeredListener = resizeListener(true);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
         assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
         MainRenderTargetGenerationTracker.unregisterResizeListener(m_registeredListener);
 
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
         assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
     }
@@ -93,7 +94,7 @@ final class MainRenderTargetGenerationTrackerTests {
             currentMainRenderTarget,
             currentMainRenderTarget);
         long generationAfterResize = MainRenderTargetGenerationTracker.currentGeneration();
-        m_registeredListener = () -> true;
+        m_registeredListener = resizeListener(true);
 
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
@@ -103,11 +104,38 @@ final class MainRenderTargetGenerationTrackerTests {
             MainRenderTargetGenerationTracker.currentGeneration());
     }
 
+    /** Verifies destroy clears the listener before its callback and invokes that identity once. */
+    @Test
+    void beforeDestroyClearsListenerBeforeExactlyOneCallback() throws ReflectiveOperationException {
+        int[] destroyCallbackCount = {0};
+        m_registeredListener = new MainRenderTargetResizeListener() {
+            @Override
+            public boolean beforeMainRenderTargetResize() {
+                return false;
+            }
+
+            public void beforeMainRenderTargetDestroy() {
+                assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+                destroyCallbackCount[0]++;
+            }
+        };
+        MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
+        Method destroyMethod = MainRenderTargetGenerationTracker.class.getMethod(
+            "beforeMainRenderTargetDestroy");
+
+        destroyMethod.invoke(null);
+        destroyMethod.invoke(null);
+
+        assertEquals(1, destroyCallbackCount[0]);
+        assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+        m_registeredListener = null;
+    }
+
     /** Verifies failed or cancelled resize paths leave the generation unchanged. */
     @Test
     void failedResizeDoesNotPublishGeneration() {
         long initialGeneration = MainRenderTargetGenerationTracker.currentGeneration();
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
         assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
@@ -124,7 +152,7 @@ final class MainRenderTargetGenerationTrackerTests {
     /** Verifies null unregister cannot remove an active listener. */
     @Test
     void unregisterNullPreservesActiveListener() {
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
         assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(null));
@@ -134,26 +162,48 @@ final class MainRenderTargetGenerationTrackerTests {
     /** Verifies a wrong listener identity cannot remove an active listener. */
     @Test
     void unregisterWrongIdentityPreservesActiveListener() {
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
-        assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(() -> false));
+        assertFalse(MainRenderTargetGenerationTracker.unregisterResizeListener(
+            resizeListener(false)));
         assertFalse(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
     }
 
     /** Verifies the exact registered identity releases listener retention. */
     @Test
     void unregisterExactIdentityReleasesRetention() {
-        m_registeredListener = () -> false;
+        m_registeredListener = resizeListener(false);
         MainRenderTargetGenerationTracker.registerResizeListener(m_registeredListener);
 
         assertTrue(MainRenderTargetGenerationTracker.unregisterResizeListener(m_registeredListener));
         m_registeredListener = null;
         assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
 
-        MainRenderTargetResizeListener replacementListener = () -> true;
+        MainRenderTargetResizeListener replacementListener = resizeListener(true);
         MainRenderTargetGenerationTracker.registerResizeListener(replacementListener);
         m_registeredListener = replacementListener;
         assertTrue(MainRenderTargetGenerationTracker.beforeMainRenderTargetResize());
+    }
+
+    /**
+     * @note ThreadSafety: Returned listener is immutable and confined to one tracker test.
+     * Creates a listener with a fixed resize decision and a no-op destroy callback.
+     *
+     * @param boolean shouldPermitResize Fixed resize callback result
+     * @return MainRenderTargetResizeListener Test-owned complete lifecycle listener
+     * @warning MemoryOwnership: The listener owns no runtime and retains no external reference.
+     */
+    private static MainRenderTargetResizeListener resizeListener(boolean shouldPermitResize) {
+        return new MainRenderTargetResizeListener() {
+            @Override
+            public boolean beforeMainRenderTargetResize() {
+                return shouldPermitResize;
+            }
+
+            @Override
+            public void beforeMainRenderTargetDestroy() {
+            }
+        };
     }
 }
